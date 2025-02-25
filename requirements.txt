@@ -1,0 +1,14 @@
+pdfplumber==0.11.4
+pyttsx3==2.90
+requests==2.32.3
+scikit-learn==1.5.2
+SpeechRecognition==3.8.1
+pyaudio
+gTTS
+pygame
+tenacity
+--find-links https://download.pytorch.org/whl/cu118
+torch
+torchvision
+torchaudio
+openai-whisper #use pip install -r requirements.txt --no-cache-dir
