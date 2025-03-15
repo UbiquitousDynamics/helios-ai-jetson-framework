@@ -13,8 +13,8 @@ def load_documents(shared_documents):
 
 if __name__ == '__main__':
     # Configure logging to output debug information
-    #logging.basicConfig(level=logging.DEBUG)
-    logging.disable(logging.CRITICAL)
+    logging.basicConfig(level=logging.DEBUG)
+    #logging.disable(logging.CRITICAL)
     # Create a shared dictionary for the documents using a Manager
     manager = Manager()
     shared_documents = manager.dict()
@@ -25,7 +25,6 @@ if __name__ == '__main__':
     doc_process.join()  # Wait for the document loading process to complete
     
     logging.info("Documents loaded.")
-    
     # Convert the shared manager dictionary to a normal dictionary
     documents = dict(shared_documents)
     

@@ -1,6 +1,6 @@
-# Ubi - AI Voice Assistant
+# Jetson - AI Voice Assistant
 
-Ubi is a voice assistant powered by artificial intelligence, utilizing local LLM models to generate responses, recognize voice commands, and interact with uploaded documents.
+Jetson is a voice assistant powered by artificial intelligence, utilizing local LLM models to generate responses, recognize voice commands, and interact with uploaded documents.
 
 ## Features
 
@@ -67,7 +67,7 @@ The assistant's settings are stored in `config.py`, where you can modify environ
 ```python
 # config.py
 LANGUAGE = "en"
-WAKE_WORD = "Ubi"
+WAKE_WORD = "Jetson"
 LISTEN_TIMEOUT = 7
 WAKE_SOUND = "sounds/wake_up.mp3"
 STOP_SOUND = "sounds/stop.mp3"

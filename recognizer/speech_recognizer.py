@@ -1,38 +1,52 @@
+import json
 import logging
-import speech_recognition as sr
+import time
+import pyaudio  # for audio recording
+from vosk import Model, KaldiRecognizer
 import config
 
 class SpeechRecognizer:
-    def __init__(self, language: str = config.LANGUAGE):
-        self.recognizer = sr.Recognizer()
-        self.mic = sr.Microphone()
-        self.language = language
-        print(language)
+    def __init__(self):
+        # Load the Vosk model for the specified language
+        self.model = Model(config.VOSK_MODEL_PATH)
+        # Initialize PyAudio
+        self.p = pyaudio.PyAudio()
 
     def listen(self, timeout: int = None) -> str:
-        # Listen for speech input with ambient noise adjustment
-        with self.mic as source:
-            self.recognizer.adjust_for_ambient_noise(source)
-            logging.info("Listening...")
-            try:
-                audio = self.recognizer.listen(source, timeout=timeout)
-                command = self.recognizer.recognize_google(audio, language=self.language)
-                logging.debug(f"Recognized command: {command}")
-                return command
-            except sr.WaitTimeoutError:
-                logging.info("Listening timeout reached.")
-                raise
-            except sr.UnknownValueError:
-                logging.warning("Could not understand the audio.")
-                return ""
-            except sr.RequestError as e:
-                logging.error(f"Error with the speech recognition request: {e}")
-                return ""
+        # Configure recording parameters
+        rate = 16000
+        chunk = 4000
+        logging.info("Listening...")
+        
+        # Open the audio stream from the microphone
+        stream = self.p.open(format=pyaudio.paInt16, channels=1, rate=rate, input=True, frames_per_buffer=chunk)
+        stream.start_stream()
+
+        recognizer = KaldiRecognizer(self.model, rate)
+        result_text = ""
+        start_time = time.time()
+
+        while True:
+            data = stream.read(chunk, exception_on_overflow=False)
+            if recognizer.AcceptWaveform(data):
+                res = json.loads(recognizer.Result())
+                result_text += res.get("text", "")
+            else:
+                # Optionally, get partial result:
+                partial = json.loads(recognizer.PartialResult()).get("partial", "")
+                # You can log the partial result if needed
+            if timeout is not None and (time.time() - start_time) > timeout:
+                break
+
+        stream.stop_stream()
+        stream.close()
+        logging.debug(f"Recognized command: {result_text}")
+        return result_text
 
     def listen_for_wake_word(self, wake_word: str) -> bool:
-        # Listen for a wake word in the recognized speech
         try:
-            command = self.listen()
+            command = self.listen(timeout=5)
+            logging.debug(f"Recognized command: {command}")
             if wake_word.lower() in command.lower():
                 logging.info("Wake word detected!")
                 return True
