@@ -1,12 +1,12 @@
 
 # Configuration constants for the speech synthesizer
-LANGUAGE = "it"
-VOICE = "elsa" #select elsa for it or zira for en
+LANGUAGE = "en"
+VOICE = "zira" #select elsa for it or zira for en
 TTS_FOLDER = 'tts_audio'
 
 # Configuration constants for the speech recognizer
-WAKE_WORD = 'ciao'
-LISTEN_TIMEOUT = 7
+WAKE_WORD = 'hello'
+LISTEN_TIMEOUT = 10
 WAKE_SOUND = 'sounds/wake_up.mp3'
 STOP_SOUND = 'sounds/stop.mp3'
 TIMEOUT_SOUND = 'sounds/stop.mp3'

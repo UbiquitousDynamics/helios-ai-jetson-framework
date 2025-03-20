@@ -3,7 +3,7 @@ from multiprocessing import Process
 from audio.tts import Pyttsx3TTS
 from audio.sound_player import SoundPlayer
 from api.api_client import APIClient
-from recognizer.speech_recognizer import SpeechRecognizer
+from recognizer.speech_recognizer_pocketsphinx import SpeechRecognizer
 from document.document_retriever import DocumentRetriever
 import speech_recognition as sr
 import config
