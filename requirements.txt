@@ -3,6 +3,7 @@ pyttsx3==2.90
 requests==2.32.3
 scikit-learn==1.5.2
 SpeechRecognition==3.8.1
+pocketsphinx
 vosk
 pyaudio
 gTTS
