@@ -45,7 +45,7 @@ class SpeechRecognizer:
 
     def listen_for_wake_word(self, wake_word: str) -> bool:
         try:
-            command = self.listen(timeout=5)
+            command = self.listen(timeout=config.LISTEN_TIMEOUT)
             logging.debug(f"Recognized command: {command}")
             if wake_word.lower() in command.lower():
                 logging.info("Wake word detected!")
