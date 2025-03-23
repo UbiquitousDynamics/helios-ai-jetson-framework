@@ -3,41 +3,34 @@ import pyttsx3
 from gtts import gTTS
 import os
 import config
+import subprocess
 
 class Pyttsx3TTS:
-    def __init__(self, voce=config.VOICE, rate=130, volume=1.0):
-        self.engine = pyttsx3.init()
-        voices = self.engine.getProperty('voices')
-        voice_set = False
-
-        for voice in voices:
-            print(f"ID: {voice.id}, Name: {voice.name}")
-        # Attempt to set a voice matching the desired language
-        for voice in self.engine.getProperty('voices'):
-            if voce in voice.name.lower():  # Change to "david" or "hazel" if needed
-                self.engine.setProperty('voice', voice.id)
-                print(f"Selected voice: {voice.name}")
-                break
-
-        if not voice_set:
-            logging.warning(f"No voice found for language: {config.LANGUAGE}")
-        self.engine.setProperty('rate', rate)
-        self.engine.setProperty('volume', volume)
-        logging.debug("Pyttsx3 engine initialized.")
+    def __init__(self, voce=config.VOICE, rate=120, volume=2.0):
+        # set parameters for espeak
+        self.voce = voce
+        self.rate = rate
+        # Note: espeak does not support settings volume directly via command line;
+        # volume control is usually handled at the system level.
+        logging.debug(f"Pyttsx3 (espeak version) initialized with voice: {self.voce}, rate: {self.rate}")
 
     def speak(self, text: str):
         try:
+            # Log the text (first 50 characters) that will be spoken
             logging.debug(f"Performing TTS for text: {text[:50]}...")
-            self.engine.say(text)
-            self.engine.runAndWait()
+            # Execute the espeak command with the specified voices, rate, and fixed pitch of 70
+            subprocess.run(["espeak", "-v", self.voce, "-s", str(self.rate), "-p", "50", text])
         except Exception as e:
-            logging.error(f"Error during TTS: {e}")
+            logging.error(f"Error during TTS with espaeak: {e}")
 
 class GttsTTS:
     def generate_audio(self, text: str, filename: str, language=config.LANGUAGE) -> str:
         try:
+            # Create a gTTS objects with the given text and language
             tts = gTTS(text, lang=language)
+            # Construct the full file path to save the audio file
             file_path = os.path.join(config.TTS_FOLDER, filename)
+            # Save the generated speech as an audio file
             tts.save(file_path)
             logging.debug(f"Generated audio file: {file_path}")
             return file_path
