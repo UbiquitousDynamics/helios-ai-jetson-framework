@@ -1,14 +1,15 @@
 
 # Configuration constants for the speech synthesizer
-LANGUAGE = "en"
+NAME = "emilia"
+LANGUAGE = "it"
 TTS_FOLDER = 'tts_audio'
 
 # Configuration constants for the speech recognizer
-WAKE_WORD = 'hello'
+WAKE_WORD = 'emilia'
 LISTEN_TIMEOUT = 10
-WAKE_SOUND = 'sounds/wake_up.mp3'
-STOP_SOUND = 'sounds/stop.mp3'
-TIMEOUT_SOUND = 'sounds/stop.mp3'
+WAKE_SOUND = 'sounds/wake_up.wav'
+STOP_SOUND = 'sounds/stop.wav'
+TIMEOUT_SOUND = 'sounds/stop.wav'
 
 # Configuration constants for document loading
 UPLOAD_FOLDER = 'uploads'
@@ -22,9 +23,9 @@ if LANGUAGE == "en":
     VOICE = "mb-us1" # Select MBROLA-voices, example: mb-us1 (american english female voice); mb-it4 (italian female voice)
 elif LANGUAGE == "it":
     VOSK_MODEL_PATH = "recognizer/models/vosk-model-small-it-0.22"
-    VOICE = "mb-it4" # Select MBROLA-voices, example: mb-us1 (american english female voice); mb-it4 (italian female voice) 
+    VOICE = "mb-it4" # Select MBROLA-voices, example: mb-us1 (american english female voice); mb-it4 (italian female voice)
 
 # Configuration constants for the API client
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-MODEL_TALK = "llama3.2:1b"
-MODEL_THINK = "llama3.2:1b"
+MODEL_TALK = "qwen3:0.6b"
+MODEL_THINK = "qwen2.5:0.5b"
