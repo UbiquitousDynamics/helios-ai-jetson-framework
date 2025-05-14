@@ -15,3 +15,5 @@ torchvision
 torchaudio
 openai-whisper #use pip install -r requirements.txt --no-cache-dir
 https://github.com/alphacep/vosk-api/releases/download/v0.3.30/vosk-0.3.30-py3-none-linux_aarch64.whl
+#chromadb #sudo apt-get install libsqlite3-dev
+#ollama

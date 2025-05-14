@@ -27,5 +27,5 @@ elif LANGUAGE == "it":
 
 # Configuration constants for the API client
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-MODEL_TALK = "qwen2.5:0.5b" 
+MODEL_TALK = "Emilia-1:0.5b" 
 MODEL_THINK = "qwen3:0.6b"
