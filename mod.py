@@ -1,4 +1,4 @@
-
+ollama run hf.co/unsloth/gemma-3-1b-it-GGUF:Q4_K_M
 
 
 ollama run hf.co/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF:Q4_K_M

@@ -38,6 +38,8 @@ htmlcov/
 # Docker files
 docker-compose.override.yml
 
+#output piper-tts
+output.wav
 # Private deployment credentials and operator configuration
 **/.env
 **/.env.*

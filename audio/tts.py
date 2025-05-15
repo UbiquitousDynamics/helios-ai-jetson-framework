@@ -1,39 +1,37 @@
 import logging
-import pyttsx3
-from gtts import gTTS
 import os
+from piper.voice import PiperVoice
+import sounddevice as sd
+import numpy as np
+import wave
 import config
-import subprocess
 
 class Pyttsx3TTS:
-    def __init__(self, voce=config.VOICE, rate=120, volume=2.0):
-        # set parameters for espeak
-        self.voce = voce
-        self.rate = rate
-        # Note: espeak does not support settings volume directly via command line;
-        # volume control is usually handled at the system level.
-        logging.debug(f"Pyttsx3 (espeak version) initialized with voice: {self.voce}, rate: {self.rate}")
+    def __init__(self, voice_model="audio/models/it_IT-paola-medium.onnx"):
+        # Carica il modello vocale specificato
+        self.voice = PiperVoice.load(voice_model)
+        logging.debug(f"PiperTTS inizializzato con il modello: {voice_model}")
 
     def speak(self, text: str):
         try:
-            # Log the text (first 50 characters) that will be spoken
-            logging.debug(f"Performing TTS for text: {text[:50]}...")
-            # Execute the espeak command with the specified voices, rate, and fixed pitch of 70
-            subprocess.run(["espeak", "-v", self.voce, "-s", str(self.rate), "-p", "50", text])
+            # Logga il testo (primi 50 caratteri) che sarà pronunciato
+            logging.debug(f"Pronuncia TTS per il testo: {text[:50]}...")
+            # Crea un oggetto wave per scrivere l'audio
+            with wave.open("output.wav", "wb") as wav_file:
+                # Sintetizza il testo in audio e scrivilo nel file wave
+                self.voice.synthesize(text, wav_file)
+            # Riproduci l'audio generato
+            self.play_audio("output.wav")
         except Exception as e:
-            logging.error(f"Error during TTS with espaeak: {e}")
+            logging.error(f"Errore durante la sintesi vocale con Piper: {e}")
 
-class GttsTTS:
-    def generate_audio(self, text: str, filename: str, language=config.LANGUAGE) -> str:
+    def play_audio(self, filename: str):
         try:
-            # Create a gTTS objects with the given text and language
-            tts = gTTS(text, lang=language)
-            # Construct the full file path to save the audio file
-            file_path = os.path.join(config.TTS_FOLDER, filename)
-            # Save the generated speech as an audio file
-            tts.save(file_path)
-            logging.debug(f"Generated audio file: {file_path}")
-            return file_path
+            # Leggi i dati audio dal file
+            with open(filename, "rb") as f:
+                audio_data = np.frombuffer(f.read(), dtype=np.int16)
+            # Riproduci l'audio
+            sd.play(audio_data, self.voice.config.sample_rate)
+            sd.wait()  # Attendi che la riproduzione finisca
         except Exception as e:
-            logging.error(f"Error generating TTS audio for text: {e}")
-            return ""
+            logging.error(f"Errore durante la riproduzione dell'audio: {e}")

@@ -24,6 +24,12 @@ class APIClient:
             'think': model_think
         }
         self.tts = tts or Pyttsx3TTS()
+        # Init model
+        self.client.chat(
+                model=self.models['talk'],
+                messages=[{'role': 'user', 'content': ''}],
+                stream=False
+            )
         logging.basicConfig(level=logging.DEBUG)
 
     @retry(wait=wait_fixed(5), stop=stop_after_attempt(3))
@@ -39,7 +45,7 @@ class APIClient:
             msgs = []
             if context:
                 msgs.append({'role': 'system', 'content': context})
-            msgs.append({'role': 'user', 'content': message + "/no_think"})
+            msgs.append({'role': 'user', 'content': message})
     
             # Log dei messaggi inviati
             logging.debug(f"Full messages being sent: {msgs}")

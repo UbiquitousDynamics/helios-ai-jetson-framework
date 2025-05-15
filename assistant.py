@@ -48,7 +48,7 @@ class VoiceAssistant:
     def run(self):
         # Speak a welcome message before starting to listen for the wake word
         if {config.LANGUAGE} == {"it"}:
-            welcome_message = f"Ciao!" #Sono {config.NAME}, il tuo amichevole assistente AI. Ogni volta che hai bisogno di aiuto, basta dire '{config.WAKE_WORD}' e io sarò qui, pronto ad assisterti!"
+            welcome_message = f"Ciao! Mi sono appena svegliata" #Sono {config.NAME}, il tuo amichevole assistente AI. Ogni volta che hai bisogno di aiuto, basta dire '{config.WAKE_WORD}' e io sarò qui, pronto ad assisterti!"
         else:
             welcome_message = f"Hi there! I'm {config.NAME}, your friendly AI assistant. Just say '{config.WAKE_WORD}' whenever you need help, and I'll be right here, ready to assist you!"
         self.tts.speak(welcome_message)
