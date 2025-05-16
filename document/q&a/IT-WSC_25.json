@@ -1,0 +1,386 @@
+[
+  {
+    "question": "Cosa definisce la portata (Scope) delle Regolazioni BWSC 2025?",
+    "answer": "Le Regolazioni si applicano a tutti gli aspetti dell’evento: idoneità, preparazione, scrutineering, test dinamico, componenti su strada e attività associate pubblicate dall’Organizzatore. :contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}"
+  },
+  {
+    "question": "Qual è la lingua ufficiale dell’evento secondo la sezione 1.2?",
+    "answer": "L’inglese. Ogni corrispondenza ufficiale avviene in inglese e le parole ‘must’, ‘should’, ‘may’ hanno significato normativo specifico. :contentReference[oaicite:2]{index=2}:contentReference[oaicite:3]{index=3}"
+  },
+  {
+    "question": "Quale fuso orario si usa per l’evento (1.3)?",
+    "answer": "ACST (Australian Central Standard Time, UTC+9.5). :contentReference[oaicite:4]{index=4}:contentReference[oaicite:5]{index=5}"
+  },
+  {
+    "question": "Come si svolge la componente su strada dell’evento (1.4)?",
+    "answer": "Su strade pubbliche da Darwin ad Adelaide (~3000 km), rispettando anche codice della strada e leggi civili. :contentReference[oaicite:6]{index=6}:contentReference[oaicite:7]{index=7}"
+  },
+  {
+    "question": "Chi può partecipare secondo i criteri di idoneità (1.5)?",
+    "answer": "Veicoli che soddisfano i criteri di progetto e autorizzati per la circolazione su strada prima dell’evento. :contentReference[oaicite:8]{index=8}:contentReference[oaicite:9]{index=9}"
+  },
+  {
+    "question": "Quali obblighi assume l’Entrant con l’iscrizione (1.6)?",
+    "answer": "Dichiarare di conoscere e accettare regolamenti, nominare un Team Manager responsabile e agire in buona fede. :contentReference[oaicite:10]{index=10}:contentReference[oaicite:11]{index=11}"
+  },
+  {
+    "question": "Chi è l’Event Organiser (1.7)?",
+    "answer": "Il Government of South Australia, amministrato dal South Australian Motor Sport Board. :contentReference[oaicite:12]{index=12}:contentReference[oaicite:13]{index=13}"
+  },
+  {
+    "question": "Di cosa si occupa l’Event Management Team (1.8)?",
+    "answer": "Gestisce l’evento: CEO SAMSB, Event Manager, Head Marketing, Head Commercial e Faculty scientifica. :contentReference[oaicite:14]{index=14}:contentReference[oaicite:15]{index=15}"
+  },
+  {
+    "question": "Chi sono gli Officials of the Event (1.9)?",
+    "answer": "Funzionari nominati dall’Organizzatore per la conduzione dell’evento, riconoscibili da magliette bianche o rosse. :contentReference[oaicite:16]{index=16}:contentReference[oaicite:17]{index=17}"
+  },
+  {
+    "question": "Qual è il ruolo della Jury (1.10)?",
+    "answer": "Gruppo indipendente di giurati che interpreta il regolamento e risolve le controversie. :contentReference[oaicite:18]{index=18}:contentReference[oaicite:19]{index=19}"
+  },
+  {
+    "question": "Chi sono i Judges of Fact (1.11)?",
+    "answer": "Tutti gli ufficiali ed observer, incaricati di constatare fatti di gara. :contentReference[oaicite:20]{index=20}:contentReference[oaicite:21]{index=21}"
+  },
+  {
+    "question": "Dove si trova il dettaglio completo del calendario (Schedule) (1.12)?",
+    "answer": "Nel Regulation 1.12 e nel Team Notice con date e orari di tutte le attività. :contentReference[oaicite:22]{index=22}:contentReference[oaicite:23]{index=23}"
+  },
+  {
+    "question": "Come e quando si effettua l’Entering the Event (1.13)?",
+    "answer": "Online tramite Entry Form entro le scadenze indicate nel calendario ufficiale. :contentReference[oaicite:24]{index=24}:contentReference[oaicite:25]{index=25}"
+  },
+  {
+    "question": "Quali sono le entry fees standard e le scadenze (1.14)?",
+    "answer": "Tariffe differenziate per Early Entry (chiusa 30 ago 2024) e Standard Entry (chiusa 4 ott 2024). :contentReference[oaicite:26]{index=26}:contentReference[oaicite:27]{index=27}"
+  },
+  {
+    "question": "Quali sono le Other fees previste (1.15)?",
+    "answer": "Costi per membri extra team, late entry, proteste e appelli, ecc. :contentReference[oaicite:28]{index=28}:contentReference[oaicite:29]{index=29}"
+  },
+  {
+    "question": "Come funzionano i rimborsi (1.16)?",
+    "answer": "Definiti secondo policy: percentuali variabili in base a data di cancellazione. :contentReference[oaicite:30]{index=30}:contentReference[oaicite:31]{index=31}"
+  },
+  {
+    "question": "Quando può essere cancellato l’evento (1.17)?",
+    "answer": "A discrezione dell’Organizzatore, con refund parziale o totale. :contentReference[oaicite:32]{index=32}:contentReference[oaicite:33]{index=33}"
+  },
+  {
+    "question": "Quale tipo di insurance è obbligatoria (1.18)?",
+    "answer": "Responsabilità civile verso terzi, stimata AUD 130 circa. :contentReference[oaicite:34]{index=34}:contentReference[oaicite:35]{index=35}"
+  },
+  {
+    "question": "Quanti membri del team si possono registrare gratuitamente (1.19)?",
+    "answer": "Fino a 20; ogni membro aggiuntivo costa AUD 110. :contentReference[oaicite:36]{index=36}:contentReference[oaicite:37]{index=37}"
+  },
+  {
+    "question": "Come avviene l’identificazione del team (1.20)?",
+    "answer": "Team number a due cifre assegnato all’accettazione, Early Entry può richiedere numero specifico. :contentReference[oaicite:38]{index=38}:contentReference[oaicite:39]{index=39}"
+  },
+  {
+    "question": "Chi si occupa dei permits (1.21)?",
+    "answer": "Organizzatore per il Competition Vehicle; Team per gli altri veicoli (import permit). :contentReference[oaicite:40]{index=40}:contentReference[oaicite:41]{index=41}"
+  },
+  {
+    "question": "Chi gestisce il freight (1.22)?",
+    "answer": "L’Entrant è responsabile di spedizioni e dogana secondo Freight Manual. :contentReference[oaicite:42]{index=42}:contentReference[oaicite:43]{index=43}"
+  },
+  {
+    "question": "Cosa serve per i visas (1.23)?",
+    "answer": "Cittadini extra-AUS/NZ devono ottenere visti, dettagli in Team Manager’s Guide. :contentReference[oaicite:44]{index=44}:contentReference[oaicite:45]{index=45}"
+  },
+  {
+    "question": "Quando e dove è ammessa la preparazione dei veicoli (1.24)?",
+    "answer": "Nel paddock dell’Event HQ a Darwin, date nel calendario ufficiale. :contentReference[oaicite:46]{index=46}:contentReference[oaicite:47]{index=47}"
+  },
+  {
+    "question": "Quali indicazioni di style guide devono seguire loghi e materiali (1.25)?",
+    "answer": "Uso corretto del titolo e del logo secondo style guide pubblicata in Bulletin. :contentReference[oaicite:48]{index=48}:contentReference[oaicite:49]{index=49}"
+  },
+  {
+    "question": "Quali obblighi hanno gli sponsor (1.26)?",
+    "answer": "Non devono detrarre valore all’evento né implicare sponsorship dell’evento. :contentReference[oaicite:50]{index=50}:contentReference[oaicite:51]{index=51}"
+  },
+  {
+    "question": "Quali sono gli obblighi mediatici (1.27)?",
+    "answer": "Partecipazione a media call, rispetto IP, embargo, link al sito ufficiale, approvazioni commerciali. :contentReference[oaicite:52]{index=52}:contentReference[oaicite:53]{index=53}"
+  },
+  {
+    "question": "Quando e come si possono usare droni (1.28)?",
+    "answer": "Solo con approvazione Organizzatore, conformi a regolamenti CASA. :contentReference[oaicite:54]{index=54}:contentReference[oaicite:55]{index=55}"
+  },
+  {
+    "question": "Quali documenti compilare obbligatoriamente (1.29)?",
+    "answer": "Gruppi A–E: info team, specifiche tecniche, piani sicurezza, certificati, roadworthiness, logistica. :contentReference[oaicite:56]{index=56}:contentReference[oaicite:57]{index=57}"
+  },
+  {
+    "question": "Come chiedere chiarimenti sul regolamento (1.30)?",
+    "answer": "Invio formale a teams@worldsolarchallenge.org; risposte pubbliche per modifiche restrittive. :contentReference[oaicite:58]{index=58}:contentReference[oaicite:59]{index=59}"
+  },
+  {
+    "question": "Quali classi di veicolo esistono (2.1)?",
+    "answer": "Challenger, Cruiser ed Explorer. :contentReference[oaicite:60]{index=60}:contentReference[oaicite:61]{index=61}"
+  },
+  {
+    "question": "Quali sono i limiti dimensionali (2.2)?",
+    "answer": "Massima lunghezza 5 m, larghezza 1,8 m, altezza 1,2 m per Challenger; Cruiser entro padronanza veicolo. :contentReference[oaicite:62]{index=62}:contentReference[oaicite:63]{index=63}"
+  },
+  {
+    "question": "Quali caratteristiche devono avere le ruote (2.3)?",
+    "answer": "Diametro minimo 330 mm per Challenger; Cruiser può avere 3 ruote. :contentReference[oaicite:64]{index=64}:contentReference[oaicite:65]{index=65}"
+  },
+  {
+    "question": "Quanto grande può essere il collettore solare (2.4)?",
+    "answer": "Fino a 6 m² di celle o equivalente per Challenger; Cruiser illimitato entro ingombri veicolo. :contentReference[oaicite:66]{index=66}:contentReference[oaicite:67]{index=67}"
+  },
+  {
+    "question": "Come si calcola l’energia di accumulo (2.5)?",
+    "answer": "E = 3600·V·q, con V tensione nominale e q capacità in Ah; Cruiser vantaggi ricarica. :contentReference[oaicite:68]{index=68}"
+  },
+  {
+    "question": "Come ricaricano i Cruiser (2.6)?",
+    "answer": "Quota energia fissa, ricarica durante soste col controllo tessera EVSE. :contentReference[oaicite:69]{index=69}:contentReference[oaicite:70]{index=70}"
+  },
+  {
+    "question": "Come deve essere la segnaletica sul veicolo (2.7)?",
+    "answer": "Numeri gara, loghi sponsor, disco giallo e triagolo blu per safe state, targhe identificative. :contentReference[oaicite:71]{index=71}:contentReference[oaicite:72]{index=72}"
+  },
+  {
+    "question": "Cos’è il ballast e come va usato (2.8)?",
+    "answer": "Peso occupanti simulato con zavorra fissa all’interno, pesato e bloccato. :contentReference[oaicite:73]{index=73}:contentReference[oaicite:74]{index=74}"
+  },
+  {
+    "question": "Quali dati di telemetria sono obbligatori (2.9)?",
+    "answer": "GPS, energia solare e batteria cumulata, distanza, ora UTC ogni 10 s. :contentReference[oaicite:75]{index=75}:contentReference[oaicite:76]{index=76}"
+  },
+  {
+    "question": "Quali requisiti di sicurezza elettrica (2.10)?",
+    "answer": "E-stop interno/esterno, scarica condensatori <60 V in 5 s, componenti fissati, revisione ingegnere. :contentReference[oaicite:77]{index=77}"
+  },
+  {
+    "question": "Quali carichi deve sopportare l’occupant cell (2.11)?",
+    "answer": "5 g frontale/laterale, 5 g/1,5 g/4 g in rollover, difesa estesa 2,3 m. :contentReference[oaicite:78]{index=78}:contentReference[oaicite:79]{index=79}"
+  },
+  {
+    "question": "Che tipi di sedili si devono usare (2.12)?",
+    "answer": "Omologati per corsa, saldamente ancorati e ripiegabili per egress. :contentReference[oaicite:80]{index=80}:contentReference[oaicite:81]{index=81}"
+  },
+  {
+    "question": "Quali caratteristiche devono avere le cinture (2.13)?",
+    "answer": "Conformi a UNECE R16, FMVSS 209, FIA 8853-2016 o analoghi. :contentReference[oaicite:82]{index=82}:contentReference[oaicite:83]{index=83}"
+  },
+  {
+    "question": "Come deve essere l’egress (2.14)?",
+    "answer": "Apertura dall’interno senza attrezzi, spazi minimi 50 mm casco–involucro. :contentReference[oaicite:84]{index=84}:contentReference[oaicite:85]{index=85}"
+  },
+  {
+    "question": "Quali ventilazione e idratazione (2.15)?",
+    "answer": "Flusso d’aria e sistema idrico sufficiente a prevenire surriscaldamento occupanti. :contentReference[oaicite:86]{index=86}:contentReference[oaicite:87]{index=87}"
+  },
+  {
+    "question": "Quali requisiti di visione anteriore e laterale (2.16)?",
+    "answer": "Lettura caratteri 75 mm a 4 m, ±100° orizzontali, –0,4 m/+0,7 m verticali. :contentReference[oaicite:88]{index=88}:contentReference[oaicite:89]{index=89}"
+  },
+  {
+    "question": "Come deve essere la visione posteriore (2.17)?",
+    "answer": "Specchi o telecamere che garantiscono visione dietro di almeno 10 m. :contentReference[oaicite:90]{index=90}:contentReference[oaicite:91]{index=91}"
+  },
+  {
+    "question": "Quali requisiti di sterzo e raggio di girata (2.18)?",
+    "answer": "Raggio minimo 7,5 m e sterzo efficiente in tutte le condizioni. :contentReference[oaicite:92]{index=92}:contentReference[oaicite:93]{index=93}"
+  },
+  {
+    "question": "Quali criteri di stabilità (2.19)?",
+    "answer": "Test su pendenza, sollevamento ruote e analisi dinamica per prevenire ribaltamenti. :contentReference[oaicite:94]{index=94}:contentReference[oaicite:95]{index=95}"
+  },
+  {
+    "question": "Quali caratteristiche devono avere i freni (2.20)?",
+    "answer": "Freni a disco o tamburo, ridondanza, test di efficienza (freno completo in X m). :contentReference[oaicite:96]{index=96}:contentReference[oaicite:97]{index=97}"
+  },
+  {
+    "question": "Che tipi di pneumatici sono ammessi (2.21)?",
+    "answer": "Omologati stradali, dimensioni compatibili con regolazioni di carreggiata. :contentReference[oaicite:98]{index=98}:contentReference[oaicite:99]{index=99}"
+  },
+  {
+    "question": "Come deve essere la capacità di guida e retromarcia (2.22)?",
+    "answer": "Retromarcia funzionante, velocità minima 10 km/h in retromarcia. :contentReference[oaicite:100]{index=100}:contentReference[oaicite:101]{index=101}"
+  },
+  {
+    "question": "Quali luci e segnali (2.23)?",
+    "answer": "Fari anabbaglianti/abbaglianti, indicatori di direzione, luci targa, luci freno, catadiottri. :contentReference[oaicite:102]{index=102}:contentReference[oaicite:103]{index=103}"
+  },
+  {
+    "question": "Che tipo di avvisatore acustico (2.24)?",
+    "answer": "Clacson conforme a norme stradali, udibile a 30 m. :contentReference[oaicite:104]{index=104}:contentReference[oaicite:105]{index=105}"
+  },
+  {
+    "question": "Quali strumenti di bordo (2.25)?",
+    "answer": "Voltamperometro, contachilometri, orologio UTC, indicatori stato safe state. :contentReference[oaicite:106]{index=106}:contentReference[oaicite:107]{index=107}"
+  },
+  {
+    "question": "Quali funzioni automatiche (2.26)?",
+    "answer": "Spegnimento batteria in safe state, gestione E‑stop loop, logica ridondante. :contentReference[oaicite:108]{index=108}:contentReference[oaicite:109]{index=109}"
+  },
+  {
+    "question": "Quali requisiti di sicurezza elettrica (2.27)?",
+    "answer": "Isolamento >60 V, contatti HV, fusibili di batteria, prova mancanza tensione. :contentReference[oaicite:110]{index=110}:contentReference[oaicite:111]{index=111}"
+  },
+  {
+    "question": "Cosa prevede la safe state (2.28)?",
+    "answer": "Disabilitazione HV con dispositivo interno/esterno, scarica HV in ≤5 s, marcatura disco. :contentReference[oaicite:112]{index=112}:contentReference[oaicite:113]{index=113}"
+  },
+  {
+    "question": "Chi supervisiona la parte on‑road (3.1)?",
+    "answer": "Clerk of the Course in contatto con Mission Control. :contentReference[oaicite:114]{index=114}:contentReference[oaicite:115]{index=115}"
+  },
+  {
+    "question": "Chi garantisce la safety generale (3.2)?",
+    "answer": "Team Safety Officer e Team Battery Officer con kit di emergenza. :contentReference[oaicite:116]{index=116}:contentReference[oaicite:117]{index=117}"
+  },
+  {
+    "question": "Quali cinture usare on‑road (3.3)?",
+    "answer": "Identiche a 2.13, saldate e testate. :contentReference[oaicite:118]{index=118}:contentReference[oaicite:119]{index=119}"
+  },
+  {
+    "question": "Quali requisiti per i caschi (3.4)?",
+    "answer": "Omologati motorsport, con certificazione attuale. :contentReference[oaicite:120]{index=120}:contentReference[oaicite:121]{index=121}"
+  },
+  {
+    "question": "Quali dispositivi di sicurezza (3.5)?",
+    "answer": "Estintore, triangoli, kit pronto soccorso, telecomando E‑stop. :contentReference[oaicite:122]{index=122}:contentReference[oaicite:123]{index=123}"
+  },
+  {
+    "question": "Quanti e quali support vehicles (3.6)?",
+    "answer": "Minimo 2 (anteriore e posteriore) con luci lampeggianti e CB/UHF. :contentReference[oaicite:124]{index=124}:contentReference[oaicite:125]{index=125}"
+  },
+  {
+    "question": "Come vanno segnalati gli escort vehicles (3.7)?",
+    "answer": "Con cartelli frontali/posteriori, luci arancio lampeggianti, CB radio. :contentReference[oaicite:126]{index=126}:contentReference[oaicite:127]{index=127}"
+  },
+  {
+    "question": "Quali mezzi di comunicazione (3.8)?",
+    "answer": "Satellite phone, UHF, CB radio, restituiti al termine dell’evento. :contentReference[oaicite:128]{index=128}:contentReference[oaicite:129]{index=129}"
+  },
+  {
+    "question": "Quali limiti per i mezzi pesanti (3.9)?",
+    "answer": "Rispetto norme stradali AUS per veicoli >3,5 t, piani di carico. :contentReference[oaicite:130]{index=130}:contentReference[oaicite:131]{index=131}"
+  },
+  {
+    "question": "Quando e come fare i test pre‑evento (3.10)?",
+    "answer": "Solo con permessi, fuori date ufficiali e in location approvate. :contentReference[oaicite:132]{index=132}:contentReference[oaicite:133]{index=133}"
+  },
+  {
+    "question": "Come funziona la Team registration e scrutineering (3.11)?",
+    "answer": "Registrazione online, documenti, scrutineering statico e dinamico. :contentReference[oaicite:134]{index=134}:contentReference[oaicite:135]{index=135}"
+  },
+  {
+    "question": "Cosa prevede lo Static Scrutineering (3.12)?",
+    "answer": "Controllo visivo, documenti, prova E‑stop, misure di ingombri e sicurezza. :contentReference[oaicite:136]{index=136}:contentReference[oaicite:137]{index=137}"
+  },
+  {
+    "question": "Come avviene il Cruiser design judging (3.13)?",
+    "answer": "Valutazione soggettiva efficienza, praticità, comfort e sostenibilità. :contentReference[oaicite:138]{index=138}:contentReference[oaicite:139]{index=139}"
+  },
+  {
+    "question": "Cosa controlla il Dynamic Scrutineering (3.14)?",
+    "answer": "Sterzo, frenata, stabilità, accelerazione, controllo E‑stop in movimento. :contentReference[oaicite:140]{index=140}:contentReference[oaicite:141]{index=141}"
+  },
+  {
+    "question": "Come gestire modifiche dopo scrutineering (3.15)?",
+    "answer": "Approvazione Chief Scrutineer; documentazione aggiornata. :contentReference[oaicite:142]{index=142}:contentReference[oaicite:143]{index=143}"
+  },
+  {
+    "question": "Quali briefings sono obbligatori (3.16)?",
+    "answer": "Team Manager & Safety Officer briefing a Darwin, data nel calendario. :contentReference[oaicite:144]{index=144}:contentReference[oaicite:145]{index=145}"
+  },
+  {
+    "question": "Che ruolo hanno gli Observers (3.17)?",
+    "answer": "Viaggiano con team come Judges of Fact, verificano conformità on‑road. :contentReference[oaicite:146]{index=146}:contentReference[oaicite:147]{index=147}"
+  },
+  {
+    "question": "Come funziona la griglia di partenza (3.18)?",
+    "answer": "Posizioni assegnate per classi, ordine basato su tempi statici e lottery. :contentReference[oaicite:148]{index=148}:contentReference[oaicite:149]{index=149}"
+  },
+  {
+    "question": "Come si raccolgono e registrano energia e tempi (3.19)?",
+    "answer": "Telemetria GPS, energia solare e batteria, tempi di arrivo/partenza. :contentReference[oaicite:150]{index=150}:contentReference[oaicite:151]{index=151}"
+  },
+  {
+    "question": "Come si seguono le route notes (3.20)?",
+    "answer": "Mappe ufficiali, istruzioni passo‑passo, penalità per deviazioni. :contentReference[oaicite:152]{index=152}:contentReference[oaicite:153]{index=153}"
+  },
+  {
+    "question": "Come funziona il timing (3.21)?",
+    "answer": "Cronometraggio UTC, pause 17:00–08:00, tempi di controllo conteggiati. :contentReference[oaicite:154]{index=154}:contentReference[oaicite:155]{index=155}"
+  },
+  {
+    "question": "Come avviene il tracking (3.22)?",
+    "answer": "Dispositivo tracker con update ogni 10 s, monitoraggio live da Mission Control. :contentReference[oaicite:156]{index=156}:contentReference[oaicite:157]{index=157}"
+  },
+  {
+    "question": "Quali requisiti per driver e passeggeri (3.23)?",
+    "answer": "Patente valida, casco, cinture, requisiti minimi età e formazione. :contentReference[oaicite:158]{index=158}:contentReference[oaicite:159]{index=159}"
+  },
+  {
+    "question": "Quali norme di condotta di guida (3.24)?",
+    "answer": "Rispetto codice stradale, no slipstreaming, no ostacoli, no velocità eccessiva. :contentReference[oaicite:160]{index=160}:contentReference[oaicite:161]{index=161}"
+  },
+  {
+    "question": "Quando e come si deve fermare un veicolo (3.25)?",
+    "answer": "Al rollover ritiro immediato; riparazioni con permesso e ritorno al punto di stop. :contentReference[oaicite:162]{index=162}:contentReference[oaicite:163]{index=163}"
+  },
+  {
+    "question": "Come evitare di ostacolare altri utenti (3.26)?",
+    "answer": "200 m di distanza, parcheggio fuori carreggiata, spazio per sorpasso. :contentReference[oaicite:164]{index=164}:contentReference[oaicite:165]{index=165}"
+  },
+  {
+    "question": "Cosa prevedono i Control stops (3.27)?",
+    "answer": "Soste di 30 min, pause 17:00–08:00, solo driver in configurazione, no contatti. :contentReference[oaicite:166]{index=166}:contentReference[oaicite:167]{index=167}"
+  },
+  {
+    "question": "Come gestire gli Overnight stops (3.28)?",
+    "answer": "Parcheggio ≥10 m dal bordo stradale, tracciatura punto stop mattutino, energy packs sigillati 19:15–06:15. :contentReference[oaicite:168]{index=168}:contentReference[oaicite:169]{index=169}"
+  },
+  {
+    "question": "Quando un team è considerato 'no longer competing' (3.29)?",
+    "answer": "Se non mantiene 60 km/h, non raggiunge control stop in orario o arriva dopo chiusura. :contentReference[oaicite:170]{index=170}:contentReference[oaicite:171]{index=171}"
+  },
+  {
+    "question": "Come avviene la Withdrawal (3.30)?",
+    "answer": "Comunicazione immediata a Clerk of the Course, ritiro team. :contentReference[oaicite:172]{index=172}:contentReference[oaicite:173]{index=173}"
+  },
+  {
+    "question": "Quali penalità (3.31) può imporre il Clerk of the Course?",
+    "answer": "Demerit points, restrizioni operative, squalifica per ostacolo, speed limit, accumulo 3 punti. :contentReference[oaicite:174]{index=174}:contentReference[oaicite:175]{index=175}"
+  },
+  {
+    "question": "Come presentare proteste e appelli (3.32)?",
+    "answer": "Protesta entro 18:00 del giorno, fee AUD 200; appello entro 1 h decisione, fee AUD 500. :contentReference[oaicite:176]{index=176}:contentReference[oaicite:177]{index=177}"
+  },
+  {
+    "question": "Come vengono pubblicati i risultati (4.1)?",
+    "answer": "Provisionali durante l’evento, definitivi dopo chiusura proteste/appelli. :contentReference[oaicite:178]{index=178}:contentReference[oaicite:179]{index=179}"
+  },
+  {
+    "question": "Come funziona la Completing the course (4.2)?",
+    "answer": "Classifica per arrivo al traguardo con eventuali penalità, chi non completa è ranking per control stop. :contentReference[oaicite:180]{index=180}:contentReference[oaicite:181]{index=181}"
+  },
+  {
+    "question": "Quali regole per la Explorer class (4.3)?",
+    "answer": "Non competitiva, permesso di partenza dopo prime 4 auto arrivate. :contentReference[oaicite:182]{index=182}:contentReference[oaicite:183]{index=183}"
+  },
+  {
+    "question": "Cosa succede alle Finish‑line activities (4.4)?",
+    "answer": "Veicoli in esposizione fino alle ore 15:00 del 31 agosto, 2 membri team presenti per engagement. :contentReference[oaicite:184]{index=184}:contentReference[oaicite:185]{index=185}"
+  },
+  {
+    "question": "Quali awards si assegnano (4.5)?",
+    "answer": "Challenger Cup, Cruiser Cup, additional awards, partecipation award, media call. :contentReference[oaicite:186]{index=186}:contentReference[oaicite:187]{index=187}"
+  },
+  {
+    "question": "Come funziona il Pack‑down (4.6)?",
+    "answer": "Rappackaging all’aperto, ritiro entro il 3 settembre, altrimenti a spese team. :contentReference[oaicite:188]{index=188}:contentReference[oaicite:189]{index=189}"
+  }
+]

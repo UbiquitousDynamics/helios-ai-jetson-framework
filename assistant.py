@@ -7,6 +7,7 @@ from recognizer.speech_recognizer import SpeechRecognizer # you can switch to re
 from document.document_retriever import DocumentRetriever
 import speech_recognition as sr
 import config
+import random
 
 class VoiceAssistant:
     def __init__(self, documents: dict = None):
@@ -30,9 +31,17 @@ class VoiceAssistant:
             context = "\n".join([doc for _, doc in retrieved_docs])
 
         # Determine whether to use 'think' or 'talk' mode based on the command
-        if "think" in command.lower() or "ponder" in command.lower():
-            response = self.api_client.think(command, context)
+        #if "think" in command.lower() or "ponder" in command.lower():
+        #    response = self.api_client.think(command, context)
+        #else:
+        if config.PRES_Q_1 in command.lower() or config.PRES_Q_2 in command.lower() or config.PRES_Q_3 in command.lower():
+
+            option = random.randint(1,3)
+            command_pres = config.PRES_A_SWITCH[option]
+            response = self.tts.speak(command_pres)
+
         else:
+
             response = self.api_client.talk(command, context)
 
         logging.info(f"Received response: {response}")
@@ -48,7 +57,7 @@ class VoiceAssistant:
     def run(self):
         # Speak a welcome message before starting to listen for the wake word
         if {config.LANGUAGE} == {"it"}:
-            welcome_message = f"Ciao! Mi sono appena svegliata" #Sono {config.NAME}, il tuo amichevole assistente AI. Ogni volta che hai bisogno di aiuto, basta dire '{config.WAKE_WORD}' e io sarò qui, pronto ad assisterti!"
+            welcome_message = f"Ciao... Mi sono appena svegliata" #Sono {config.NAME}, il tuo amichevole assistente AI. Ogni volta che hai bisogno di aiuto, basta dire '{config.WAKE_WORD}' e io sarò qui, pronto ad assisterti!"
         else:
             welcome_message = f"Hi there! I'm {config.NAME}, your friendly AI assistant. Just say '{config.WAKE_WORD}' whenever you need help, and I'll be right here, ready to assist you!"
         self.tts.speak(welcome_message)

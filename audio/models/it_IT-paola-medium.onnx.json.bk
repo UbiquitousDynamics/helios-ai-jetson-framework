@@ -8,9 +8,9 @@
         "voice": "it"
     },
     "inference": {
-        "noise_scale": 0.2,
-        "length_scale": 0.9,
-        "noise_w": 0.3
+        "noise_scale": 0.8,
+        "length_scale": 1,
+        "noise_w": 0.8
     },
     "phoneme_type": "espeak",
     "phoneme_map": {},

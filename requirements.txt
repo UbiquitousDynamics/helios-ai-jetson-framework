@@ -18,3 +18,4 @@ https://github.com/alphacep/vosk-api/releases/download/v0.3.30/vosk-0.3.30-py3-n
 piper
 piper-tts
 piper-phonemize-fix
+Flagembedding
