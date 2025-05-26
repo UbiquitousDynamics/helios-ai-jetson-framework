@@ -1,197 +1,126 @@
 import os
 import numpy as np
-from FlagEmbedding import BGEM3FlagModel
 from sklearn.manifold import TSNE
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
-import logging
+from FlagEmbedding import BGEM3FlagModel
+from FlagEmbedding.abc.inference.AbsEmbedder import AbsEmbedder
 
 class RagSystem:
-    def __init__(self, model_name='BAAI/bge-base-en-v1.5', use_fp16=True):
-        """
-        Inizializza il sistema RAG con un modello di embedding.
-        
-        Args:
-            model_name: Nome del modello di embedding da utilizzare
-            use_fp16: Se utilizzare la precisione fp16 per velocizzare il calcolo
-        """
-        try:
-            self.model = BGEM3FlagModel(model_name, use_fp16=use_fp16)
-            self.embedding_matrix = None
-            self.data = None  # Original sentences
-            logging.info(f"Inizializzato RagSystem con modello {model_name}")
-        except Exception as e:
-            logging.error(f"Errore nell'inizializzazione del modello: {e}")
-            raise
+    """
+    Classe per indicizzare, cercare e visualizzare embeddings di testo usando BGEM3FlagModel.
 
-    def index_database(self, data, save_path='embeddings.npy', text_data_path='sentences.txt'):
-        """
-        Codifica i dati di input e salva gli embedding solo se non esistono già.
-        Salva anche le frasi originali per il confronto durante il ricaricamento.
-        
-        Args:
-            data: Lista di stringhe da codificare
-            save_path: Percorso dove salvare gli embedding
-            text_data_path: Percorso dove salvare i testi originali
-        """
-        if not data:
-            raise ValueError("Dati di input vuoti. Impossibile creare indice.")
-            
-        self.data = data
+    Parametri:
+        txt_file (str): Percorso al file di testo contenente le frasi, una per riga.
+        emb_file (str): Percorso dove salvare/caricare la matrice di embeddings (.npy).
+        model_name (str): Nome del modello da caricare (es. 'BAAI/bge-m3').
+        use_fp16 (bool): Se usare precisione fp16 per il modello.
+        reindex (bool): Se rigenerare sempre gli embeddings.
+    """
+    def __init__(self,
+                 txt_file: str,
+                 emb_file: str = "embeddings.npy",
+                 model_name: str = 'BAAI/bge-m3',
+                 use_fp16: bool = True,
+                 reindex: bool = False):
+        self.txt_file = txt_file
+        self.emb_file = emb_file
+        self.reindex = reindex
 
-        # Controlla se gli embeddings esistono già
-        if os.path.exists(save_path) and os.path.exists(text_data_path):
-            try:
-                with open(text_data_path, 'r', encoding='utf-8') as f:
-                    saved_sentences = [line.strip() for line in f.readlines()]
+        AbsEmbedder.__del__ = lambda self: None  # type: ignore
+        self.model = BGEM3FlagModel(model_name, use_fp16=use_fp16)
+        print(f"[+] Modello '{model_name}' caricato (use_fp16={use_fp16})")
 
-                # Se le frasi sono le stesse, ricarica gli embeddings
-                if saved_sentences == data:
-                    logging.info("Found existing embeddings. Loading them from disk.")
-                    self.embedding_matrix = np.load(save_path)
-                    return
-            except Exception as e:
-                logging.warning(f"Errore nel caricamento degli embeddings esistenti: {e}")
+    def _read_data(self) -> list[str]:
+        if not os.path.exists(self.txt_file):
+            raise FileNotFoundError(f"File '{self.txt_file}' non trovato!")
+        with open(self.txt_file, 'r', encoding='utf-8') as f:
+            data = [line.strip() for line in f if line.strip()]
+        print(f"[+] Letto {len(data)} frasi da '{self.txt_file}'")
+        return data
 
-        logging.info(f"Computing new embeddings for {len(data)} items and saving them.")
-        try:
-            embeddings = self.model.encode(data)['dense_vecs']
-            self.embedding_matrix = np.array(embeddings)  # Assicuriamoci che sia un array numpy
+    def index_database(self, data: list[str] | None = None) -> np.ndarray:
+        if data is None:
+            data = self._read_data()
+        embeddings = self.model.encode(data)['dense_vecs']
+        np.save(self.emb_file, embeddings)
+        print(f"[+] Embeddings salvati in '{self.emb_file}' (shape={embeddings.shape})")
+        return embeddings
 
-            # Salva gli embeddings
-            np.save(save_path, self.embedding_matrix)
+    def load_embedding_matrix(self) -> np.ndarray:
+        if not os.path.exists(self.emb_file):
+            raise FileNotFoundError(f"File '{self.emb_file}' non trovato! Esegui prima index_database().")
+        embeddings = np.load(self.emb_file)
+        print(f"[+] Embeddings caricati da '{self.emb_file}' (shape={embeddings.shape})")
+        return embeddings
 
-            # Salva anche le frasi per il confronto futuro
-            with open(text_data_path, 'w', encoding='utf-8') as f:
-                f.write("\n".join(data))
-        except Exception as e:
-            logging.error(f"Errore nel calcolo degli embeddings: {e}")
-            raise
+    def search(self, query: str, embedding_matrix: np.ndarray) -> list[tuple[int, float]]:
+        query_emb = self.model.encode([query])['dense_vecs'][0]
+        if query_emb.shape[0] != embedding_matrix.shape[1]:
+            raise ValueError(f"Dimensione embedding query ({query_emb.shape[0]}) incompatibile con matrix ({embedding_matrix.shape[1]})")
+        sims = cosine_similarity([query_emb], embedding_matrix)[0]
+        return sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
 
-    def load_embedding_matrix(self, embeddings_path, text_data_path='sentences.txt'):
-        """
-        Carica gli embedding da file.
-        
-        Args:
-            embeddings_path: Percorso degli embedding salvati
-            text_data_path: Percorso dei testi originali
-        
-        Returns:
-            La matrice degli embedding caricata
-        """
-        try:
-            self.embedding_matrix = np.load(embeddings_path)
-            
-            # Carica anche i dati originali se disponibili
-            if os.path.exists(text_data_path):
-                with open(text_data_path, 'r', encoding='utf-8') as f:
-                    self.data = [line.strip() for line in f.readlines()]
-                logging.info(f"Caricati {len(self.data)} testi originali")
-            else:
-                logging.warning("File dei testi originali non trovato")
-                
-            return self.embedding_matrix
-        except Exception as e:
-            logging.error(f"Errore nel caricamento degli embeddings: {e}")
-            raise
+    def visualize_space_query(self,
+                              data: list[str],
+                              query: str,
+                              embedding_matrix: np.ndarray,
+                              perplexity: int = 2,
+                              random_state: int = 42) -> None:
+        query_emb = self.model.encode([query])['dense_vecs'][0]
+        if query_emb.shape[0] != embedding_matrix.shape[1]:
+            raise ValueError("Dimensione embedding mismatch per t-SNE visualizzazione.")
+        joint = np.vstack([embedding_matrix, query_emb])
+        tsne = TSNE(n_components=2, perplexity=perplexity, random_state=random_state)
+        emb2d = tsne.fit_transform(joint)
 
-    def search(self, query, top_k=1):
-        """
-        Cerca i documenti più simili alla query.
-        
-        Args:
-            query: Stringa di ricerca
-            top_k: Numero di risultati da restituire
-            
-        Returns:
-            Lista di tuple (indice, punteggio di similarità)
-        """
-        if self.embedding_matrix is None:
-            raise ValueError("Embedding matrix not loaded. Run index_database() or load_embedding_matrix() first.")
+        plt.figure(figsize=(8, 6))
+        plt.scatter(emb2d[:-1, 0], emb2d[:-1, 1], edgecolor='k', label='Frasi')
+        plt.scatter(emb2d[-1, 0], emb2d[-1, 1], edgecolor='k', label='Query', c='red')
+        for i, frase in enumerate(data):
+            plt.text(emb2d[i, 0] + 0.1, emb2d[i, 1] + 0.1, frase, fontsize=9)
+        plt.text(emb2d[-1, 0] + 0.1, emb2d[-1, 1] + 0.1, query, fontsize=9, color='red')
+        plt.title('Visualizzazione degli Embeddings con t-SNE')
+        plt.xlabel('Dimensione 1')
+        plt.ylabel('Dimensione 2')
+        plt.grid(True)
+        plt.legend()
+        plt.show()
 
-        try:
-            query_embedding = self.model.encode([query])['dense_vecs']
-            similarities = cosine_similarity(query_embedding, self.embedding_matrix)[0]
-            
-            # Ordina per similarità in ordine decrescente
-            similarities_results = sorted(enumerate(similarities), key=lambda x: x[1], reverse=True)
-            
-            # Limita i risultati se è stato specificato top_k
-            if top_k:
-               similarities_results = similarities_results[:top_k]
-   
-            logging.debug("\nSimilarity with the query (in descending order):\n")
-            results = []
-            for idx, similarity in similarities_results:
-                result_text = self.data[idx] if self.data else "N/A"
-                logging.debug(f"Index: {idx} | Similarity: {similarity:.4f} | Result: {result_text}")
-                results.append((idx, similarity, result_text))
+    def run(self, query: str, top_k: int = 5, visualize: bool = False) -> None:
+        data = self._read_data()
+        emb = None
+        # Carica o rigenera embeddings
+        if self.reindex or not os.path.exists(self.emb_file):
+            emb = self.index_database(data)
+        else:
+            emb = self.load_embedding_matrix()
+            # Verifica compatibilità dimensionale
+            query_emb = self.model.encode([data[0]])['dense_vecs'][0]
+            if query_emb.shape[0] != emb.shape[1]:
+                print(f"[!] Dimensione embedding cambiata ({query_emb.shape[0]} vs {emb.shape[1]}), rigenero database...")
+                emb = self.index_database(data)
 
-            return results
-        except Exception as e:
-            logging.error(f"Errore nella ricerca: {e}")
-            raise
+        # Ricerca
+        results = self.search(query, emb)
+        print(f"\nTop-{top_k} frasi più simili a '{query}':")
+        for idx, score in results[:top_k]:
+            print(f"  [{idx}] (score={score:.4f}): {data[idx]}")
+
+        # Visualizzazione
+        if visualize:
+            self.visualize_space_query(data, query, emb)
 
 
-   # def visualize_space_query(self, query, perplexity=5, figure_size=(10, 8), save_path=None):
-   #     """
-   #     Visualizza lo spazio degli embedding con t-SNE, evidenziando la query.
-   #     
-   #     Args:
-   #         query: Stringa di ricerca da visualizzare nello spazio
-   #         perplexity: Parametro di perplexity per t-SNE
-   #         figure_size: Dimensione della figura in pollici
-   #         save_path: Se specificato, salva la figura in questo percorso
-   #     """
-   #     if self.embedding_matrix is None or self.data is None:
-   #         raise ValueError("You must first run index_database() to have both data and embeddings.")
-#
-   #     try:
-   #         # Codifica la query
-   #         query_embedding = self.model.encode([query])['dense_vecs']
-   #         
-   #         # Unisci gli embedding esistenti con quello della query
-   #         jointed_matrix = np.vstack((self.embedding_matrix, query_embedding))
-#
-   #         # Calcola t-SNE
-   #         tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, n_iter=1000)
-   #         embeddings_2d = tsne.fit_transform(jointed_matrix)
-#
-   #         # Visualizza
-   #         plt.figure(figsize=figure_size)
-   #         plt.scatter(embeddings_2d[:-1, 0], embeddings_2d[:-1, 1], color='blue', alpha=0.7, 
-   #                     edgecolors='k', label='Sentences')
-   #         plt.scatter(embeddings_2d[-1, 0], embeddings_2d[-1, 1], color='red', s=100, 
-   #                     edgecolors='k', label='Query')
-#
-   #         # Limita il numero di etichette per evitare sovraccarico visivo
-   #         max_labels = min(20, len(self.data))
-   #         step = len(self.data) // max_labels if len(self.data) > max_labels else 1
-   #         
-   #         for i in range(0, len(self.data), step):
-   #             # Abbrevia le stringhe troppo lunghe per la visualizzazione
-   #             short_text = self.data[i][:50] + '...' if len(self.data[i]) > 50 else self.data[i]
-   #             plt.text(embeddings_2d[i, 0] + 0.05, embeddings_2d[i, 1] + 0.05, 
-   #                      short_text, fontsize=8)
-#
-   #         # Aggiungi etichetta per la query
-   #         short_query = query[:50] + '...' if len(query) > 50 else query
-   #         plt.text(embeddings_2d[-1, 0] + 0.05, embeddings_2d[-1, 1] + 0.05, 
-   #                  f"Query: {short_query}", fontsize=9, color='red', weight='bold')
-   #         
-   #         plt.title("t-SNE Visualization of Sentence Embeddings with Query")
-   #         plt.xlabel("t-SNE Component 1")
-   #         plt.ylabel("t-SNE Component 2")
-   #         plt.legend()
-   #         plt.grid(True)
-   #         plt.tight_layout()
-   #         
-   #         if save_path:
-   #             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-   #             logging.info(f"Figura salvata in {save_path}")
-   #             
-   #         plt.show()
-   #         
-   #     except Exception as e:
-   #         logging.error(f"Errore nella visualizzazione: {e}")
-   #         raise
+def main():
+    searcher = RagSystem(
+        txt_file="private/input.txt",
+        emb_file="embeddings.npy",
+        model_name='BAAI/bge-m3',
+        use_fp16=True,
+        reindex=False
+    )
+    searcher.run(query="how many drivers?", top_k=5, visualize=False)
+
+if __name__ == "__main__":
+    main()
