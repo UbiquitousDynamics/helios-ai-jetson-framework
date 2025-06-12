@@ -1,0 +1,2022 @@
+event
+regulations
+24-31 august 2025
+2
+Document Control
+Release Version 2.0 Published 28 October 2024
+8
+2025 Bridgestone World Solar Challenge
+Regulations
+Introduction and welcome
+The biennial World Solar Challenge is owned by the Government of South Australia and managed
+by the South Australian Motor Sport Board. Since 2013, Bridgestone Corporation has been the
+naming rights sponsor of the event.
+The aim of the Bridgestone World Solar Challenge is to stimulate research into, and development
+of, energy efficient vehicle designs and technologies to support the global challenge to
+decarbonise mobility. The Bridgestone World Solar Challenge is primarily a design competition
+with the philosophy to provide the parameters on which to base the design, rather than specify
+exactly how to build an energy efficient vehicle.
+Revisions for the 18th edition retain the clear distinction between Challenger and Cruiser classes:
+Challenger vehicles will be optimised for converting solar irradiance to speed; Cruiser vehicles
+will be judged on practical design aspects as well as efficiency.
+Significant changes from 2023 to 2025 include:
+• shifting the date from October to August
+• increased solar collector sizes and reduced energy storage allowances for Challenger
+and Cruiser vehicles
+• Cruiser vehicles may have three wheels
+• energy storage measured by energy rather than mass
+• easier-to-follow Cruiser format—fixed energy allowance, two occupants, single stage,
+with incentives for sustainable, smart design features
+• front and rear overhang restrictions, and new ground clearance requirements.
+The information contained in this document is for the purposes of conducting the 2025
+Bridgestone World Solar Challenge and must not be regarded as constituting definitive
+instructions as to how a Competition Vehicle should be constructed or operated.
+This document is organised as far as practical into the following sections:
+• Administration
+• Competition Vehicle Regulations
+• The Adventure (Darwin and on-road protocols)
+• Achievement and Celebration.
+Additional information or clarification of the intent of regulations is included in italics.
+The words WORLD SOLAR CHALLENGE and the SUN, FLAMES, RISING IN SEMI-CIRCLE image are registered
+trademarks owned by the Government of South Australia.
+9
+1 Administration
+1.1 Scope
+1.1.1 These Regulations apply to the 2025 Bridgestone World Solar Challenge (hereinafter
+called ‘the Event’), and comprise participants’ eligibility, pre-event preparation,
+scrutineering, testing, on-road components, and any associated activities published by
+the Event Organiser as being part of the event.
+1.1.2 The Event will be conducted under the Regulations described in this document which,
+along with any amendments or further regulations issued as Regulation Bulletins,
+supersede regulations for any previous edition of the Bridgestone World Solar Challenge.
+1.2 Language
+1.2.1 The official language of the Event is English. All correspondence will be conducted in
+English.
+1.2.2 Official correspondence must be conducted between the Event Organiser and the
+Entrant’s nominated representative (the Team Manager) as detailed by the Entrant on
+the Entry Form. Specific written instruction to include others in team correspondence will
+be accepted.
+1.2.3 In these Regulations, the word ‘must’ indicates an absolute requirement, the word
+‘should’ indicates a recommendation, and the word ‘may’ indicates that something is
+possible or permitted.
+1.3 Time zone
+1.3.1 The time zone for the event is Australian Central Standard Time (ACST = UTC + 9.5).
+1.4 Conduct of the Event
+1.4.1 The on-road component of the Event is conducted on public roads between Darwin and
+Adelaide, Australia – approximately 3000 km. In addition to these Regulations, and
+Regulation Bulletins that amend these Regulations, all activity is conducted under
+applicable traffic codes, civil laws, and regulations.
+1.4.2 All activities undertaken by an Entrant, including activities conducted prior to the
+commencement of the official Event Period, are governed by statutory regulations,
+breaches of which may incur event penalties.
+1.5 Eligibility
+1.5.1 Eligible Competition Vehicles will be those that meet the design criteria described by
+these Regulations. Participating Competition Vehicles must not be used on any public
+10
+roads during the Event Period until permission has been granted by the civil authorities
+and the Event Organiser. Further information will be included in the Team Manager’s
+Guide.
+1.6 Entrant obligation
+1.6.1 By applying, Entrants declare that they know and understand the Terms and Conditions
+and Regulations of the Event and agree that participation will constitute their full
+acceptance to abide by and operate under the above mentioned for the duration of the
+Event.
+1.6.2 Each Entrant must appoint an individual to act as the Team Manager. The Team
+Manager will be responsible for regulatory compliance, the actions of team members,
+and any other individuals associated with the Team. Entrants must not change their
+Team Manager without the approval of the Event Organiser.
+1.6.3 Entrants must act fairly and in good faith in accordance with the Regulations.
+1.6.4 Penalties (which may include exclusion) will be applied to any Team deemed to have
+departed from the spirit of the Event by deliberately acting to gain an unfair advantage
+over others, or by conduct that could bring the Event into disrepute.
+1.7 Event Organiser
+1.7.1 The Event is owned and managed by the Government of South Australia and
+administered by the South Australian Motor Sport Board (ABN 43 976 679 496) (‘the
+Event Organiser’).
+Head Office: Level 5, 182 Victoria Square Adelaide SA 5000
+Postal Address: GPO Box 2343, Adelaide 5001
+Head Office Telephone: +61 (0)8 8429 2500
+E-mail: admin@worldsolarchallenge.org
+Web: www.worldsolarchallenge.org
+1.8 Event Management Team
+1.8.1 The Event Management Team is:
+• Mark Warren, Chief Executive, SAMSB
+• Naomi Misiajlo, Event Manager, Bridgestone World Solar Challenge
+• Andrew Fotheringham, Head of Marketing & Communications
+• Rebecca Lawson, Head of Commercial
+• such other members the Event Organiser may appoint.
+1.8.2 Scientific Faculty:
+• Prof Peter Pudney
+• Dr David Rand AM FTSE
+11
+• Mr Paul Gwan
+• Prof John Storey
+• Dr David Snowdon
+• Dr John Ward
+• Mr Bart De Moitié
+• Dr Glenn Platt
+• Dr Fiona Leverone
+• Dr Kirsty Veale
+• Chris Selwood AM, Event Ambassador
+• such other members the Event Organiser may appoint.
+1.9 Officials of the Event
+1.9.1 The Event will appoint officials who will be responsible for the conduct of the Event.
+1.9.2 During the Event, these officials will wear white or red event shirts.
+1.9.3 A full list of all appointed officials will be published in a Regulation Bulletin before the
+start of the Event.
+1.10 Jury
+1.10.1 The Event Organiser will appoint a team of independent Jurors to resolve disputes. Juror
+names will be published within the full list of officials noted in Regulation 1.9.
+1.10.2 The team of appointed Jurors is the only authority empowered to determine the
+interpretation of these Regulations.
+1.11 Judges of fact
+1.11.1 Each official appointed by the Event Organiser is a Judge of Fact on any event-related
+activity.
+1.11.2 Observers appointed by the Event are Judges of Fact on all event-related activities.
+1.12 Schedule
+1.12.1 A detailed Event Schedule including all official functions, promotional activities and public
+engagement activations will be distributed to teams via a Team Notice.
+1.12.2 All Teams must adhere to the Event Schedule, attend official functions, media calls,
+promotional activities and public engagement activations with their Competition Vehicle
+or other team vehicles or equipment as listed or requested.
+12
+Tuesday 7 May 2024 Event dates & key regulatory changes announced
+Wednesday 5 June 2024
+(World Environment Day)
+2025 Event Regulations published.
+Wednesday 5 June 2024
+(World Environment Day)
+Applications for Entry open
+Volunteer Registrations open
+Friday 30 August 2024 Early Applications of Entry close
+Friday 4 October 2024 Standard Applications for Entry close
+Volunteer Registrations close
+Tuesday 22 April 2025
+(Earth Day)
+Official Entry list published
+Friday 14 March 2025 Group A & B Documentation submission deadline
+Friday 25 April 2025 Group C Documentation submission deadline
+Friday 30 May 2025 Group D Documentation submission deadline
+Saturday 9 August 2025 Event Headquarters open in Darwin
+Saturday 9 August 2025 Official Event period commences
+Monday 11 August 2025 Team Manager & Safety Officer briefing.
+Team Manager & Safety Officer must be in attendance.
+Wednesday 13 August 2025 All Competition Vehicles must be based at Event
+Headquarters
+Monday 18 August 2025 Static Scrutineering commences. All team members are
+required to be in Darwin.
+Sunday 17 August 2025 Group E Documentation submission deadline
+Thursday 21 August 2025 Official Team Welcome function
+Friday 22 August 2025 Chief Minister’s VIP Reception (TBC)
+Saturday 23 August 2025 Dynamic Scrutineering commences
+Saturday 23 August 2025 Team briefing
+Saturday 23 August 2025 Media briefing
+Sunday 24 August 2025 Official Start in Darwin
+Wednesday 27 August 2025 Official Finish Line opens in Adelaide
+Sunday 31 August 2025 Award Ceremony
+Wednesday 3 September 2025 Pack-down area closes, official Event period closes
+13
+1.13 Entering the Event
+Applications for entry are invited from any Entrant prepared to meet the standards and obligations of the
+competition.
+1.13.1 Applications for entry may be made from the time these Regulations are published until
+midday Friday 4 October 2024 (ACST), or such other time as the Event Organiser may
+determine.
+1.13.2 Applications for entry must be made via the official online Entry Form, available on the
+Bridgestone World Solar Challenge website (www.worldsolarchallenge.org).
+1.13.3 Accepted applications for entry will only be considered confirmed upon payment of the
+application fee.
+1.13.4 The number of places is limited. Applications received after the limit is reached may be
+placed on a reserve list.
+1.13.5 The granting of a place in the Event will become void if the entry fees have not been
+received by the due date.
+1.13.6 Entrants who do not satisfy the Chief Scrutineer that they will achieve compliance with
+the Regulations (through documentary submission) may fail to qualify for the Event and
+their place may be offered to an Entrant on the reserve list.
+1.13.7 The Event Organiser reserves the right to accept or reject any application without
+explanation.
+1.14 Entry fees
+1.14.1 Entry fees include Australian Goods and Services Tax (GST) and are based on the class
+requested on the entry form. For example, if a Challenger team fails to qualify and is
+offered a place in the Explorer class, no refund of the difference is payable.
+1.14.2 An application fee of $2,000 Australian Dollars (AUD) is payable upon submission of the
+online entry form. Payment of this fee will be via credit card as part of the online Entry
+Form process. An official tax receipt will be provided via email.
+1.14.3 The application fee, which forms part of the total entry fee, is non-refundable.
+Entrants will be provided with an invoice for the remaining entry fee within one month of receipt of their
+completed official Entry Form and application fee. Acceptable methods for payment of entry fees will be
+detailed in the invoice document.
+1.14.4 International banking charges are the responsibility of the Entrant. Minor adjustment (up
+to AUD$150) can be settled at registration in Darwin.
+1.14.5 Applications submitted before 17:00 (ACST) on Friday 30 August 2024 will be considered
+an Early Entry and qualify for the Early Entry fee.
+Early Entry fees must be paid in full by Tuesday 1 October 2024. Failure to pay by due date will void the
+qualification for Early Entry fees and a secondary invoice will be issued for the Standard Entry fee.
+14
+1.14.6 The Standard Entry fee will apply to applications received after 17:00 (ACST) on Friday
+30 August 2024 and before 17:00 (ACST) on Friday 4 October 2024.
+1.14.7 All entry fees are payable in full by noon (ACST) Friday 13 December 2024; failure to
+pay by the due date will void the application. Any refund will be subject to the terms
+outlined under Regulation 1.16.
+1.14.8 The entry fees are:
+Class Early Entry fee Standard Entry fee
+Challenger AUD$18,000 AUD$20,000
+Cruiser AUD$18,000 AUD$20,000
+Explorer AUD$15,000 AUD$16,500
+and includes
+• Team Entry fee
+• Team Member Registration fee of up to twenty (20) team members
+• Twenty (20) Awards Ceremony tickets.
+An entry fee of AUD$110 will be levied for each additional Team member over and above
+the already included twenty (20). This fee covers Team member registration and an
+awards ceremony ticket.
+1.14.9 The Event Organiser reserves the right to accept late entries. Entry requests granted
+after the close of entries will attract a 10% late fee.
+All enquiries regarding fees or payments should be directed to the Participant Liaison Officer via email
+teams@worldsolarchallenge.org or phone +61 (0)8 8429 2500 during business hours, 09:00–16:30,
+Adelaide time, Monday-Friday.
+1.15 Other fees
+1.15.1 A fee (estimated at AUD$130) will be payable to the relevant authority by the owner of
+each Competition Vehicle in respect of compulsory third-party bodily injury insurance
+required by operators of motor vehicles in Australia.
+1.16 Refunds
+1.16.1 Refund entitlement is based on date of withdrawal.
+15
+Before 17:00 on Withdrawal Date Refund
+4 October 2024 Full refund
+Before 30 January 2025 75% refund
+Before 22 April 2025 25% refund
+From 22 April 2025 No refund
+The application fee and bank charges are not refundable.
+1.17 Cancellation of the Event
+1.17.1 The Event Organiser reserves the right to cancel or abandon the Event for reasons
+beyond its reasonable control, including but not limited to acts of God, natural disasters,
+fire, flood, earthquake, explosion, sabotage, acts of war, riots, and strikes outside its
+organisation, communicable disease crisis and quarantine restrictions.
+1.18 Insurance
+1.18.1 A Regulation Bulletin will be issued in due course detailing the specific requirements for
+insurance cover that will be obtained by the Event Organiser and must be obtained by
+the Entrant.
+1.18.2 The Event Organiser does not cover any claims arising from the participation of Entrants
+in the Event during the Event Period. Comprehensive insurance for personal effects,
+tools, equipment, Competition Vehicles and other vehicles is the responsibility of the
+entrant.
+Participants are advised that a personal travel insurance policy in respect of theft, loss, sickness, and
+accidents is highly recommended. The Australian Government has reciprocal health care agreements with
+some countries, covering limited subsidised health services for medical treatment.
+1.19 Team members
+1.19.1 Each Team must include (but is not limited to):
+• a Team Manager
+• a Safety Officer, responsible for the safety of the team
+• a Battery Officer, responsible for the Competition Vehicle battery
+• an interpreter if the Team Manager is not proficient in English
+• at least three (3) and at most six (6) Competition Vehicle drivers
+• at least two (2) drivers for each support vehicle (Competition Vehicle drivers should
+not drive support cars on the same day as driving the Competition Vehicle)
+• at least one (1) person with a recognised first aid certificate that is current for the
+duration of the Event Period, and who is not the Team Manager, Safety Officer or
+Battery Officer
+16
+• passengers for Cruiser teams.
+1.19.2 Each team member will be required to register online and be physically present at team
+registration in Darwin. All team members must be in Darwin and registered by 15:00 on
+Friday 22 August 2025.
+Teams will not be allowed to proceed to Dynamic Scrutineering until all team members have been
+registered in Darwin.
+1.19.3 A person holding the position of Team Manager, Safety Officer or Battery Officer must
+not hold any other of these roles.
+1.19.4 A person holding the position of Team Manager, Safety Officer or Battery Officer must
+be seated in the front escort vehicle, Competition Vehicle or rear escort vehicle during
+the on-road component of the Event while the Competition Vehicle is in motion on a
+public road.
+1.19.5 The person holding the position of Safety Officer must not be a Competition Vehicle
+driver.
+1.19.6 Each Competition Vehicle driver must hold an appropriate motor vehicle driver's licence
+recognised by Australian authorities and valid for the total period of the Event.
+Driving licences will be inspected and verified by Australian road transport authorities as part of the
+scrutineering process. Acceptable driving licences must include a photograph of the holder, the class of
+vehicle for which the licence applies and the expiry date. If these details are not in English, either the licence
+must be accompanied by a certified translation, or a valid International Driving Licence is required.
+1.19.7 The Event Organiser is unable to take responsibility for any person under the age of 18.
+An Entrant may make a request for a minor to be included in their team provided such request is
+accompanied by a document giving permission and acknowledging that supervision of the person concerned
+is the responsibility of the Team Manager, not the Event Organiser. The document must be signed by both
+the parent or legal guardian of the proposed participant, and the Team Manager.
+1.20 Team identification
+1.20.1 All Team details including Team Name, Team Manager and Competition Vehicle details
+will be taken from the online Entry Form.
+1.20.2 In accordance with the World Solar Challenge Terms and Conditions of Entry, available
+on the Event website World Solar Challenge 2025, the Event recognises countries,
+economies and regions as per the Australian Government Department of Foreign Affairs
+and Trade (DFAT) nomenclature, publicly available at: Countries, economies and
+regions | Australian Government Department of Foreign Affairs and Trade (dfat.gov.au).
+Any region not recognised as a country by DFAT will be referred to as a Region.
+Flags will be included on Event signage for recognised countries only and will be
+consistent with DFAT protocols.
+1.20.3 Requests to change entry details will only be considered when submitted, by the Team
+Manager, by email or through the team portal.
+17
+1.20.4 Once an entry has been accepted, any request to change entry details will be subject to
+the provisions of Regulation 1.29 and the approval of the Event Organiser.
+1.20.5 Each Team will be allocated a 2-digit Team number on acceptance of entry.
+1.20.6 Early Entry applications may make a special request for the use of a Team number.
+Requested numbers must contain exactly two digits.
+1.20.7 Allocation of any number is at the sole discretion of the Event Organiser.
+1.21 Permits
+1.21.1 Motor vehicles, including Competition Vehicles, entering Australia require a federal
+import permit. Strict conditions are in place for the import of motor vehicles, including
+Competition Vehicles, into Australia. The Event Organiser will apply for a permit to import
+the Competition Vehicle of each team that has met qualification requirements (including
+the payment of entry fees).
+1.21.2 Import permit arrangements for other vehicles (including road trailers) are the
+responsibility of the Entrant.
+1.22 Freight
+1.22.1 The Entrant is responsible for all freight arrangements.
+1.22.2 Freight deliveries to the Event Headquarters outside the dates of the Event’s occupation
+of the facility will not be accepted.
+Details of all freight, customs and quarantine arrangements will be provided in the Team Manager’s Guide
+and Freight Manual.
+1.23 Visas
+1.23.1 Citizens of countries other than Australia or New Zealand need a visa to enter Australia.
+Visas are the responsibility of the individuals concerned. Visa requirements are detailed by the Australian
+Department of Home Affairs. Information on how the Event Organiser is permitted to support visa
+applications will be provided in the Team Manager’s Guide.
+1.24 Vehicle preparation
+1.24.1 Preparation facilities will be available at the Event Headquarters in accordance with the
+dates listed in the Event Schedule.
+The Event Organiser is responsible for all operations at the Event Headquarters. The Facilities Management
+of the venue is unable to assist with early arrivals, pit allocations or freight issues. Detailed arrangements
+will be published in the Team Manager’s Guide, Regulation Bulletins and via Team Notices.
+18
+1.25 Style guide
+1.25.1 The correct title of the Event is the Bridgestone World Solar Challenge. Entrants and
+their sponsors must use the correct title in all references to the Event.
+1.25.2 The Official Logo of the Event will be published as Regulation Bulletin. The Official Logo
+will be supported by a style guide that details its conditions of use.
+1.25.3 Entrants, Teams and their sponsors wishing to use the Official Logo in non-commercial
+publicity may do so in accordance with the requirements of the style guide.
+1.25.4 Entrants, Teams and their sponsors wishing to use the Official Logo in a commercial
+context (i.e., merchandise offered for sale) must seek the written permission of the Event
+Organiser.
+1.26 Sponsorship obligations
+1.26.1 It is a condition of participation that the Entrant acknowledges Event and category
+sponsors in their own publicity. Failure to do so may result in the team being delisted
+from Event publicity.
+1.27 Media and promotional obligations
+A promotional schedule will form part of the Event Schedule. The promotional schedule will contain details
+of official media calls and other promotional activities created for the benefit of the Event, the Entrants,
+Teams and their sponsors.
+Per Regulation 1.12.2, requests to attend media calls, promotional activities, public appearances etc are
+obligatory for all Teams.
+1.27.1 Notwithstanding the provisions of Regulation 1.27.6, the Event Organiser will respect the
+Intellectual Property of the respective owners. Technical details of Competition Vehicles
+will be kept confidential until the start of Static Scrutineering and commercial in
+confidence requests and media embargos will be honoured.
+1.27.2 Teams must notify the Event Organiser of public, or media promotional activities held for
+or on behalf of their attendance in the Event, not less than seven (7) days prior to the
+activity taking place.
+1.27.3 Media travelling with or in support of any Team must comply with the Event media
+accreditation requirements.
+1.27.4 Teams will be held accountable, through the application of event penalties, for the
+unacceptable actions of media representatives travelling with or in support of their Team,
+whether registered as such or not.
+Standard operational procedure of Australian police is to first remove the cause of any problem. Police have
+advised that, where media vehicles following a team are creating a danger for other road users, they will
+take the Competition Vehicle off the road. Teams are advised to reinforce this point to their country’s media
+in their own language.
+19
+1.27.5 Teams who maintain an internet presence are required to provide a link to the official
+Bridgestone World Solar Challenge website: www.worldsolarchallenge.org.
+1.27.6 The creation and use of any sound recordings or still or moving images of the Event used
+for commercial gain or public performance by the entrant or their sponsors are subject
+to the prior written approval of the Event Organiser.
+1.27.7 Non-commercial media content generated by the Team must reference the Event in
+accordance with the provisions of Regulation 1.25.
+1.27.8 Teams and or their sponsors shall not engage in any marketing or promotional activity
+that will materially detract from the value and standing of the Event or its sponsors.
+1.27.9 Activity by sponsors of Teams shall not imply ownership or sponsorship of the Event.
+1.27.10 Teams are responsible for the activities of their sponsors.
+1.28 Remotely Piloted Aircraft(Drones)
+1.28.1 Remotely piloted aircraft (RPA) must not be operated without the approval of the Event
+Organiser.
+1.28.2 RPA registration and pilot accreditation must be in accordance with Civil Aviation Safety
+Authority (CASA) regulations.
+Further information will be provided in the Team Manager’s Guide and any subsequent Team Notices or
+Regulation Bulletins.
+1.29 Compulsory documentation
+1.29.1 Each Team must submit documentation using online forms. All submissions must be
+made by the dates stated in the Event Schedule.
+The purpose of the documentation is to help Teams identify potential compliance issues before the
+Competition Vehicle is shipped to the Event.
+Group A
+• Team information
+• Team promotional information
+• Publication-quality information and photographs of the Team and Competition
+Vehicle.
+Group B
+• Mechanical Specification
+• Electrical System Specification
+• Solar Collector Specification
+• Energy Storage System Specification.
+20
+Group C
+• Energy Storage System Incident Plan
+• Team Safety Plan
+Group D
+• Logistics schedule
+• Travel, arrival, and accommodation information
+Group E
+• Roadworthiness Certificate
+A signed Roadworthiness Certificate must be submitted before a Team may apply for a permit for on-road
+testing.
+Scrutineering
+The following documentation must be presented at Static Scrutineering:
+• Final technical documentation that describes the Competition Vehicle as built and
+highlights any changes since earlier submissions.
+• Two printed A4 copies of a diagram of the Competition Vehicle in top view, with the
+front of the Competition Vehicle depicted at the top of the diagram, and clearly
+showing how emergency isolation is to be activated.
+• The original signed Roadworthiness Certificate.
+• A block diagram, printed on A4 paper, showing a plan view of the Competition Vehicle
+and where the high voltage functional blocks (PV array(s), energy storage pack(s),
+main fuses, motors, etc.) are located within the Competition Vehicle and the routing
+of the high voltage wiring between them.
+• A simplified electrical diagram and accompanying description showing how safe state
+is implemented. This diagram must show the e-stop loop and how it controls the highvoltage contactors, the system that ensures the e-stop loop is deenergised in safe
+state, how the low-voltage bus external to the energy storage pack(s) is deenergised
+in safe state, and the battery fuses. The example Solar Wombat 25 electrical diagram,
+available on the Bridgestone World Solar Challenge team portal, indicates the level
+of detail required.
+1.29.2 If the Team Manager wants to vary the documentation after the submission deadline, the
+Team Manager must make the request to the Event Organiser in writing setting out the
+proposed variations. If the Event Organiser accepts the Team Manager’s request, the
+varied document will supersede all previous versions. The Competition Vehicle
+presented at scrutineering must be exactly as described in the latest version that has
+been accepted by the Event Organiser. Failure to disclose any changes may result in
+exclusion from the Event. The Event Organiser will not be responsible for failure to
+broadcast or publish any document for publicity because of variations proposed by the
+Team Manager.
+21
+1.30 Clarifying Regulations
+1.30.1 Team Managers must address any questions about the Regulations or the Event to
+teams@worldsolarchallenge.org
+1.30.2 If you ask for clarification of a Regulation and our answer restricts what you are allowed
+do then we will publish the question and answer, without identifying which Team asked
+the question, so that every Team has the same information. If our answer does not
+restrict what you are allowed to do, then we will answer your question without publishing
+the question or the answer.
+22
+2 Competition Vehicle Regulations
+2.1 Classes
+2.1.1 The Event will have three classes of Competition Vehicle:
+• Challenger class is for single-seat Competition Vehicles optimised for converting
+solar irradiance to speed.
+• Cruiser class is for Competition Vehicles with two or more seats that will be judged
+on practical design features as well as efficiency.
+• Explorer class is for Competition Vehicles designed to participate in previous Events
+but not eligible for Challenger or Cruiser class, or other Competition Vehicles
+approved by the Event Organiser. Explorer class is non-competitive.
+2.1.2 Challenger vehicles must be powered by solar irradiance collected by the Competition
+Vehicle. The only external energy input that may be used is the energy in the energy
+storage system at the start of the Event.
+2.1.3 Cruiser vehicles must be designed to be powered by renewable energy.
+It is accepted that energy from regenerative braking, road gradients and wind incident on the Competition
+Vehicle while driving may also be used. Active aerodynamic features are permitted but must not reduce the
+stability of the vehicle. Cruiser Competition Vehicles must be designed to be powered by renewable energy
+but may be recharged from non-renewable sources if renewable sources are not available.
+2.2 Dimensions
+2.2.1 When driving in a straight line, the Competition Vehicle must fit inside a right rectangular
+prism 5800 mm long, 2300 mm wide and 1650 mm high, with the tyre contact points on
+the base of the prism.
+Standard 20’ shipping containers have 5880 mm internal length and 2350 mm internal width.
+2.2.2 Cruiser vehicles must have a cargo compartment that can accommodate two items of
+luggage, each 560 mm × 360 mm × 230 mm. The cargo space must be separated from
+the Competition Vehicle mechanical or electrical systems.
+2.3 Wheels
+2.3.1 Competition Vehicles must be supported by at least three wheels while driving.
+2.3.2 The longitudinal distance between the frontmost part of the Competition Vehicle and the
+frontmost tyre contact point must be less than 60% of the wheelbase.
+2.3.3 The longitudinal distance between the rearmost tyre contact point and the rearmost part
+of the Competition Vehicle must be less than 60% of the wheelbase.
+23
+2.3.4 The fully laden Competition Vehicle must be able to drive over a road apex formed by a
+1:15 incline followed by a 1:15 decline without any part of the vehicle other than the tyres
+touching the road.
+The length of the road apex will be greater than the wheelbase of the Competition Vehicle.
+2.3.5 The fully laden Competition Vehicle must be able to drive over a speed hump with the
+dimensions shown in the following diagram without any part of the vehicle, other than
+the tyres, touching the speed hump.
+2.3.6 The fully laden Competition Vehicle must have an approach angle of at least 10° and a
+departure angle of at least 10°.
+The Competition Vehicle must comply with all regulations in Section 2.3 whenever it is being driven.
+2.4 Solar collector
+2.4.1 Competition Vehicles may incorporate a solar collector that converts solar irradiation into
+energy that can be used to propel the vehicle. The most common type of solar collector
+for Competition Vehicles uses photovoltaic cells. Teams wishing to use other types of
+solar collector must send details of their proposed solar collector to the Event Organiser
+for approval.
+2.4.2 A Challenger vehicle must not have more than 6.000 m2 of solar collector area. Solar
+collector area includes:
+• the directly exposed front surface area of all photovoltaic cells
+• the directly exposed rear surface area of all bifacial photovoltaic cells
+• the directly exposed surface area of energy conversion devices other than
+photovoltaic cells
+• the directly exposed area of all surfaces that transmit, refract or reflect light onto
+devices that convert solar irradiation into energy that can be used to propel the
+vehicle.
+A surface is directly exposed if light can travel in a straight line from any part of the sky,
+ground or road to the surface.
+PV cell encapsulation within 10 mm of a minimum rectangle covering a PV cell will not
+be counted towards the solar collector area.
+The solar collector area limit applies to all possible configurations of the solar collector,
+while driving and while solar charging.
+24
+Photovoltaic cell area includes active material, busbars, fingers, connection pads, and
+cell area covered by interconnection ribbon or tabs.
+If a bifacial photovoltaic array is tilted for solar charging so that the front and rear surfaces are both directly
+exposed then the front and rear surface areas are both counted.
+It is accepted that light reflection from parts of the Competition Vehicle such as the canopy is unavoidable.
+Example area calculation: The area of a SunPower cell with a width of 125 mm and a diagonal diameter of
+166 mm is less than 0.0155063 m2, and so 386 cells will have a total area less than 6.000 m2.
+2.4.3 The solar collector area for Cruiser vehicles is unrestricted, but the solar collector must
+be within the allowable dimensions of the Competition Vehicle.
+2.4.4 Materials with high environmental toxicity, including GaAs, CdTe and CuInSe2, must not
+be used for solar energy conversion.
+2.4.5 All devices used for solar charging must be carried in the Competition Vehicle. This
+includes stands, supports, and cables.
+During solar charging, Competition Vehicles must not be tilted on jacks or stands that were not carried in the
+vehicle even if you are pretending to change a wheel.
+2.5 Energy storage
+2.5.1 A Competition Vehicle may store energy. The most common type of energy storage for
+Competition Vehicles is a rechargeable electrochemical battery. Teams wanting to use
+energy storage technologies other than rechargeable electrochemical batteries must
+send details of their proposed energy storage system to the Event Organiser for
+approval.
+2.5.2 Energy storage capacity must be no more than:
+• 11 MJ for Challenger vehicles
+• 55 MJ for Cruiser vehicles.
+The energy storage capacity of electrochemical cells will be based on specifications
+endorsed by the cell manufacturer. The nominal energy of a cell, in joules, will be
+calculated by
+𝐸𝐸 = 3600 𝑉𝑉 𝑞𝑞
+where 𝑉𝑉 is the nominal discharge voltage of the cell, in volts, specified by the
+manufacturer, and 𝑞𝑞 is the maximum of the:
+• rated discharge capacity
+• minimum discharge capacity
+• typical or nominal discharge capacity, in Ah, specified by the manufacturer.
+The energy storage capacity for other forms of energy storage will be determined by the
+Chief Energy Scientist and will be based on energy that can be delivered from the ‘tank’.
+25
+The remaining regulations in this section are based on electrochemical energy storage. The Event Organiser
+will require that alternative energy storage systems meet equivalent levels of safety based on the organiser’s
+assessment of the proposal submitted by the Team.
+2.5.3 Specifications from third party suppliers or found on the internet might not match those
+endorsed by manufacturers. If the Event Organiser receives conflicting or unclear
+specifications of electrochemical cell energy for a cell model, the Chief Energy Scientist
+will determine the nominal cell energy for cells of that model.
+2.5.4 The energy storage system must be contained within at most two packs. Energy storage
+packs must be rigid, self-contained boxes that cannot be opened or disassembled
+without using tools and can be removed from the Competition Vehicle intact.
+2.5.5 Electrochemical cells must not, at any time, be operated outside of the operating ranges
+for voltage, current and temperature specified by the manufacturer. Teams must provide
+manufacturer’s specifications that include:
+• minimum operating cell voltage
+• maximum operating cell voltage
+• maximum discharge current
+• maximum charge current
+• maximum temperature while discharging
+• minimum temperature while charging
+• maximum temperature while charging.
+2.5.6 The Competition Vehicle must automatically prevent electrochemical cells from being
+operated outside the operating ranges for voltage, current and temperature specified by
+the manufacturer. Teams must provide endorsement by their certifying engineer that an
+adequate and effective automatic battery management system has been designed and
+implemented so that fault conditions will be managed safely.
+2.5.7 Batteries used only to
+• power a real-time clock when the Competition Vehicle is turned off; or
+• retain data when the Competition Vehicle is turned off; or
+• power wireless tyre pressure monitors
+are not considered to be part of the energy storage system, provided that the total energy
+capacity does not exceed 10 kJ.
+2.5.8 Batteries or cells inside devices such as handheld radios, cameras, mobile telephones,
+or wristwatches that are carried by the driver or passengers are not considered to be
+part of the energy storage system if they are not electrically connected to the Competition
+Vehicle, its instrumentation or control systems.
+2.5.9 If a commercial-off-the-shelf phone or tablet containing a battery is used as a driver
+display, it must be powered from the Competition Vehicle’s electrical system. The
+electrical connection must be done in such a way that power cannot flow from the device
+back into the Competition Vehicle. The blocking diode or other system used to achieve
+26
+this must be mounted within 200 mm of the device. The device must not be charged from
+an external power source during the Event. The device’s battery capacity will be counted
+as part of the energy storage capacity. The device will not be considered to be an energy
+storage pack.
+It is recognised that failure of the blocking device could result in 5 V being present throughout the Competition
+Vehicle even in safe state. This is acceptable as long as:
+a) the team can demonstrate that such a failure is highly improbable and
+b) that in the event of such a failure, no combination of additional failures can prevent the Competition
+Vehicle from entering safe state.
+2.5.10 Capacitors are not considered to be part of the energy storage system if their total energy
+storage capacity is less than 36 kJ. Any such capacitors that are outside the energy
+storage packs or solar collector must be automatically discharged to less than 60 V within
+five seconds of the Competition Vehicle being placed in safe state (see Regulation 2.28).
+2.5.11 Energy storage packs must be mounted in the Competition Vehicle so that they will be
+restrained in a 20 g acceleration in any direction.
+2.5.12 The Competition Vehicle must be designed so that no liquids or gases from energy
+storage packs can enter the occupant space.
+2.5.13 Energy storage packs must be constructed so that each pack can be sealed using
+tamper-evident plastic seals, like 3 × 100 mm plastic cable ties. With seals fitted, it must
+not be possible to remove any cell without breaking the seal. Seals will be provided by,
+and fitted by, the Event Organiser at Scrutineering.
+2.5.14 Energy storage packs for Challenger vehicles must have a means of being sealed so
+that no electrical connection can be made to the energy storage packs. The seals will be
+tamper-evident plastic seals, like 3 × 100 mm plastic cable ties. Seals will be provided
+by Observers.
+This regulation allows teams to have the energy storage system impounded inside the Competition Vehicle.
+Examples of acceptable sealing mechanisms include:
+• disconnecting each energy storage pack from the rest of the Competition Vehicle and sealing a cover
+over each pack that prevents access to all electrical connectors and to the inside of the pack
+• removing the energy storage packs from the Competition Vehicle and sealing them in a box provided
+by the team.
+2.5.15 Energy storage packs must be in ‘safe state’ while being removed from the Competition
+Vehicle and while being reinstalled into the Competition Vehicle.
+2.5.16 Energy storage packs must be designed and constructed so that scrutineers can verify
+the cell models being used and the number of cells of each model.
+2.5.17 Any external charging system that is used to recharge an electrical energy storage
+system must meet the following requirements:
+• the charger must be used with a residual current device
+27
+• the charger must be either permanently connected to the energy storage system, or
+connect to the energy storage system using an appropriate connector
+• the output of the charger must be electrically isolated from any ac input
+• charging must stop automatically when the energy storage system is full or if a fault
+occurs.
+This regulation applies to all charging done in Australia, including in the pits at Event Headquarters.
+2.6 Cruiser recharging
+2.6.1 Cruiser vehicles may be recharged from an external energy source overnight, during
+the time intervals between when the team stops driving each day and when it starts
+driving the next day.
+2.6.2 Each Cruiser Team is responsible for providing the equipment required to recharge their
+Competition Vehicle.
+Teams requiring electricity to recharge could hire a room or powered camp site if they have stopped in a
+town or at a roadhouse, or else recharge using an energy source supplied by the team.
+2.6.3 Battery swapping (or the equivalent for other types of energy storage) is not permitted.
+2.7 Vehicle identification and signage
+2.7.1 The Competition Vehicle must have a Vehicle Identification Number (VIN) permanently
+attached to a substantial part of the vehicle chassis or frame. Teams may apply for a VIN
+in their own country or else generate a ‘surrogate’ VIN with the format.
+6ZZysssssssssssss
+where y indicates the year of manufacture (N = 2022, P = 2023, R = 2024, S = 2025)
+and sssssssssssss is 13 characters using digits 0–9 and uppercase letters A–Z but not
+the letters I, O or Q, that includes a manufacturer code and a vehicle serial number, e.g.,
+6ZZSW0MBATS0LAR01.
+2.7.2 The Competition Vehicle must have a space at least 220 mm wide and at least 110 mm
+high for mounting a rear vehicle registration plate. Whenever the Competition Vehicle is
+being driven:
+• the registration plate must be mounted in a vertical plane with its longest edge
+horizontal and perpendicular to the direction of travel
+• the letters must be upright
+• the registration plate must be within 50 mm of the rearmost part of the Competition
+Vehicle
+• no part of the Competition Vehicle may be in the region rearward of the registration
+plate in the range 15° up, 0° down, 45° left and 45° right from all parts of the
+registration plate.
+2.7.3 You must not modify the registration plate.
+28
+You must not enlarge the holes in the registration plate. You must not use the existing holes for rear vision.
+2.7.4 Competition Vehicles must incorporate Event signage in unbroken rectangular spaces
+200 mm high and 500 mm wide on both the left and the right sides of the vehicle. Artwork
+will be available from the Event Team Portal.
+‘Unbroken’ means that the signage space must not overlap panel gaps or visible joints.
+Stickers will be provided to teams requiring the signage. Incorrect use of artwork will result in a sticker of the
+correct size and with the correct artwork being applied.
+2.7.5 Teams must display their 2-digit team number on the left and the right sides of the
+Competition Vehicle, in digits that are more than 150 mm high and that are clearly visible
+against their background.
+2.7.6 Event signage and Team numbers must be completely visible from 3 m perpendicular to
+the side of the Competition Vehicle and at a viewing height of 1.8 m above the ground.
+2.7.7 Competition Vehicles must have an unbroken front signage area on the vehicle body,
+forward of the windscreen. The front signage area must contain:
+• the name of the Competition Vehicle, or the name of the Team, or the number of the
+Competition Vehicle, readable at 3 m perpendicular to the centre of the name
+• a 150 × 150 mm square Event logo.
+The entire front signage area must be visible in top view and in front elevation view and
+must not overlap with the solar collector. Artwork or a sticker for the Event logo will be
+provided by the Event Organiser.
+2.7.8 The national flag of the country of entry (as confirmed by the Event Organiser in line with
+Regulation 1.20.2) must be displayed on the Competition Vehicle, adjacent to the
+windscreen. Minimum height is 40 mm. The flag must not be broken.
+Flags will be included on Event and vehicle signage for recognised countries only, as per
+DFAT protocols.
+2.8 Ballast
+2.8.1 Each Challenger and Cruiser vehicle occupant will be assigned ballast so that the
+combined mass of the occupant and their ballast is at least 80 kg.
+Explorer class Team occupants need not carry ballast and will not be weighed.
+Occupants will have their ballast checked by the Team’s Observer outside the Competition Vehicle. All
+ballast must be removed from the Competition Vehicle at control stops.
+2.8.2 Ballast will be supplied by the Event Organiser.
+The approximate density of the ballast material is 5 kg per litre. Ballast provided by teams will not be
+accepted.
+2.8.3 Each occupant of Challenger and Cruiser vehicles must secure their ballast inside the
+Competition Vehicle within 300 mm of their hip point.
+29
+2.9 Tracker and telemetry
+2.9.1 The Competition Vehicle must have provision to carry a self-contained tracker provided
+by the Event Organiser.
+The tracker box will be 120 mm long, 120 mm wide and 70 mm high. The tracker will be self-powered. It will
+not require any electrical connection from the Competition Vehicle. The mass of the tracker will not exceed
+2 kg. It will emit radio frequency energy with no more power than emitted by a mobile phone. The unit will
+be given to the Team for installation during Scrutineering.
+2.9.2 When the tracker box is installed in the Competition Vehicle, it must be possible to
+construct a right circular cone with its axis perpendicular to the top face of the box and
+an apex angle of 120°, and with the cone touching each edge of the top face of the box,
+so that no ray from the apex and within the cone passes through the ground or through
+any part of the Competition Vehicle that is not radio transparent at frequencies between
+300 and 3000 MHz. The tracker box may be tilted within the Competition Vehicle.
+Fibreglass and aramid composites, vinyl stickers, paint, clear acrylic and clear polycarbonate are radio
+transparent if they do not include metal or carbon. Solar cells, carbon fibre composites and metal are not
+considered radio transparent.
+2.9.3 The tracker unit must be returned to the Event Organiser at the end of the Event.
+2.9.4 Cruiser teams must upload telemetry data at each control stop and in Adelaide.
+Challenger teams may choose to upload telemetry data at each control stop and in
+Adelaide.
+2.9.5 The telemetry data must include the following measurements taken at 10-second
+intervals while driving and while charging:
+• distance travelled
+• longitude and latitude (if available)
+• cumulative energy generated from the solar collector
+• cumulative energy from the battery (increases when energy is taken from the battery,
+decreases when the battery is charged)
+• UTC time.
+Details of data formats will be made available to registered teams.
+2.9.6 Tracker and telemetry data will be published by the Event Organiser.
+30
+2.10 Safety
+2.10.1 Teams are responsible for the safety and roadworthiness of their Competition Vehicles.
+Compliance with the Regulations and passing Scrutineering does not mean that a
+Competition Vehicle is safe, roadworthy, and fit for purpose.
+2.10.2 Each Team must engage a professionally qualified certifying engineer to certify that the
+Competition Vehicle is designed and constructed using sound engineering practice,
+maintains stability while driving during testing, and is roadworthy and fit for being driven
+from Darwin to Adelaide on public roads. The certifying engineer must be qualified to
+report on the roadworthiness of vehicles for operation on public roads. They may consult
+with other engineers.
+In Australia, a certifying engineer must have a four-year bachelor’s degree or higher in mechanical or
+automotive engineering, five years of postgraduate experience working in the automotive industry, and
+professional indemnity and public liability insurance. Other jurisdictions will have similar requirements.
+2.10.3 Any changes made after certification to items described in the roadworthiness certificate
+must be re-approved by the Team’s certifying engineer.
+2.10.4 All parts of the Competition Vehicle must be fixed so that they cannot detach while
+driving. Latched parts such as doors, canopies and top shells must be secured with twostage latches where the first stage engages easily and is sufficient to hold the part if the
+second stage is not engaged properly.
+2.11 Occupant cell
+2.11.1 Competition Vehicle occupants must be enclosed in an occupant cell designed to protect
+them from injury.
+2.11.2 Vehicle components within the occupant cell must be designed to minimise the risk of
+injury or entrapment in a crash.
+2.11.3 Teams must provide documentation that specifies which parts of their Competition
+Vehicle constitute the occupant cell.
+2.11.4 When occupants are seated normally, with safety-belts and helmets on, they must be
+completely inside the convex hull of the occupant cell.
+2.11.5 There must be a gap of at least 50 mm between every point on every occupant’s helmet
+and the convex hull of the occupant cell.
+Imagine stretching a rubber skin around the occupant cell; occupants must be completely inside the skin,
+and helmets must be more than 50 mm from the skin.
+31
+2.11.6 Each Team must provide a description of how the occupant cell will protect the occupants
+from impacts including frontal impacts, side impacts, rollover impacts, bottom impacts
+and wheel impacts. This description must be endorsed by the Team’s certifying engineer.
+For analysis of the occupant cell, the minimum test loads are:
+• frontal impact: a 5 g load, opposing the direction of travel, applied to the front of the
+occupant cell in an area less than 250 mm high and less than 600 mm wide
+• side impact: a 5 g load into the side of the occupant cell, applied adjacent to the
+driver’s torso in an area less than 250 mm high and less than 600 mm wide
+• top impact: a load with components 5 g down, 1.5 g sideways and 4 g backwards,
+applied at each possible area of contact between the occupant cell and the ground
+when the occupant cell is upside down; the contact area for each test load must have
+a diameter less than 150 mm
+2.11.7 The occupant cell must be designed to protect each occupant’s head, arms and upper
+torso by deflecting objects such as body panels and fencing wires away from the
+occupant. The structure used to achieve this must extend to the top of the occupant cell
+and be capable of resisting or deflecting loads of 5 g applied to it from any horizontal
+direction by a horizontal object 2.3 m wide and less than 250 mm high.
+It is permissible for the windscreen to break provided the occupants are protected.
+Regulation 2.16.2 defines the maximum obscuration of the driver’s vision by A-pillars.
+2.11.8 Loads in Regulations 2.11.6 and 2.11.7 are based on the fully laden mass of the
+Competition Vehicle. Teams must be able to show that the occupant cell structure will
+not fail with these test loads, that any deformations as a result of these loads will not
+impinge on the occupants, and that risks of impacts of the occupants with the interior of
+the Competition Vehicle are minimised.
+2.12 Seats
+2.12.1 Challenger vehicles must have one seat. Cruiser vehicles must have at least two seats.
+Cruiser vehicles must have two occupants while driving.
+2.12.2 Each Competition Vehicle occupant must have a seat that faces forwards. The driver’s
+legs, viewed from above, must be within 10° of the forwards direction.
+32
+2.12.3 Each seat must have a back, and a head restraint that is behind the occupant’s head.
+The distance from the hip point to the top of the head restraint at the lateral centreline of
+the seat must be at least 800 mm for front seats and at least 750 mm for Cruiser vehicle
+rear seats (UNECE Regulations 17 and 25). The hip point may be approximated as
+shown in the diagram below.
+You may use different cushions for different drivers. The full set of cushions will be considered part of the
+Competition Vehicle and must be carried in the Competition Vehicle.
+2.12.4 An Event manikin (‘PVC Pat’) must fit into the driver’s seat and any passenger seat that
+will be occupied during the Event. Dimensioned drawings of the manikin are available on
+the Event website.
+PVC Pat’s dimensions are based on 95th percentile international male and female dimensions from the
+DINED anthropometric database.
+2.12.5 When seated in the normal seating position, PVC Pat must be protected by the occupant
+cell (Regulation 2.11), with the exception that PVC Pat does not have to wear a helmet
+(Regulation 2.11.4).
+2.12.6 PVC Pat does not have to meet the vision requirements.
+2.12.7 Each occupant’s heels, including PVC Pat’s heels, must be below their hip point.
+2.12.8 The outer edges of PVC Pat’s ankles must be 436 mm apart, as shown in the drawing.
+The outer edges of PVC Pat’s wrist’s must be able to be placed 496 mm apart.
+2.12.9 The angle between PVC Pat’s shoulder, hip and knees must be more than 90°.
+2.12.10 PVC Pat’s head can tilt forwards, but no more than 30° from the line of the spine. PVC
+Pat’s head does not yaw.
+2.12.11 PVC Pat, or a person no smaller than PVC Pat, must be able to get in and out of the
+normal seating positions. You may remove PVC Pat’s legs, temporarily, to help get the
+torso and head into position.
+2.12.12 PVC Pat’s hip point must be in the same position as the hips of an actual driver in the
+normal driving position, or an actual passenger in the normal seated position.
+33
+2.12.13 Head space for each seat must comply with Section LK of the Australian National Code
+of Practice for Light Vehicle Construction and Modification, as shown in the following
+diagram. The 835 mm radius arm must be able to move 45° forwards, 25° backwards
+and 7° either side of vertical. The steering wheel, mirrors, seat backs and head restraints
+may be inside the head space but must be designed to minimise the risk of injury in a
+crash. No other part of the Competition Vehicle structure, including the windscreen, may
+be inside the head space.
+This minimum head space requirement is based on a 50-percentile male and does not allow for a helmet.
+Taller team members may need more head space.
+2.13 Safety-belts
+2.13.1 Safety-belts must be fitted for each seating position. Safety-belts must be compliant with
+at least one of the following standards: UNECE Regulation 16, US FMVSS 571.209,
+SFI 16.1, SFI 16.5, SFI 16.6, FIA 8853-2016, FIA 8854/98.
+The occupant cell will provide the greatest protection when occupants are secured into the cell with fourpoint or five-point harnesses.
+2.13.2 Safety-belts must be fitted and used according to the manufacturer’s instructions, or as
+approved by the Team’s certifying engineer.
+2.13.3 Safety-belt anchorages must meet the intent of UNECE Regulation 14. In particular:
+• upper anchorages for each seat must withstand a force of 13.5 kN applied to the
+upper safety-belt straps
+• lower anchorages for each seat must withstand a force of 13.5 kN applied to the lower
+safety-belt straps
+• the location of anchor points must comply with the instructions of the safety-belt
+manufacturer, or with UNECE Regulation 14 Annex 3.
+2.13.4 Compliance must be confirmed by the Team’s certifying engineer.
+34
+2.14 Egress
+2.14.1 Teams must demonstrate that all occupants can exit the Competition Vehicle in less than
+15 seconds, without assistance.
+2.14.2 Doors and canopies used for egress must be capable of being secured and released
+from inside the Competition Vehicle and from outside the Competition Vehicle.
+2.14.3 Emergency openings, and the methods of opening, must be clearly indicated on the
+exterior of the Competition Vehicle, and be visible and achievable by an emergency
+services first responder not familiar with the Competition Vehicle.
+Instructions may include diagrams.
+2.14.4 Occupants must be able to exit the Competition Vehicle without assistance at any time.
+Teams must not use adhesive tape to secure exits.
+2.15 Ventilation, cooling, and hydration
+2.15.1 The Competition Vehicle must have sufficient ventilation to prevent the build-up of CO2
+in the cabin. Occupants must have ventilation or cooling sufficient to ensure that they will
+not overheat. The Team must describe the ventilation and cooling systems and have
+them approved by their certifying engineer.
+2.15.2 Each Competition Vehicle must have space for at least two litres of drinking water for
+each occupant (see Regulation 3.23.3).
+2.16 Forward and sideward vision
+2.16.1 Each driver, when seated in the normal driving position with safety-belt and helmet on,
+must be able to identify 75 mm high letters at every point of forward travel that is:
+• 4 m from the driver’s eyes, and
+• between 0.4 m below eye level and 0.7 m above eye level, and
+• between 100° left and 100° right of the direction of travel.
+35
+2.16.2 There must be no more than 2 pillars within the forward and sideward field of view. Each
+pillar must obscure less than 6° of the horizontal field of view.
+2.16.3 Forward and sideward vision must be achieved without the aid of mirrors, lenses, or
+electronic vision systems.
+2.16.4 The windscreen that is used for forward and sideward vision must have an optical
+transmittance more than 75%.
+2.16.5 Traffic light colours must be discernible through the windscreen.
+2.17 Rear vision
+2.17.1 The Competition Vehicle must have rear vision systems that enable the driver, when
+seated in the normal driving position with the safety-belt fastened, to see the ground in
+the shaded areas shown in the diagrams below (UNECE Regulation 46, Section 15).
+36
+2.17.2 Rear vision systems may be electronic, mirrors, or both. Rear vision systems must
+operate whenever the Competition Vehicle is in motion under its own power or about to
+be driven. Rear vision images must be upright and oriented so that objects on the right
+of the Competition Vehicle are on the right of the image.
+2.18 Steering
+2.18.1 Steering must be controlled by a steering wheel designed so that it cannot catch on
+clothing while driving or when the driver exits the Competition Vehicle.
+2.18.2 Failure of any non-mechanical component of the steering system must not prevent
+effective steering of the Competition Vehicle.
+2.18.3 Steering shafts must be designed to reduce the risk of injury to the driver in a crash.
+A collapsible boss is an acceptable method to reduce steering wheel impacts.
+2.18.4 Spherical joints used in steering and suspension rod ends must be designed so that the
+two joined parts cannot detach completely if the spherical joint fails.
+2.18.5 Rear-wheel steering is not permitted. Specifically, no wheel that is rearward of the centre
+of mass of the Competition Vehicle may be steered, either by a mechanism that the
+driver operates or via a servo motor. This does not preclude suspension designs that are
+deliberately designed to have built-in bump steer or roll steer.
+2.18.6 The Competition Vehicle must be able to turn in each direction within a circle with a
+radius of 7.5 metres, measured to the extreme outer edge of the tyre track at ground
+level.
+37
+2.19 Stability
+2.19.1 Competition Vehicles must be able to negotiate a Figure-8 course in less than 9 seconds
+per side and less than 18 seconds overall, in all driving configurations.
+2.19.2 Competition Vehicles must be able to negotiate a slalom course in less than 11.5
+seconds, in all driving configurations.
+2.19.3 The Competition Vehicle must be stable at all achievable speeds and in crosswinds likely
+to be encountered, in all driving configurations. Teams must provide analysis or test
+results that show that the Competition Vehicle will be stable at high speeds and in
+crosswinds. This analysis must be approved by the Team’s certifying engineer.
+38
+In 2019, at least six Competition Vehicles left the road when hit by strong wind gusts. Wind gusts exceeding
+100 km/h are possible. Some of the factors affecting Competition Vehicle stability are presented in the
+informal discussion paper by Prof John Storey, 'Stability Considerations’ V 2.0, available on the World Solar
+Challenge website.
+2.19.4 The fully laden Competition Vehicle should not tip when tilted by 45° about each pair of
+adjacent tyre contact patches, in all driving configurations.
+The Team’s certifying engineer must approve the stability and the rollover propensity of the Competition
+Vehicle.
+A tilt test is one way of testing the static stability factor (SSF) of a Competition Vehicle, which is one indication
+of susceptibility to rollover. Notice that the Regulation says ‘should’ and not ‘must’. It is permissible to have
+a Competition Vehicle that does not pass a static tilt test, provided that the Competition Vehicle has some
+other mechanism for handling the equivalent forces without tipping. If the Competition Vehicle cannot pass
+a tilt test in all suspension configurations it becomes particularly important that the certifying engineer be
+satisfied with the roll-over stability under all conditions. Their certification documentation should provide a
+summary of analysis and testing you have done.
+2.20 Brakes
+Braking requirements are based on UNECE Regulation 13-H.
+2.20.1 The braking system must be approved by the Team’s certifying engineer.
+2.20.2 The Competition Vehicle must be equipped with a service braking system that enables
+the driver to control the Competition Vehicle and bring it to a halt without removing either
+hand from the steering control.
+2.20.3 The Competition Vehicle must be equipped with a secondary braking system, operated
+by the same control as the service braking system, that the driver can use to control the
+Competition Vehicle to a halt if the service braking system suffers any single failure.
+The service braking system in a conventional vehicle is controlled by a brake pedal that operates two
+independent hydraulic brake circuits. One possible configuration has the front wheels on one circuit and the
+rear wheels on the other. An alternative configuration has a circuit for each diagonal pair of wheels. These
+arrangements meet the requirements for service and secondary braking systems—the service system
+operates both hydraulic circuits, and the secondary system operates whichever circuit has not failed.
+2.20.4 Service and secondary braking systems may share components deemed ‘not liable to
+failure’ if they are amply dimensioned and readily accessible for maintenance.
+Components ‘not liable to failure’ are:
+• a brake pedal and its bearing
+• hydraulic cylinders and their pistons
+• hydraulic control valves
+• brake cylinders and their pistons
+• brake lever and cam assemblies.
+2.20.5 Hydraulic brake hoses and lines are regarded as liable to failure.
+2.20.6 The service braking system must apply braking effort to all road wheels.
+39
+2.20.7 Braking must not cause the Competition Vehicle to yaw. This requirement applies to both
+the service braking system and the secondary braking system.
+2.20.8 For Competition Vehicles without anti-lock brakes, the front wheels must lock up before
+the rear wheels.
+2.20.9 The service braking system must be able to stop the fully laden Competition Vehicle
+within distance
+0.1 v + 0.0060 v2
+metres from any speed v, in km/h, that the vehicle can achieve, with minimum
+regenerative braking.
+If regenerative braking is disabled when the energy storage system is full then the service braking test must
+be done with no regenerative braking.
+2.20.10 If the service braking system has a failure, the secondary braking system must be able
+stop the fully laden Competition Vehicle, with no regenerative braking, within distance
+0.1 v + 0.0158 v2
+metres from any speed v, in km/h, that the vehicle can achieve.
+Braking the single rear wheel of trike, for example, might not provide sufficient braking force.
+2.20.11 Competition Vehicles must be equipped with a parking brake that can be operated by
+the driver from the normal driving position. The parking brake must hold the fully laden
+Competition Vehicle on a 20% incline or decline.
+2.21 Tyres
+2.21.1 Tyres must be suitable for highway use and used in accordance with their manufacturer’s
+recommendations always.
+2.21.2 Competition Vehicles must be fitted with tyres that are:
+• compliant with UNECE Regulation 30, UNECE Regulation 75 or US FMVSS 571.109,
+as indicated by an E or DOT approval marking on the tyre; or
+• otherwise approved by the Event Organiser.
+Experimental or prototype tyres must be approved by the Australian road traffic authorities. The Event
+Organiser will administer this process, which requires the tyre manufacturer to submit a sample tyre and
+written technical specifications to the Event Organiser’s office not later than 25 April 2025. A positive
+outcome to the approval process, which may take up to three months, is not guaranteed.
+2.21.3 The speed rating of the tyres must be more than the maximum speed of the Competition
+Vehicle. The load rating of each tyre must be more than the maximum static load
+imposed on it by the fully laden Competition Vehicle.
+2.21.4 Tyres must be approved by the Team’s certifying engineer.
+2.21.5 Tyres must be free of any apparent defect.
+40
+2.22 Driving and reversing
+2.22.1 The fully laden Competition Vehicle must be able to start from rest on a 7% gradient.
+2.22.2 The Competition Vehicle must be able to be driven backwards under its own power with
+the driver seated in the normal position.
+2.23 Lighting
+2.23.1 Competition Vehicles must be fitted with:
+• two rear stop lamps
+• one central stop lamp
+• left and right front direction indicator lamps
+• left and right-side direction indicator lamps
+• left and right rear direction indicator lamps
+• two daytime running lamps.
+Headlamps and tail lamps are not required, though would increase the practicality of Cruiser vehicles.
+2.23.2 Stop lamps must emit red light. Direction indicator lamps must emit amber light. Daytime
+running lamps must emit white light.
+If you are designing your own lamps, then you must show that your lamp colours conform to the chromaticity
+requirements described in UNECE Regulation 48.
+2.23.3 Lamps must be compliant with UNECE Regulation 148 or the SAE/DOT equivalents.
+Teams must demonstrate compliance by either:
+• the presence of compliance markings on the lamps, or
+• detailed documentation that demonstrates compliance with the photometric
+requirements of the UNECE or SAE/DOT regulations, confirmed by the Team’s
+certifying engineer.
+Lamps approved for motorcycles and side marker lamps might not meet these requirements.
+Photometric requirements for lamps are listed in Appendix 3 of UNECE Regulation 148. You may
+demonstrate compliance by testing or by calculations. If you are using calculations, be aware that most LEDs
+do not emit the same intensity at every angle, so the simple formula for converting luminous flux (lumens)
+to luminous intensity (candelas) does not apply.
+2.23.4 Competition Vehicles must have the correct type of lamp in each position. Lamps must
+be mounted with the correct orientation so that the photometric requirements of UNECE
+Regulation 148 or the SAE/DOT equivalents are met.
+Lamp UNECE category SAE/DOT type
+Front indicators 1, 1a, 1b I3, I4, I5
+Rear indicators 2a, 2b I6
+41
+Side indicators 5, 6 E2
+Stop lamps S1, S2 S
+Central stop lamp S3 U3
+Daytime running lamp RL Y2
+Lamp position and visibility requirements are based on UNECE Regulation 48. ‘Apparent surface’ is defined
+in the glossary and in UNECE Regulation 48.
+2.23.5 The rear stop lamps must meet the following position and visibility requirements:
+• for each of the left and right stop lamps, the lateral distance between the outer edge
+of the apparent lamp surface and the corresponding outer edge of the Competition
+Vehicle must be not more than 400 mm
+• the minimum lateral distance between the apparent surfaces of the two stop lamps
+must be at least 600 mm, or at least 400 mm if the Competition Vehicle is less than
+1300 mm wide
+• the lowest point on the apparent surface of each stop lamp must be at least 350 mm
+above the ground
+• the entire apparent surface of each lamp must be visible from every point in the region
+between the planes 15° up, 5° down, and 45° to the left and right.
+2.23.6 A central stop lamp is required. Viewed from behind the Competition Vehicle, the lateral
+position of the lamp must coincide with the visual centre of the Competition Vehicle (see
+the examples in the following diagram). The lowest point on the apparent surface must
+be higher than a point 150 mm below the rear windscreen if the Competition Vehicle has
+a rear windscreen, and the bottom of the apparent surface of the lamp must be higher
+than the top of the apparent surface of the rear stop lamps. The entire apparent surface
+must be visible from every point in the region between the planes 10° up, 5° down and
+10° to the left and right.
+2.23.7 The following position requirements apply to the left and right front indicator lamps and
+to the left and right rear indicator lamps:
+• for each of the left and right indicator lamps, the lateral distance between the outer
+edge of the apparent lamp surface and the corresponding outer edge of the vehicle
+must be not more than 400 mm
+• the minimum lateral distance between the inner edges of the apparent surfaces of the
+left and right indicator lamps must be at least 600 mm, or at least 400 mm if the
+Competition Vehicle is less than 1300 mm wide
+42
+• the lowest point on the apparent surface of each indicator lamp must be at least
+350 mm above the ground.
+2.23.8 Side direction indicator lamps must be less than 1800 mm behind the front most part of
+the Competition Vehicle, and the outer edge of each apparent surface must be within
+400 mm of the extreme outer edge of the Competition Vehicle on each side.
+2.23.9 The entire apparent surface of each front and rear direction indicator lamp must be visible
+from every point in the region between the planes 15° up, 5° down, 45° inboard and 80°
+outboard (see the diagram below, which shows the horizontal angles for the right
+indicators).
+2.23.10 The entire apparent surface of each side indicator must be visible from every point in the
+region between the planes 15° up, 5° down, 5° outboard and 65° outboard (see the
+diagram below).
+2.23.11 Direction indicators must flash at 90±30 flashes per minute.
+2.23.12 It must be possible to flash the left and right direction indicator lamps simultaneously, as
+a hazard warning signal.
+2.23.13 Daytime running lamps must be mounted at the front of the Competition Vehicle so that:
+• the minimum lateral distance between the apparent surfaces of the lamps is at least
+600 mm, or at least 400 mm if the Competition Vehicle is less than 1300 mm wide
+• the lowest point on each apparent surface is at least 250 mm above the ground
+• the entire apparent surface is visible from every point in the region between the planes
+10° up, 10° down, 20° outwards and 20° inwards.
+2.23.14 Headlamps (if fitted) must be at the front of the Competition Vehicle so that
+• the lateral distance between outer edge of the apparent surface and the
+corresponding outer edge of the Competition Vehicle is not more than 400 mm
+• the minimum distance between the apparent surfaces is at least 600 mm, or at least
+400 mm apart if the Competition Vehicle is less than 1300 mm wide
+• the lowest point on each apparent surface is at least 500 mm above the ground
+43
+• each entire apparent surface is visible from every point in the region between the
+planes 15° up, 10° down, 45° outwards and 10° inwards.
+2.23.15 The stop lamps must operate whenever driving is possible, and the brakes are applied.
+2.23.16 The daytime running lamps must operate whenever driving is possible.
+2.24 Audible warning device
+2.24.1 An audible warning device complying with the intent of UNECE Regulation 28 must be
+fitted to the Competition Vehicle.
+2.24.2 Sound pressure level must be more than LA = 105 dB measured 2 m from the horn.
+The horn should be mounted so that Competition Vehicle occupants are not subjected to excessive sound
+pressure levels.
+A standard car horn is unlikely to achieve 105 dB if it is sealed inside the Competition Vehicle and not open
+to the air outside the Competition Vehicle.
+2.24.3 The device must emit a continuous and uniform sound. The audible warning device must
+be capable of operating for 50,000 cycles of on for one second and off for four seconds.
+2.25 Instrumentation
+2.25.1 The following information must always be visible to the driver (i.e., not behind menus)
+while the Competition Vehicle is in motion:
+• the speed of the Competition Vehicle
+• whether the direction indicators are operating
+• whether the hazard lights are operating
+• energy storage system warnings
+• electronic rear vision images (if fitted).
+2.25.2 This instrumentation must be powered from the energy storage system, and not from
+separate batteries.
+2.26 Automatic functions
+2.26.1 Any cruise control function must automatically deactivate when the brake is operated, or
+the Competition Vehicle is turned off.
+Cruise control must not resume automatically following a brake operation.
+2.26.2 Any automatic driving function must immediately deactivate on manual input or when the
+Competition Vehicle is turned off.
+Automatic driving must not resume automatically.
+44
+2.27 Electrical safety
+Electrical safety requirements are based on Section 5 of UNECE Regulation 100. The term ‘high voltage’
+means more than 60 V dc or more than 30 V rms ac.
+2.27.1 Protection against direct contact with high-voltage parts, including conductors, must be
+achieved using double insulation, enclosures, or barriers. It must not be possible to
+remove protection without the use of tools.
+2.27.2 Protection against direct contact with high-voltage parts inside the driver, passenger and
+luggage compartments must be designed to exclude objects larger than 1 mm diameter
+(Ingress Protection rating IPXXD).
+2.27.3 Protection against direct contact with high-voltage parts inside areas other than the
+driver, passenger and luggage compartments must be designed to exclude fingers
+(Ingress Protection rating IPXXB).
+2.27.4 Double insulation must meet the AS 3001/IEEE 100 definition: comprising both basic
+insulation and independent supplementary insulation that provides protection equivalent
+to that of the basic insulation. A single layer of reinforced insulation is also acceptable if
+it provides protection equivalent to double insulation.
+Electrical tape and flimsy, easily displaced covers are unlikely to meet the requirements of supplementary
+insulation. The front surface of a photovoltaic cell is deemed to be double insulated if properly encapsulated.
+The rear surface is deemed to be ‘live’ unless the team can demonstrate otherwise.
+2.27.5 High-voltage energy storage packs must be marked with the high-voltage symbol shown
+in the following diagram.
+2.27.6 The high-voltage symbol must also be visible on any enclosure or barrier that can be
+accessed without using tools, if removing the enclosure or barrier exposes high-voltage
+parts.
+Example: A motor controller contains high voltage parts, so these parts must be protected by an enclosure
+or barrier that requires tools to remove (Regulation 2.27.1). If it is possible to touch the motor controller
+enclosure without using tools (e.g., by opening the boot or tilting the solar collector) then the motor controller
+enclosure must have a high-voltage symbol on it.
+2.27.7 The resistance between any exposed conductive part and each terminal of the energy
+storage system must exceed 100 V ohms, where V is the nominal voltage of the energy
+storage system.
+This is equivalent to a maximum leakage current of 10 mA.
+2.27.8 The resistance between any exposed conductive part and each terminal of every solar
+cell must exceed 100 V ohms, where V is the maximum circuit voltage of the solar
+collector.
+45
+2.27.9 A system must be implemented to monitor the isolation of the Competition Vehicle’s
+chassis and body as per Regulations 2.27.7 and 2.27.8. This system may take the form
+of a permanently connected electronic device or a properly documented procedure of
+regular manual checks.
+2.27.10 A fuse or circuit breaker, suitably rated to protect the wiring, must be mounted in or on
+each energy storage pack. Additionally, the dc interrupting current (i.e., dc breaking
+current) capacity of the device must be able to interrupt the maximum possible shortcircuit current of the battery packs.
+A typical Competition Vehicle might use a 50 A fuse with a 15000 A dc interrupt rating. Fuses and circuit
+breakers intended for ac use might not meet this requirement. Teams must provide a manufacturer’s data
+sheet clearly showing that the dc specifications of the device are adequate.
+2.28 Safe state
+The Regulations in this section are for a Competition Vehicle with a photovoltaic solar collector and
+electrochemical energy storage. Teams using alternative solar collector or energy storage technologies must
+ensure that their Competition Vehicle can be made safe in an emergency. The systems used to achieve this
+must meet equivalent levels of safety based on the organiser’s assessment of the proposal submitted by the
+entrant.
+2.28.1 The Competition Vehicle must have a ‘safe state’ which, in an emergency, minimises the
+risk of fire and electric shock to occupants, team members, emergency response
+personnel, and bystanders. When in the safe state:
+• Every conductor emerging from each energy storage pack must be galvanically
+isolated from every energy storage cell. This means that there must be a contactor in
+series with the negative pole of the battery and a second contactor in series with the
+positive pole, in each energy storage pack.
+• No voltage may be present across any pair of conductors emerging from any energy
+storage pack.
+• No voltage may be present across any pair of conductors emerging from any solar
+collector. This isolation must be performed with a contactor, which must be mounted
+on the same structural component as the solar collector it is associated with.
+• All contactors described above must immediately and automatically open when safe
+state is invoked.
+• No current may be present through any conductor loop that is external to the energy
+storage packs or the solar collectors.
+MOSFETS and other semiconductor devices are not considered to offer galvanic isolation.
+Safe state is for emergencies and for complete shutdown of the Competition Vehicle. In addition to safe
+state, a Competition Vehicle may have a ‘standby’ state that provides power to some subsystems outside of
+the energy storage packs.
+2.28.2 Any part of any conductor that is more than 200 mm from the nearest PV cell is
+considered to be outside of the solar collector.
+This Regulation applies regardless of the solar collector voltage. Emergency first responders are told that
+any wiring within 200 mm of a PV cell may be live when the Competition Vehicle is in safe state, and no
+wiring more than 200 mm from a PV cell will be live when the Competition Vehicle is in safe state.
+46
+2.28.3 All mechanisms for placing the Competition Vehicle into safe state and maintaining safe
+state must be fail-safe; if an electrical activation mechanism fails, the Competition
+Vehicle must automatically and immediately place itself into safe state and must remain
+in safe state until there is a deliberate intervention by the Team.
+2.28.4 The safe state circuit must be designed to be as simple and direct as possible. In
+particular, it must be designed in such a way that failure of a semiconductor device or
+devices, no matter how improbable, cannot:
+• prevent the Competition Vehicle from entering safe state when the activation device
+is operated, or
+• bring the Competition Vehicle out of safe state without deliberate driver intervention.
+2.28.5 The driver must be able to place the Competition Vehicle into safe state with a single
+simple action while seated in the normal driving position and without releasing the safetybelt. This activation device must be clearly labelled.
+2.28.6 For emergency use, an activation device that operates with a single simple action that
+immediately places the Competition Vehicle into safe state must be provided on the
+exterior of the Competition Vehicle. Multiple activations must not bring the Competition
+Vehicle out of safe state. The activation device must be placed within a yellow disc with
+a diameter of 180 mm. Also, in the yellow disk must be a blue equilateral triangle
+(minimum side length 150 mm) that contains a red flash, with the legend Emergency
+Electrical Isolation. In addition, there must be a clear instruction on how to operate the
+device (e.g., PULL or PRESS). The yellow isolation disc and the activation mechanism
+must be clearly visible to an emergency services first responder approaching the driver
+and must be within 100 mm of the lower edge of the windscreen, adjacent to the driver
+egress opening. No part of the yellow disc may be behind the driver.
+Both activation mechanisms must be demonstrated at Static Scrutineering. The scrutineers may invite
+random members of the public to validate the ease of operation of the external emergency activation device.
+47
+3 The Adventure
+3.1 Supervision
+3.1.1 The Clerk of the Course is responsible for supervising on-road activities.
+3.1.2 During on-road activities, communication with the Clerk of the Course must be made
+through Mission Control.
+3.2 Safety
+3.2.1 The Team Safety Officer is responsible for the general safety of the Team.
+3.2.2 The Team Battery Officer is responsible for the safe operation of the energy storage
+system and for supervising response to any energy storage system emergency.
+3.2.3 Energy storage system incident response kits must be readily available to the
+Competition Vehicle and any other vehicle carrying Competition Vehicle energy storage
+systems.
+3.2.4 A Team member with a recognised first-aid certificate, current for the duration of the
+Event, must travel in the front or rear escort vehicle.
+3.2.5 It is the responsibility of each Team to ensure that the vehicles under its control are
+maintained in a safe, roadworthy condition and are operated safely and within the law
+always.
+3.2.6 All Competition Vehicles and escort vehicles are operated and driven at the Team’s own
+risk.
+3.2.7 The Clerk of the Course may exclude any Team from the Event at any time if any Team
+member operates a Competition Vehicle or any other vehicle in an unsafe manner.
+3.2.8 Teams must look after the health and safety of their team members and Observer.
+Fatigue and dehydration are serious hazards in this Event. This is especially relevant to drivers, particularly
+those of Competition Vehicles.
+3.2.9 Drivers, Team members, officials and Observers are to be drug free and maintain a blood
+alcohol level less than 0.01% whilst engaged in any duties associated with the Event.
+3.3 Safety-belts
+3.3.1 The use of safety-belts is mandatory for all occupants of motor vehicles in Australia,
+including Competition Vehicles.
+48
+3.4 Helmets
+3.4.1 Each occupant of a Competition Vehicle must wear an approved motorcycle helmet
+securely fitted and fastened in accordance with the manufacturer's instructions.
+3.4.2 Motorcycle helmets must have a mark certifying compliance with either:
+• Australian/New Zealand Standard AS/NZS 1698:2006
+• United Nations Economic Commission for Europe Regulation No 22 (UNECE 22.05
+or 22.06).
+3.4.3 Helmets must not be modified, have unauthorised attachments, or be used in any way
+contrary to the manufacturer’s instructions.
+3.5 Safety equipment
+3.5.1 Suitable and appropriate safety equipment must be carried always. The minimum safety
+equipment that must be carried in the rear escort vehicle is:
+• a first-aid kit
+• safety glasses and gloves for handling batteries
+• at least two (2) hazard warning cones
+• two (2) yellow warning flags, minimum size 300 mm x 300 mm
+• suitable fire extinguishers
+• fire blankets
+• sand (or similar material) for extinguishing fires
+• a spade
+• suitable containers for damaged electrochemical cells
+• safety vests
+• two (2) whistles
+• a back-pack fire extinguisher, filled with at least 16 litres of water, for fighting grass
+fires.
+3.6 Support vehicles
+3.6.1 Each Team must supply a front and a rear escort vehicle, a means of transporting the
+Competition Vehicle, and sufficient additional vehicles to transport and support the Team
+and its equipment during the Event.
+3.6.2 The minimum requirement for transporting the Competition Vehicle is a suitable truck or
+trailer, which must accompany the Team throughout the journey.
+Many vehicle rental companies in Australia require the hirer and all drivers to be at least 23 years of age.
+One-way interstate rentals might not be possible through an airport rental desk and might require head office
+approval. Trailers should be booked early.
+49
+3.6.3 Each Competition Vehicle must, at all times when in motion on the route, be
+accompanied by a front escort vehicle in front of the Competition Vehicle and a rear
+escort vehicle behind the Competition Vehicle. The space between the front escort
+vehicle and the Competition Vehicle should not be occupied by any other team vehicles
+except when those vehicles are overtaking, or being overtaking by, the Competition
+Vehicle. The space between the Competition Vehicle and the rear escort vehicle should
+not be occupied by any other vehicles.
+3.6.4 A minimum of two (2) drivers must be available for every vehicle associated with the
+Team.
+3.6.5 The rear escort vehicle must not be a bus, truck, or large campervan, or be towing a
+trailer.
+If traffic approaching from behind sees a large vehicle with a flashing light, the immediate perception is that
+that vehicle itself is the hazard, not the Competition Vehicle it is escorting. This may lead to a member of the
+public overtaking a large rear escort vehicle only to encounter an unexpected and previously unseen
+Competition Vehicle. Large rear escort vehicles make it difficult for vehicles approaching from the rear to
+see the Competition Vehicle.
+3.7 Escort vehicle signage
+3.7.1 All Team vehicles must carry a sign, visible from 30 m to the rear, stating the name and
+team number of the Team to which they belong.
+3.7.2 All Team vehicles equipped with Citizen’s Band (CB) radio must carry a sign, visible from
+30 m to the rear, advising the CB channel number in use.
+3.7.3 A warning sign larger than 900 mm x 300 mm with black lettering on a yellow background,
+clearly visible from 30 m, must be displayed on the rear of the rear escort vehicle, stating
+CAUTION: COMPETITION VEHICLE AHEAD
+3.7.4 No vehicle other than the rear escort vehicle may carry such a sign.
+3.7.5 Front and rear escort vehicles must be fitted with amber flashing lights visible from all
+directions at a distance of at least 200 m in daylight. Flashing amber lights must not be
+obscured by signs or other equipment on the roof of an escort vehicle.
+Beacons designed as warning devices for industrial equipment are unlikely to meet the visibility requirement.
+3.8 Communication
+3.8.1 Every Competition Vehicle must have means of two-way voice radio communication with
+its rear escort vehicle. Communication must be possible whenever the driver is in the
+Competition Vehicle, including when the main energy storage contactors are open and
+when the Competition Vehicle is in safe state.
+3.8.2 Each Team will be issued with a satellite telephone and external antenna. Further detail
+will be provided in the Team Manager’s Guide.
+50
+3.8.3 Each Team will be issued with two 80-channel UHF CB radios, with antennas, to be fitted
+into the front and rear escort vehicles. External antennas must be used to ensure that
+the radio has sufficient range to communicate effectively with other road users. Teams
+must monitor the channel they have been allocated at all times while on the road, and
+respond promptly and courteously, in English, to reasonable communications with other
+road users, Teams and officials.
+3.8.4 The satellite telephone and the two 80-channel UHF CB radios, with antennas, are hire
+items only and must be returned to the event. Details will be provided via Team Notice.
+3.9 Heavy vehicles
+3.9.1 Any Team operating or contracting a vehicle over 4.5 tonnes GVM or a passenger
+vehicle with 12 or more seats must register the full details with the Event Organiser.
+3.9.2 Compliance with Australian National Heavy Vehicle regulations concerning driving
+hours, record keeping and fatigue management is mandatory.
+3.10 Preparation and testing
+3.10.1 The Event Organiser will provide facilities for team preparation and track testing of
+Competition Vehicles at the Event Headquarters in accordance with the dates listed in
+the Event Schedule.
+3.10.2 All participating Teams must base themselves, and their Competition Vehicles, at the
+Event Headquarters from Monday 11 August 2025.
+3.10.3 The Event Organiser will appoint a paddock manager to supervise the preparation and
+test facility. The directions of the paddock manager must be followed.
+3.10.4 Australian workplace standards will apply to all event-related activities in Australia.
+3.10.5 The Clerk of the Course may impose event penalties for breaches of speed limits or other
+rules at the Event Headquarters.
+3.10.6 No test driving is to be conducted in the paddock, car park or access roads.
+3.10.7 The track must not be accessed without clearance from the track controller.
+3.10.8 The Event Organiser will work with the relevant authorities to provide on-road testing
+facilities. Detailed arrangements will be published in the Team Manager’s Guide or via a
+Team Notice.
+Teams who make direct contact with Australian road authorities delay this process.
+3.10.9 Any Team driving a Competition Vehicle on a public road without a permit is liable to civil
+penalties and exclusion from the Event.
+3.10.10 The Event Organiser reserves the right to request a security deposit against damage,
+rubbish removal or cleaning beyond reasonable expectations.
+51
+3.11 Team registration and scrutineering
+3.11.1 All participants are required to attend with their Team to complete the registration
+process and present their Competition Vehicle for the scrutineering process. The
+scrutineering process is divided into static and dynamic operations.
+3.11.2 Team registration and Static Scrutineering will take place at such place as determined
+by the Event Organiser at the time and date described in the Event Schedule.
+3.11.3 Teams must attend registration and Static Scrutineering with:
+• the Team Manager, and an interpreter if required
+• all Competition Vehicle drivers, with their driving licences
+• any waiver documents required for participants under the age of 18
+• original signed copy of the indemnity form
+• all Competition Vehicle passengers
+• the Team Safety Officer
+• the Team Battery Officer
+• the Competition Vehicle, in road-ready condition
+• front and rear escort vehicles, including any trailer that may be attached to the front
+escort vehicle, in road-ready condition
+• the Competition Vehicle trailer or transport truck they intend to use in the Event
+• tools and personnel required to facilitate inspection of the Competition Vehicle
+• a list of all vehicles associated with the Team, including make, model, colour and
+registration number
+• compulsory documentation (see Regulation 1.29.1)
+• a spare Competition Vehicle tyre of each type
+• a sample energy storage cell (if cells inside the energy storage packs are not clearly
+visible)
+• the lockable box in which energy storage packs can be impounded where required.
+3.11.4 Competition Vehicles must be transported to scrutineering on the trailer or truck that will
+be used during the Event.
+3.11.5 The Team Manager must attend all registration and scrutineering stations. A Team
+Manager not proficient in English must provide an interpreter to accompany them always
+during this process.
+3.11.6 All team members must complete their online registration by signing in at registration.
+52
+3.12 Static scrutineering
+3.12.1 Static Scrutineering will check for compliance with the Regulations and will include a
+regulatory compliance and roadworthiness inspection by the Northern Territory Road
+Transport Authority.
+3.12.2 Qualification must be achieved in road-ready condition. Teams that do not present at
+the designated time in road-ready condition may fail to qualify.
+3.12.3 Up to seven (7) members of a team (including an interpreter and any Team media
+personnel) may accompany the Competition Vehicle on the scrutineering floor. Team
+members may be substituted between inspection stations.
+3.12.4 Some dismantling (such as removal of the solar collector or top shell) may be required
+to facilitate inspection of the following components:
+• mechanical systems (including seats, tyres, brakes, and steering)
+• electrical systems
+• energy storage system.
+3.12.5 Dismantling and reassembly of the Competition Vehicle when required to facilitate
+inspection of the Competition Vehicle must be conducted (in the sole opinion of the Chief
+Scrutineer) in a reasonable time.
+3.12.6 Checks and inspections with the Competition Vehicle in a road-ready configuration will
+include, but not be limited to:
+• signage
+• dimensions
+• solar collector type and size
+• egress—all Competition Vehicle drivers and passengers are required
+• vision—all Competition Vehicle drivers are required
+• lights, indicators and horn
+• electrical compliance.
+3.12.7 All energy storage devices must be declared at Static Scrutineering. Failure to declare
+any energy storage device may lead to disqualification.
+3.12.8 The mass of each Challenger or Cruiser vehicle driver and passenger, with helmet,
+driving clothes and shoes, will be determined at Static Scrutineering. If the mass of a
+driver or passenger is less than 80 kg, ballast provided by the Event Organiser will be
+added to make up the difference. No credit will be given if a driver or passenger weighs
+more than 80 kg.
+Deliberate consumption of excessive food and drink prior to weigh-in is not in keeping with the spirit of the
+Event and may be hazardous to the health of the individual.
+Competition Vehicle occupants must wear similar clothes (including shoes) while driving as when they weigh
+in.
+53
+3.12.9 Drivers and passengers may be re-weighed at any time during the Event. Changes in
+weight considered unreasonable by the Chief Medical Officer will be referred to the Clerk
+of the Course.
+3.12.10 Non-compliance penalties may be imposed at the absolute discretion of the Chief
+Scrutineer and may include failure to qualify. Penalties will be published.
+3.13 Cruiser design judging
+3.13.1 Cruiser judging, which will determine a design score for each Cruiser vehicle, will take
+place in Darwin at a time and location to be confirmed in due course via a Regulation
+Bulletin.
+3.13.2 Cruiser Teams must prepare a 3-minute video and a brochure that describes their
+vehicle, how it will be used, and how it addresses sustainability, mobility and energy
+resilience. Each Team will present their video and their vehicle to a panel of Cruiser
+Judges appointed by the Event Organiser. Teams must allow Cruiser Judges to get into
+their vehicle to test the space and comfort.
+3.13.3 The design score for each Cruiser vehicle will be determined by the Cruiser Judges.
+Each Cruiser Judge will allocate a single score, between 0 and 100%, to each Team.
+The final design score for a Team will be the arithmetic mean of the individual Cruiser
+Judge’s scores. Cruiser Judges will be asked to consider:
+• design innovation
+• ease of access and egress
+• occupant space and comfort
+• ease of operation (driving and charging)
+• versatility
+• style and desirability
+• suitability for the declared purpose
+• environmental impact
+• efficiency and convenience of the charging system.
+Cruiser Judges will not be told how much weight to place on each of these criteria.
+3.13.4 The design score for each Cruiser vehicle will provide a time advantage — see
+Regulation 3.21.6.
+3.14 Dynamic scrutineering
+3.14.1 Dynamic Scrutineering exercises will test the speed, stability, and braking capability of
+the Competition Vehicle, and will occur at the Event Headquarters or such other place
+as determined by the Event Organiser.
+3.14.2 Competition Vehicles must pass Static Scrutineering before presenting for any part of
+Dynamic Scrutineering.
+54
+3.14.3 Figure-8 testing must be completed during Static Scrutineering week, prior to Saturday
+23 August 2025.
+3.14.4 The remaining Dynamic Scrutineering tests will be conducted on Saturday 23 August
+2025. Attendance of Team Managers and drivers at a 07:00 roll call is mandatory.
+3.14.5 Competition Vehicles must complete Dynamic Scrutineering in road-ready condition and
+with occupants and ballast in place.
+3.14.6 Cruiser vehicles must complete Dynamic Scrutineering with two seats occupied.
+3.14.7 No Competition Vehicle will be given permission to start the Event until it has passed
+Dynamic Scrutineering. Any vehicle failing Dynamic Scrutineering will only be permitted
+to re-present at the absolute discretion of the Chief Scrutineer. Dynamic Scrutineering
+will close at 12:30 on Saturday 23 August 2025.
+3.15 Modifications or changes after scrutineering
+3.15.1 Once a Competition Vehicle and its drivers have passed Static Scrutineering, no
+changes to the design or configuration of the vehicle (that is, to any items described in
+the compulsory documentation) or changes to drivers will be permitted except under
+exceptional circumstances approved by the Chief Scrutineer.
+3.15.2 Once a Competition Vehicle has passed Dynamic Scrutineering, and until released from
+the start line, component exchange, modification or repair of the vehicle is not permitted
+without the approval of the Chief Scrutineer.
+3.16 Briefings
+3.16.1 A compulsory briefing for Team Managers and Team Safety Officers will be held in
+Darwin on Monday 11 August 2025 at a time and place to be advised. Team Managers
+not proficient in English must be accompanied by an interpreter.
+3.16.2 A compulsory safety, procedural and media briefing will be held on Saturday 23 August
+2025 at a time and place to be advised. All Team members must attend.
+3.17 Observers
+3.17.1 The Clerk of the Course will appoint an Observer to travel with each Team. Observers
+may be changed between Teams at any time during the Event.
+3.17.2 The Observer's responsibilities are:
+• to record the locations and times that Teams start and stop
+• to record the locations and times of all activities and incidents that may affect the
+outcome of the Event
+• to check that ballast is correct for each driver or passenger change
+55
+• to be satisfied that Challenger energy storage systems cannot be charged between
+19:00 and 06:30
+• to notify the Clerk of the Course as soon as possible if a Competition Vehicle leaves
+the road unexpectedly due to mechanical failure; the Team must not proceed until
+given permission by the Clerk of the Course
+• to notify the Clerk of the Course at the earliest opportunity if any breach of Regulation
+is suspected, energy storage cells or modules have been changed or an energy
+storage system seal broken, or if they have any concerns about the actions of the
+Team.
+3.17.3 Observers are not permitted to interpret regulations or to give advice or directions to
+Teams. Advice or directions from Observers do not supersede the Regulations or
+directions from the Clerk of the Course. The only exception is if an Observer asks a team
+to stop because they feel unsafe—the Team must stop.
+3.17.4 Each Team’s responsibilities to their Observer are:
+• to assist the Observer in their duties always
+• to treat the Observer with courtesy and respect
+• to provide reasonable food for the Observer at least three times a day, and such
+drinking water as the Observer may require
+• if requested by the Observer, to send for assistance from the Event Organiser or
+transmit information to Mission Control
+• to provide a proper seat in the rear escort vehicle
+• to provide space for the Observer's luggage in the rear escort vehicle
+• to provide overnight accommodation for their Observer
+• to not make any demands of the Observer to assist team operations.
+3.17.5 Each Team must allocate the front passenger seat of the rear escort vehicle to the
+Observer. This includes fair and reasonable space with, for example, the foot well not
+being filled with computer equipment such that the passenger space is restricted.
+3.18 Start line and Grid
+3.18.1 The official start of the Event will be held in State Square, Darwin, from 07:45 on Sunday
+24 August 2025, or such other place and time as the Event Organiser may direct.
+Detailed procedural instructions will be issued in Darwin by Team Notice.
+3.18.2 Starting position for Challenger teams will by lap time recorded during Dynamic
+Scrutineering. Starting position for Cruiser teams will be by Cruiser design score.
+3.18.3 All Competition Vehicles must be in their starting grid position by the appointed time for
+final inspections. Any vehicle not present will have their starting position amended.
+3.18.4 Teams must not work on their Competition Vehicles on the start grid.
+3.18.5 Two team members must stay with the Competition Vehicle on the start grid to assist
+officials with final inspections.
+56
+3.18.6 Front and rear escort vehicles must be in their designated places by 07:00.
+3.18.7 Escort vehicles must be in position with the Competition Vehicle before entering public
+roads. Competition Vehicles that have left the start line and whose escort vehicles are
+not able or not ready to merge will be directed to return to the start area.
+Team Managers should recognise that it is not a realistic expectation for escort vehicle crew members to
+witness the start and re-join their vehicles to make a timely departure.
+3.19 Energy collection and storage
+3.19.1 External devices intended to increase the irradiance on the solar collector or increase
+the efficiency of the solar collector must not be used at any time.
+Spraying of water from external sources is not allowed.
+Ground sheets must not be placed in any position where it is possible to draw a straight line from any part
+of the ground sheet to any part of the solar collector.
+3.19.2 From the official start of the on-road component of the Event until the Team finishes, is
+no longer competing or withdraws, the energy storage system must never be removed
+from the Observer’s control.
+3.19.3 Damaged energy storage cells may be bypassed, but must not be removed from the
+energy storage system unless it would be unsafe to leave them in. Cells removed must
+be replaced by ballast with mass greater than the mass of the removed cells.
+3.19.4 If a Competition Vehicle is unable to continue because too many energy storage cells
+have been damaged then the Team may replace cells and continue but will be
+considered no longer competing.
+3.19.5 Each day, Cruiser teams may recharge their Competition Vehicles using their recharging
+system before commencing driving for the day and after finishing driving for the day.
+Once a Cruiser team has started driving on any day, they may not recharge until they
+have finished driving for the day.
+3.20 Route
+3.20.1 The event course will be the major highways between Darwin, Northern Territory, and
+Adelaide, South Australia—approximately 3000 km.
+57
+3.20.2 One printed copy of the official route notes will be provided to each registered Team.
+Additional copies will be available for download from the Event website from June 2025.
+3.20.3 Mandatory control stops will be established along the route. The locations of the control
+stops will be published in the official route notes.
+3.20.4 Any detour signs erected by the civil authorities must be observed and the correct route
+re-joined at the first opportunity.
+3.20.5 The Event Organiser may change the course at any time.
+3.21 Timing
+3.21.1 The official start time on Day 1 will be deemed to be 08:00 for all teams.
+3.21.2 The official start time each day after Day 1 is 08:00.
+3.21.3 The official finish time each day is 17:00.
+3.21.4 A time penalty of one minute will be imposed for each minute taken past the official daily
+finish time, up to and including 10 minutes past the official finish time. Beyond 10
+minutes, each additional minute will attract a penalty of two minutes. Competition
+Vehicles must not be driven after sunset. Time penalties incurred in this manner will
+determine an adjustment of the official start time the following day.
+Example: If a team finishes at 17:07 on Day 2, the official start time for Day 3 will be adjusted to 08:07. If a
+team finishes at 17:13 on Day 2, the official start time for Day 3 will be adjusted by 1 × 10 + 2 × 3 minutes
+to 08:16.
+3.21.5 A Competition Vehicle starting before its official start time will be subject to a penalty of
+2 minutes for each offending minute.
+3.21.6 After completing the control stop at Katherine, each Cruiser team will be released from
+Katherine after a duration designed to give a time advantage to teams with high design
+scores. The holding duration for each Cruiser team, in minutes, will be calculated by the
+formula
+𝑑𝑑 = 300(𝑠𝑠∗ − 𝑠𝑠)/𝑠𝑠∗
+where 𝑠𝑠 is the team’s design score and s∗ is the maximum design score of any Cruiser
+team. Teams still at Katherine at the end of day 1 will be allowed to depart at 08:00 on
+day 2.
+3.22 Tracking
+3.22.1 Each Competition Vehicle must carry a data logging and tracking device provided by the
+Event Organiser. The specifications of the tracking device are described in Regulation
+2.9.
+3.22.2 Information concerning progress and operation of Competition Vehicles may be
+published during the Event.
+58
+3.22.3 Satellite tracking data will not be accepted as basis for inter-team protests.
+3.23 Competition Vehicle drivers and passengers
+3.23.1 Only registered Competition Vehicle drivers may drive the vehicle during Event hours.
+3.23.2 When driving, ballast must be carried in accordance with the provisions of Regulation
+2.8.
+3.23.3 Each Competition Vehicle driver and passenger must have at least two litres of water
+accessible to them in the vehicle whenever they start their stint.
+3.23.4 Compulsory Competition Vehicle driver changes will be required at specified locations
+on the route or between specified locations on the route. Driver change locations will be
+specified in a Regulation Bulletin. Vehicles must stop for 5 minutes at the specified driver
+change locations. These 5-minute stops must be separate from any overnight stop.
+These compulsory driver changes are in addition to driver changes that Teams organise to manage fatigue.
+3.23.5 Competition Vehicle drivers who will drive the vehicle for more than one hour in a day
+must not drive a support car within two hours of driving the vehicle.
+3.24 Driving conduct
+3.24.1 Each Team must ensure that all vehicles associated with their attendance at the Event
+are driven in a careful and courteous manner always.
+3.24.2 Overtaking must be done in a safe manner and take into account prevailing conditions.
+A Team seeking to overtake another Team should communicate with the other Team via radio, and both
+Teams should maintain communication throughout the manoeuvre.
+3.24.3 The Even Organiser reserves the right to determine if any individual is acting de facto as
+a part of a Team.
+3.24.4 The front and rear escort vehicles must have their amber flashing lights operating
+whenever they are escorting the Competition Vehicle. Support vehicles must not have
+amber flashing lights operating if they are not (directly) escorting the Competition
+Vehicle.
+3.24.5 Except when pushing a disabled Competition Vehicle to a place of safety, Competition
+Vehicles must not be pushed along the road or into or out of a control stop. Push starting
+the Competition Vehicle is not allowed.
+3.24.6 Whilst travelling on the open road, the front escort vehicle must be within 500 m of the
+Competition Vehicle. The Competition Vehicle must be allowed a safe stopping distance
+appropriate to the speed and conditions prevailing.
+3.24.7 Whilst travelling on the open road, the rear escort vehicle must be within 5 seconds of
+the Competition Vehicle and must always maintain a safe stopping distance appropriate
+to the speed and conditions prevailing.
+59
+3.24.8 Competition Vehicles must not be driven on any public road between sunset and sunrise.
+3.24.9 Teams must comply with all requirements imposed by road traffic authorities, police, or
+Event officials.
+3.24.10 Competition Vehicles, escort vehicles and other team vehicles may be subject to
+scrutineering at any time during the Event to ensure compliance with the Regulations.
+3.25 Stopping
+3.25.1 No Team vehicle may stop on the road except in an emergency or when required by
+traffic conditions.
+3.25.2 Whenever stopped, all vehicles and all Team activity should be at least 2 m from the
+edge of the road. Teams who have vehicles or activity less than 2 m from the edge of
+the road when there is room to pull off further will be given demerit points and time
+penalties.
+3.25.3 When stopping for an extended duration, vehicles should be parked, and all Team
+activity should occur, at least 10 m from the edge of the road.
+3.25.4 Where it is necessary for any activity to take place less than 2 m from the road, two Team
+members wearing reflective vests must be positioned in a place of safety to warn
+approaching traffic using yellow flags, and to warn the Team of approaching traffic using
+a whistle.
+Do not use yellow flags if the Team is safely more than 2 m from the road—in this case the person waving
+the flag becomes the hazard.
+3.25.5 If a Competition Vehicle leaves the road unexpectedly because of a mechanical failure,
+the Team must get approval from the Clerk of the Course before resuming driving.
+3.25.6 If a Competition Vehicle has suffered damage to any critical component, then the team
+may repair their Competition Vehicle but must not resume driving until:
+• the Team’s certifying engineer has recertified the repaired Competition Vehicle
+• the Team has submitted the new certification to the Clerk of the Course
+• the Clerk of the Course has approved the resumption of driving.
+A document defining critical components and describing the recertification process will
+be available from the team portal.
+3.25.7 If a Competition Vehicle rolls onto its side or roof then the Team must withdraw
+immediately.
+3.25.8 Teams wanting to repair their Competition Vehicle or escort vehicles may, after obtaining
+approval from the Clerk of the Course, mark the road at the location where they stopped
+and transport their Competition Vehicle to a suitable place for making repairs, then return
+to the location where they stopped and continue driving.
+60
+3.26 Obstructing other road users
+3.26.1 Vehicles associated with a Team must not obstruct other road users, including other
+Teams. Infringement of this Regulation will incur a penalty for each incident.
+3.26.2 To avoid obstructing other road users, each driver of a Team vehicle other than the
+Competition Vehicle and front and rear escort vehicles must leave at least 200 metres of
+space in front of their vehicle so that other road users can overtake and occupy the space
+in front of them. If it is safe to do so and will help clear traffic building up behind a vehicle,
+drivers of Team support vehicles should pull off the road to allow other road users to
+pass.
+3.27 Control stops
+3.27.1 Competition Vehicles must stop for 30 minutes at designated control stops along the
+route. The locations of the control stops will be specified in the official route notes
+provided by the Event Organiser.
+3.27.2 All vehicles must obey control stop speed limits.
+3.27.3 Teams must obey all directions given by the Control Stop Manager.
+3.27.4 Teams must park in the spaces designated by Control Stop officials. Teams must not
+modify the parking space in any way. Ground sheets must not be used. Team members
+other than arriving occupants must not touch the arriving Competition Vehicle.
+3.27.5 Occupants must get out of the Competition Vehicle without assistance from other Team
+members. Occupants must remove all ballast from the vehicle.
+3.27.6 The arriving driver, alone, may reconfigure the vehicle for charging before control stop
+timing commences.
+3.27.7 Control stop timing commences when the arriving driver activates the control stop timing
+system.
+3.27.8 Timing will be paused at 17:00 and resume at 08:00 the next day.
+3.27.9 Team members must not touch the Competition Vehicle for 25 minutes. The Competition
+Vehicle may reconfigure itself.
+3.27.10 After 25 minutes, the departing driver, alone, may reconfigure the Competition Vehicle
+for driving. Ballast of all occupants will be checked outside of the Competition Vehicle.
+The driver and any passengers may get into the Competition Vehicle and prepare for
+departure. Other Team members must not touch the vehicle.
+3.27.11 The Competition Vehicle must not depart until 30 minutes have elapsed. The
+Competition Vehicle must not depart until ballast and drinking water are in place, safetybelts are fastened, helmets are secured, and the Competition Vehicle is ready for the
+road.
+61
+The Clerk of the Course may ask the Control Stop Manager to reset the remaining time to 30 minutes if
+Team members interfere with the Competition Vehicle during the 30-minute control stop period.
+3.28 Overnight stops
+3.28.1 An overnight stop commences when the Team stops driving for the day and finishes
+when the Team starts driving the next day.
+3.28.2 The selection (and any cost) of overnight stop locations is the responsibility of each
+Team.
+3.28.3 At overnight stops, the Competition Vehicle and all other vehicles must be parked in such
+a manner that they, and all Team activities, are conducted at least 10 metres from the
+edge of any road.
+3.28.4 If a Team's overnight camp is not immediately adjacent to the road, a marker cone must
+be placed on the roadside adjacent to the point the Team exited the official route.
+3.28.5 The Observer, with the Team Manager, must place a mark on the road to indicate the
+position at which the Competition Vehicle stopped. The mark will be the starting line for
+the following morning.
+3.28.6 The Competition Vehicle must be driven, pushed by hand, or carried by hand between
+the stopping location and its solar charging location.
+3.28.7 There are no restrictions on the number of Team members used to reconfigure the solar
+collector for charging at overnight stops.
+3.28.8 The energy storage packs of Challenger vehicles must be disconnected and sealed
+before 19:15 each day.
+3.28.9 Energy storage packs of Challenger vehicles must not be unsealed before 06:15 each
+day.
+3.29 ‘No longer competing’
+3.29.1 A Team will be regarded as ‘no longer competing’ if any of the following occur:
+• the Team is unable to maintain a minimum speed of 60 km/h on the open road
+• the Team is unable to drive to the next control stop before it closes
+• the Team arrives at a control stop after it has closed
+• a Challenger Team recharges their energy storage system from an external source
+• a Cruiser Team recharges their energy storage system from an external source during
+the time interval between when they started driving on a day and when they finished
+driving on that day.
+3.29.2 Teams no longer competing must contact the Clerk of the Course for instructions. Teams
+may be allowed to continue driving their Competition Vehicle if they can maintain a speed
+of 60 km/h on the open road and reach the next control stop before it closes; otherwise,
+62
+the Team must transport their Competition Vehicle forwards to the next open control
+stop.
+3.29.3 The Competition Vehicle must be in safe state whenever it is being transported.
+3.29.4 Teams no longer competing must still accommodate an Observer.
+3.30 Withdrawal
+3.30.1 A Team may withdraw by forwarding a completed withdrawal form (available from the
+Observer) to the Clerk of the Course. The Competition Vehicle must not be driven on
+public roads after withdrawing but may be transported to Adelaide to take part in the
+displays and the awards ceremony.
+3.31 Penalties
+3.31.1 The Clerk of the Course may impose demerit points on any Team that breaches a
+regulation. Demerit points will be published.
+3.31.2 Each demerit point given to a Team will incur a time penalty of 30 minutes, to be served
+at a control stop nominated by the Clerk of the Course. All time penalties must be served
+before arriving at the finish line.
+3.31.3 A Team accruing 3 or more demerit points will be excluded from the remainder of the
+Event.
+3.31.4 The Clerk of the Course may impose operational restrictions (such as speed restrictions)
+on any Team.
+3.31.5 At any time during the Event, the Clerk of the Course may issue a penalty of one demerit
+point in response to any of the following behaviours noted by an Observer or reported
+by an official:
+• obstructing other road users
+• stopping on the road (other than when required by traffic conditions)
+• poor safety protocols (e.g., safety flags, whistles etc.)
+• overnight activities too close to the road
+• driving without both front and rear escort vehicles
+• escort vehicles driving without visible flashing lights
+• driving without effective rear vision.
+3.31.6 The Clerk of the Course will determine penalties for offences including:
+• slipstreaming or pressure wave pushing
+• failure to follow the route instructions
+• failure to observe a request by police or Event officials
+• wilful damage or interference to property
+63
+• failure to stop at a designated control stop
+• exceeding any posted speed limit
+• driving at less than 50 km/h in areas with a speed limit of 100 km/h or greater, when
+not constrained by traffic
+• driving without adequate visibility, due to smoke, dust or rain.
+3.31.7 The Clerk of the Course may exclude any Team from the Event for wilful disregard of
+any Regulation or of the spirit of the Event. These offences include but are not limited to:
+• misrepresentation
+• wilful obstruction, or aggressive or unsafe driving
+• driving the Competition Vehicle without a rear escort vehicle
+• accumulation of 3 or more demerit points.
+3.32 Protests and appeals
+3.32.1 A Team Manager may appeal any decision of the Chief Scrutineer to the Jury by lodging
+a written Notice of Appeal with the Clerk of the Course within one hour of the notification
+of the decision. The Notice of Appeal must detail the grounds for the appeal. An appeal
+fee of AUD$500 will apply.
+3.32.2 A Team Manager may lodge a written protest with the Clerk of the Course. Protests must
+be lodged before 18:00 on the day of the incident giving rise thereto. Protests will not be
+accepted after 18:00 ACST on the final Saturday of the Event. The protest shall specify
+the details of the incident and a protest fee of AUD$200 will apply.
+3.32.3 A Team Manager may appeal any decision of the Clerk of the Course to the Jury by
+lodging a written Notice of Appeal with the Clerk of the Course within one hour of the
+notification of the decision. The Notice of Appeal must detail the grounds for the appeal.
+An appeal fee of AUD$500 will apply.
+3.32.4 Protest/appeal fees will be returned if a protest/appeal is upheld.
+3.32.5 The Jury may take advice from any party about the incident giving rise to a decision
+being appealed.
+3.32.6 A decision of the Jury is final and binding.
+3.32.7 A decision of the Jury must be conveyed to the Team Manager lodging the appeal within
+one hour of reaching the decision and confirmed in writing within 12 hours to all parties
+to the appeal including the Clerk of Course.
+64
+4 Achievement and Celebration
+4.1 Event results
+4.1.1 Results published throughout the duration of the Event are provisional. Results will not
+be final until after the determination of any outstanding protests and appeals.
+4.2 Completing the course
+4.2.1 To complete the course, the Competition Vehicle must be driven the entire designated
+route in accordance with the Regulations.
+4.2.2 A marshalling point will be established a few kilometres before the finish line. The finish
+time for the journey will be determined at the marshalling point.
+4.2.3 The Competition Vehicle must drive to the finish line, escorted by vehicles provided by
+the Event Organiser. Other Team vehicles will be directed to a long-term parking
+location.
+4.2.4 The goal for all competing Teams is to be the first to complete the route.
+To complete the route, Teams must drive their Competition Vehicle all the way from the official start line in
+Darwin to the official finish line in Adelaide and must still be competing when they arrive in Adelaide.
+4.2.5 An urban area reference point will be established at the start of the Adelaide urban area.
+The location will be published in the official route notes. If Team A can keep up with traffic
+and is overtaken by Team B after the urban area reference point, the arrival time of Team
+B at the marshalling point will be adjusted to be one minute behind the arrival time of
+Team A. If Team A is overtaken by Team B and Team A is unable to keep up with traffic
+at any point after the urban area reference point, the arrival time of Team B will not be
+adjusted.
+4.2.6 Any unserved time penalties must be served at the marshalling point.
+4.2.7 The Challenger Cup will be awarded to the Challenger Team that completes the route
+with the earliest finish time (arrival time at the Adelaide marshalling point plus any
+unserved penalty time).
+4.2.8 The Cruiser Cup will be awarded to the Cruiser Team that completes the route with the
+earliest finish time (arrival time at the Adelaide marshalling point plus any unserved
+penalty time).
+4.2.9 Teams in each class that complete the route will be ranked by finish time (arrival time at
+the Adelaide marshalling point plus any unserved penalty time).
+4.2.10 Teams that do not complete the route will be ranked behind Teams in their class that
+complete the route. They will be ranked by the number of control stops completed before
+no longer competing, and within these groups by arrival time at the last control stop
+completed before no longer competing plus unserved time penalties accrued at any time
+during the Event.
+65
+4.3 Explorer class
+4.3.1 Explorer class is non-competitive.
+4.3.2 The progress of Explorer vehicles will be controlled by the Clerk of the Course.
+Explorer vehicles will be allowed to drive to the finish line only after the first four (4) competing Competition
+Vehicles have done so.
+4.3.3 Teams in Explorer class will not be ranked by performance.
+4.4 Finish-line activities
+4.4.1 Competition Vehicles must be placed on display at the Official Finish Line until 15:00
+Sunday 31 August 2025.
+4.4.2 Teams must have a minimum of two (2) Team members always present with the
+Competition Vehicle whilst on display to engage with public.
+4.4.3 Other promotional, public engagement and Event activities will be held at the finish line
+and as per Regulations 1.12.2 and 1.27, any requests to attend or participate are
+mandatory for all registered Teams. A detailed program will be provided once details
+are finalised via a Team Notice.
+4.5 Awards
+4.5.1 An awards ceremony will be held in Adelaide on the evening of Sunday 31 August
+2025 (exact date, time, and location to be confirmed).
+4.5.2 Entry to the awards ceremony is by ticket only.
+Tickets for registered team members are included in the team entry fee and pro-rata team member
+registration fee outlined in Regulation 1.14. Additional tickets (subject to the capacity of the venue) for
+friends, family, sponsors, and public may be purchased. Further details will be provided in the Team
+Manager’s Guide or via a Team Notice.
+4.5.3 The winner of the Challenger class will receive the Challenger Cup; the winner of the
+Cruiser class will receive the Cruiser Cup.
+4.5.4 Additional awards may be presented.
+4.5.5 The Event Organiser reserves the right not to present an award in any given category.
+4.5.6 Each Team will receive a participation award.
+4.5.7 All winning Teams must make themselves available for an official media call if required.
+66
+4.6 Pack-down facilities
+4.6.1 Open-air facilities will be made available for repacking Competition Vehicles for
+shipment. All vehicles (competition or otherwise), containers and equipment must be
+removed by close of business Wednesday 3 September 2025. Any remaining items will
+be removed for storage at the Entrant’s expense.
+67
+Glossary
+ACST Australian Central Standard Time (UTC + 9.5 hours).
+apparent surface The apparent surface of a lamp includes all parts of the lamp
+surface that emit light and are not obscured by other parts of the
+light-emitting surface. See UNECE Regulation 48 for examples.
+AS/NZS Australian Standard / New Zealand Standard.
+battery Electrochemical cells wired in series or parallel and housed in a
+single container.
+CB Citizen’s Band radio.
+certifying engineer A professional engineer engaged by a team to report on compliance
+with regulations and roadworthiness requirements. The certifying
+engineer must be qualified to certify vehicles for operation on public
+roads.
+Clerk of the Course The person responsible for coordinating dynamic scrutineering and
+the on-road portion of the event.
+Competition Vehicle The vehicle designed, built, and registered by the Entrant, in line
+with these Regulations, specifically for competing in the
+Bridgestone World Solar Challenge.
+Cruiser Judge A person invited to make subjective assessment of Cruiser vehicle
+attributes.
+DOT United States Department of Transport.
+Dynamic Scrutineering The process of checking the Competition Vehicle dynamic attributes
+(steering, braking, stability etc) for compliance with the Regulations.
+Held on Saturday 23 August 2025.
+Early Entry A Teams whose Application for Entry was submitted before 17:00
+(ACST) on Friday 30 August 2024.
+energy storage pack A rigid self-contained box containing energy storage components,
+such as electrochemical cells, and components for monitoring,
+control and isolation.
+energy storage system The Competition Vehicle subsystem used to store energy,
+comprising one or two energy storge packs and the electrical
+connections between them.
+Entrant The legal entity that completes the World Solar Challenge
+Application for Entry and requests a place in the event for one or
+more teams. An entrant is typically a registered institution,
+organisation or commercial entity.
+68
+Entry Form The World Solar Challenge Application for Entry form, found on the
+event website, required to be completed by an entrant to request a
+place in the event.
+Event The 2025 Bridgestone World Solar Challenge.
+Event Organiser The South Australian Motor Sport Board, South Australian Motor
+Sport Board (ABN 43 976 679 496), a body corporate pursuant to
+the South Australian Motor Sport Act 1987 (SA) of Level 5 182
+Victoria Square/Tarntanyangga, Adelaide SA 5000
+Event Period Saturday 9 August 2025 to Wednesday 3 September inclusive.
+Event Schedule A detailed list of all event activities. See Regulation 1.12.
+EVSE Electric Vehicle Supply Equipment.
+FMVSS United States Federal Motor Vehicle Safety Standards.
+Freight Manual Documentation providing advice on freighting items into and out of
+Australia.
+GST Australian Goods and Services Tax.
+high voltage More than 60 V dc or more than 30 V rms ac.
+Intellectual Property All industrial and intellectual property rights including all: (a) know
+how, trade secrets, copyright, trademarks (whether registered or
+unregistered), designs, patents, and any right to have confidential
+information kept confidential.
+Judge of Fact A person recognised by the organiser as able to determine whether
+an event occurred (e.g., whether a team obstructed traffic).
+Juror A person appointed by the event to resolve disputes.
+lateral In a horizontal plane and perpendicular to the direction of travel.
+longitudinal In a horizontal plane and parallel to the direction of travel.
+Mission Control The Event Organiser’s operations centre.
+Observer A category of event volunteer, appointed by the Event as Judges of
+Fact that travel with the Teams. See Regulation 3.17.
+occupant A driver or passenger in the Competition Vehicle.
+participant A person who has registered to participate in the event as a member
+of a Team.
+PV Photovoltaic.
+Red-Shirt A senior event official (wearing a red shirt) responsible for
+overseeing the conduct of the Event.
+69
+Regulations 2025 Bridgestone World Solar Challenge Regulations.
+Regulation Bulletin A bulletin that clarifies or amends the Regulations.
+Route Notes Documentation providing directional information with regards to the
+event route from Darwin to Adelaide.
+road-ready Ready to drive on the road.
+Static Scrutineering The process of checking the Competition Vehicle and other team
+vehicles for compliance with the Regulations.
+Standard Entry A Team whose Application for Entry was submitted after 17:00
+(ACST) on Friday 30 August 2024 but before 17:00 (ACST) on
+Friday 4 October 2024.
+SAE Society of Automotive Engineers.
+SFI The SFI Foundation issues standards for motor sports equipment.
+solar collector The Competition Vehicle subsystem used to collect solar energy. It
+is typically an array of photovoltaic cells, with or without
+concentrators or reflectors, but other types of solar collector are
+possible.
+Team A group of people registered by the entrant to participate in the
+event. An entrant may have more than one team participating in the
+event.
+Team Manager The person in charge of, and responsible for, the actions of a team.
+Team Manager’s Guide Documentation providing additional information and advice relevant
+to participation in the Event.
+Team Notice A notice that provides event information to teams (but does not
+amend the regulations).
+track (overall) The lateral distance between the leftmost and rightmost tyre contact
+points.
+track (front or rear) The lateral distance between the two front (or two rear) tyre contact
+points
+tyre contact point The point at the centre of a tyre contact patch where a tyre touches
+the ground.
+UHF Ultra High Frequency. Commonly refers to Australian two-way radio
+operating on the Citizens Band.
+UNECE United Nations Economic Commission for Europe, responsible for
+regulations for motor vehicles.
+UTC Coordinated Universal Time.
+70
+VIN Vehicle Identification Number.
+wheelbase The longitudinal distance between the frontmost tyre contact point
+and the rearmost tyre contact point.

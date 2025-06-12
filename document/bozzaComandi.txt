@@ -1,0 +1,635 @@
+sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+sudo apt update
+sudo apt install gcc-9 g++-9
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 100
+
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100 \
+  --slave /usr/bin/g++ g++ /usr/bin/g++-9
+
+sudo update-alternatives --config gcc (cambia compilatore)
+
+pip uninstall transformers sentence-transformers huggingface_hub accelerate torch -y
+
+# Installa versioni specifiche compatibili
+pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cpu
+pip install huggingface_hub==0.19.4
+pip install transformers==4.36.2
+pip install accelerate==0.25.0
+pip install sentence-transformers==2.2.2
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+sudo apt update
+sudo apt install libxml2-dev libxslt1-dev zlib1g-dev
+sudo apt install python3-dev build-essential
+
+sudo apt install rustc cargo libssl-dev
+pip install --upgrade maturin
+
+PYO3_NO_PYTHON=1 pip install hf-xet (imposta a false l'auto-inizialize di PyO3)
+
+# 1. Downgrade NumPy per compatibilitï¿½
+pip install "numpy<2"
+
+# 2. Upgrade PyTorch (scegli la versione appropriata per il tuo sistema)
+pip install torch>=2.1.0 torchvision torchaudio
+
+# 3. Reinstalla transformers per assicurarti che sia compatibile
+pip install --upgrade transformers
+
+# 4. Reinstalla FlagEmbedding
+pip install --upgrade FlagEmbedding
+
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Installa le librerie di sistema necessarie
+sudo apt update
+sudo apt install -y liblzma-dev python3-lzma
+
+# Se non funziona, prova anche:
+sudo apt install -y xz-utils liblzma5 liblzma-dev
+
+# Installa le dipendenze per la compilazione
+sudo apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
+libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget \
+libbz2-dev liblzma-dev
+
+bash# Pulisci la compilazione precedente
+cd /tmp/Python-3.10.12  # o Python-3.10.0 se hai scaricato quella versione
+make clean
+
+# Riconfigura senza ottimizzazioni PGO
+./configure --with-lzma --prefix=/usr/local
+
+# Compila senza ottimizzazioni avanzate
+make -j4
+
+# Se il make va a buon fine, installa
+sudo make altinstall
+
+
+
+# Attiva il virtual environment
+source .venv/bin/activate
+
+# Rimuovi le librerie problematiche
+pip uninstall FlagEmbedding transformers datasets
+
+# Installa sentence-transformers che gestisce meglio le dipendenze
+pip install sentence-transformers
+
+# Se hai bisogno di transformers, installa una versione specifica
+pip install transformers==4.21.0
+
+
+# Rimuovi tutte le librerie problematiche
+pip uninstall sentence-transformers transformers torch torchvision torchaudio datasets -y
+
+# Installa versioni specifiche compatibili per Jetson Nano
+pip install torch==1.13.0 torchvision==0.14.0 --index-url https://download.pytorch.org/whl/cpu
+pip install transformers==4.21.3
+pip install sentence-transformers==2.2.2
+
+pip uninstall sentence-transformers huggingface_hub -y
+pip install sentence-transformers==2.2.2 huggingface_hub==0.16.4
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+import os
+import time
+import logging
+import numpy as np
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer
+
+# Configurazione logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('rag_debug.log', mode='w', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class RagSystem:
+    """
+    Classe per indicizzare, cercare e visualizzare embeddings di testo usando SentenceTransformers.
+
+    Parametri:
+        txt_file (str): Percorso al file di testo contenente le frasi, una per riga.
+        emb_file (str): Percorso dove salvare/caricare la matrice di embeddings (.npy).
+        model_name (str): Nome del modello da caricare (es. 'BAAI/bge-m3').
+        reindex (bool): Se rigenerare sempre gli embeddings.
+    """
+    def __init__(self,
+                 txt_file: str,
+                 emb_file: str = "embeddings.npy",
+                 model_name: str = 'BAAI/bge-m3',
+                 reindex: bool = False):
+        logger.debug(f"Inizializzazione RagSystem - txt_file: {txt_file}, emb_file: {emb_file}, model_name: {model_name}, reindex: {reindex}")
+        start_time = time.time()
+        
+        self.txt_file = txt_file
+        self.emb_file = emb_file
+        self.reindex = reindex
+
+        logger.debug(f"Inizio caricamento modello: {model_name}")
+        model_start = time.time()
+        self.model = SentenceTransformer(model_name)
+        model_end = time.time()
+        logger.info(f"Modello '{model_name}' caricato in {model_end - model_start:.2f} secondi")
+        
+        init_time = time.time() - start_time
+        logger.debug(f"Inizializzazione completata in {init_time:.2f} secondi")
+
+    def _read_data(self) -> list[str]:
+        logger.debug(f"Inizio lettura file: {self.txt_file}")
+        start_time = time.time()
+        
+        if not os.path.exists(self.txt_file):
+            logger.error(f"File '{self.txt_file}' non trovato!")
+            raise FileNotFoundError(f"File '{self.txt_file}' non trovato!")
+        
+        logger.debug(f"File esistente, dimensione: {os.path.getsize(self.txt_file)} bytes")
+        
+        with open(self.txt_file, 'r', encoding='utf-8') as f:
+            data = [line.strip() for line in f if line.strip()]
+        
+        read_time = time.time() - start_time
+        logger.info(f"Letto {len(data)} frasi da '{self.txt_file}' in {read_time:.2f} secondi")
+        logger.debug(f"Prime 3 frasi: {data[:3] if len(data) >= 3 else data}")
+        
+        return data
+
+    def index_database(self, data: list[str] | None = None) -> np.ndarray:
+        logger.debug("Inizio indicizzazione database")
+        start_time = time.time()
+        
+        if data is None:
+            logger.debug("Data è None, carico da file")
+            data = self._read_data()
+        
+        logger.info(f"Inizio encoding di {len(data)} frasi")
+        encode_start = time.time()
+        
+        # Suddivido in batch per monitorare il progresso
+        batch_size = 100
+        embeddings_list = []
+        
+        for i in range(0, len(data), batch_size):
+            batch_start = time.time()
+            batch = data[i:i+batch_size]
+            logger.debug(f"Processing batch {i//batch_size + 1}/{(len(data)-1)//batch_size + 1}: {len(batch)} frasi")
+            
+            batch_embeddings = self.model.encode(batch, convert_to_numpy=True)
+            embeddings_list.append(batch_embeddings)
+            
+            batch_time = time.time() - batch_start
+            logger.debug(f"Batch completato in {batch_time:.2f} secondi")
+        
+        embeddings = np.vstack(embeddings_list)
+        encode_time = time.time() - encode_start
+        logger.info(f"Encoding completato in {encode_time:.2f} secondi")
+        
+        logger.debug(f"Inizio salvataggio embeddings in '{self.emb_file}'")
+        save_start = time.time()
+        np.save(self.emb_file, embeddings)
+        save_time = time.time() - save_start
+        logger.debug(f"Embeddings salvati in {save_time:.2f} secondi")
+        
+        total_time = time.time() - start_time
+        logger.info(f"Indicizzazione completata in {total_time:.2f} secondi (shape={embeddings.shape})")
+        
+        return embeddings
+
+    def load_embedding_matrix(self) -> np.ndarray:
+        logger.debug(f"Inizio caricamento embeddings da '{self.emb_file}'")
+        start_time = time.time()
+        
+        if not os.path.exists(self.emb_file):
+            logger.error(f"File '{self.emb_file}' non trovato!")
+            raise FileNotFoundError(f"File '{self.emb_file}' non trovato! Esegui prima index_database().")
+        
+        logger.debug(f"File embeddings esistente, dimensione: {os.path.getsize(self.emb_file)} bytes")
+        
+        embeddings = np.load(self.emb_file)
+        load_time = time.time() - start_time
+        logger.info(f"Embeddings caricati in {load_time:.2f} secondi (shape={embeddings.shape})")
+        
+        return embeddings
+
+    def search(self, query: str, embedding_matrix: np.ndarray) -> list[tuple[int, float]]:
+        logger.debug(f"Inizio ricerca per query: '{query}'")
+        start_time = time.time()
+        
+        logger.debug("Encoding query")
+        query_encode_start = time.time()
+        query_emb = self.model.encode([query], convert_to_numpy=True)[0]
+        query_encode_time = time.time() - query_encode_start
+        logger.debug(f"Query encoded in {query_encode_time:.2f} secondi (shape: {query_emb.shape})")
+        
+        if query_emb.shape[0] != embedding_matrix.shape[1]:
+            logger.error(f"Dimensione embedding query ({query_emb.shape[0]}) incompatibile con matrix ({embedding_matrix.shape[1]})")
+            raise ValueError(f"Dimensione embedding query ({query_emb.shape[0]}) incompatibile con matrix ({embedding_matrix.shape[1]})")
+        
+        logger.debug("Calcolo similarità coseno")
+        similarity_start = time.time()
+        sims = cosine_similarity([query_emb], embedding_matrix)[0]
+        similarity_time = time.time() - similarity_start
+        logger.debug(f"Similarità calcolata in {similarity_time:.2f} secondi")
+        
+        logger.debug("Ordinamento risultati")
+        sort_start = time.time()
+        results = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)
+        sort_time = time.time() - sort_start
+        logger.debug(f"Risultati ordinati in {sort_time:.2f} secondi")
+        
+        total_time = time.time() - start_time
+        logger.info(f"Ricerca completata in {total_time:.2f} secondi")
+        logger.debug(f"Top 3 scores: {[(idx, score) for idx, score in results[:3]]}")
+        
+        return results
+
+    def visualize_space_query(self,
+                              data: list[str],
+                              query: str,
+                              embedding_matrix: np.ndarray,
+                              perplexity: int = 2,
+                              random_state: int = 42) -> None:
+        logger.debug("Inizio visualizzazione t-SNE")
+        start_time = time.time()
+        
+        logger.debug("Encoding query per visualizzazione")
+        query_emb = self.model.encode([query], convert_to_numpy=True)[0]
+        
+        if query_emb.shape[0] != embedding_matrix.shape[1]:
+            logger.error("Dimensione embedding mismatch per t-SNE visualizzazione")
+            raise ValueError("Dimensione embedding mismatch per t-SNE visualizzazione.")
+        
+        logger.debug("Unione embeddings per t-SNE")
+        joint = np.vstack([embedding_matrix, query_emb])
+        logger.debug(f"Matrice congiunta shape: {joint.shape}")
+        
+        logger.debug(f"Inizio t-SNE con perplexity={perplexity}")
+        tsne_start = time.time()
+        tsne = TSNE(n_components=2, perplexity=perplexity, random_state=random_state)
+        emb2d = tsne.fit_transform(joint)
+        tsne_time = time.time() - tsne_start
+        logger.info(f"t-SNE completato in {tsne_time:.2f} secondi")
+        
+        logger.debug("Creazione plot")
+        plot_start = time.time()
+        plt.figure(figsize=(8, 6))
+        plt.scatter(emb2d[:-1, 0], emb2d[:-1, 1], edgecolor='k', label='Frasi')
+        plt.scatter(emb2d[-1, 0], emb2d[-1, 1], edgecolor='k', label='Query', c='red')
+        for i, frase in enumerate(data):
+            plt.text(emb2d[i, 0] + 0.1, emb2d[i, 1] + 0.1, frase, fontsize=9)
+        plt.text(emb2d[-1, 0] + 0.1, emb2d[-1, 1] + 0.1, query, fontsize=9, color='red')
+        plt.title('Visualizzazione degli Embeddings con t-SNE')
+        plt.xlabel('Dimensione 1')
+        plt.ylabel('Dimensione 2')
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+        plot_time = time.time() - plot_start
+        logger.debug(f"Plot creato in {plot_time:.2f} secondi")
+        
+        total_time = time.time() - start_time
+        logger.info(f"Visualizzazione completata in {total_time:.2f} secondi")
+
+    def run(self, query: str, top_k: int = 5, visualize: bool = False) -> None:
+        logger.info(f"Inizio esecuzione RAG - Query: '{query}', top_k: {top_k}, visualize: {visualize}")
+        total_start = time.time()
+        
+        logger.debug("Caricamento dati")
+        data = self._read_data()
+        
+        emb = None
+        # Carica o rigenera embeddings
+        if self.reindex or not os.path.exists(self.emb_file):
+            logger.info("Rigenerazione embeddings richiesta o file non esistente")
+            emb = self.index_database(data)
+        else:
+            logger.info("Caricamento embeddings esistenti")
+            emb = self.load_embedding_matrix()
+            
+            # Verifica compatibilità dimensionale
+            logger.debug("Verifica compatibilità dimensionale")
+            compat_start = time.time()
+            query_emb = self.model.encode([data[0]], convert_to_numpy=True)[0]
+            compat_time = time.time() - compat_start
+            logger.debug(f"Test compatibilità completato in {compat_time:.2f} secondi")
+            
+            if query_emb.shape[0] != emb.shape[1]:
+                logger.warning(f"Dimensione embedding cambiata ({query_emb.shape[0]} vs {emb.shape[1]}), rigenero database...")
+                emb = self.index_database(data)
+
+        # Ricerca
+        logger.info("Inizio ricerca")
+        results = self.search(query, emb)
+        
+        logger.info(f"Stampa risultati top-{top_k}")
+        print(f"\nTop-{top_k} frasi più simili a '{query}':")
+        for idx, score in results[:top_k]:
+            print(f"  [{idx}] (score={score:.4f}): {data[idx]}")
+
+        # Visualizzazione
+        if visualize:
+            logger.info("Inizio visualizzazione")
+            self.visualize_space_query(data, query, emb)
+        
+        total_time = time.time() - total_start
+        logger.info(f"Esecuzione RAG completata in {total_time:.2f} secondi totali")
+
+
+def main():
+    logger.info("Inizio programma principale")
+    main_start = time.time()
+    
+    searcher = RagSystem(
+        txt_file="uploads/regolamento.txt",
+        emb_file="embeddings.npy",
+        model_name='BAAI/bge-m3',
+        reindex=False
+    )
+    searcher.run(query="how many liters of water?", top_k=5, visualize=False)
+    
+    main_time = time.time() - main_start
+    logger.info(f"Programma principale completato in {main_time:.2f} secondi")
+
+if __name__ == "__main__":
+    main()
+
+
+------------------------------------------------------------------------------------------------------------------------------------
+
+import logging
+import time
+import os
+from multiprocessing import Process
+from audio.tts import Pyttsx3TTS
+from audio.sound_player import SoundPlayer
+from api.api_client import APIClient
+from recognizer.speech_recognizer import SpeechRecognizer # you can switch to recognizer.speech_recognizer_pocketsphinx: lower performances
+from document.document_retriever import DocumentRetriever
+import speech_recognition as sr
+import config
+import random
+
+class CustomLogger:
+    """Logger personalizzato che scrive sia su console che su file desktop"""
+    
+    def __init__(self):
+        self.desktop_log_file = "/home/operator/Desktop/latency_test.txt"
+        
+        # Configurazione logging standard
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - [LATENCY] %(funcName)s:%(lineno)d - %(message)s',
+            handlers=[
+                logging.StreamHandler(),
+                logging.FileHandler('voice_assistant_latency.log', mode='a', encoding='utf-8')
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        
+        # Crea il file desktop se non esiste
+        self._ensure_desktop_file_exists()
+    
+    def _ensure_desktop_file_exists(self):
+        """Crea il file sul desktop se non esiste"""
+        try:
+            os.makedirs(os.path.dirname(self.desktop_log_file), exist_ok=True)
+            if not os.path.exists(self.desktop_log_file):
+                with open(self.desktop_log_file, 'w', encoding='utf-8') as f:
+                    f.write("=== VOICE ASSISTANT LATENCY LOG ===\n")
+                    f.write(f"Log started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        except Exception as e:
+            self.logger.error(f"Impossibile creare file desktop: {e}")
+    
+    def _write_to_desktop(self, level, message):
+        """Scrive il log sul file desktop"""
+        try:
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            log_entry = f"[{timestamp}] {level} - {message}\n"
+            
+            with open(self.desktop_log_file, 'a', encoding='utf-8') as f:
+                f.write(log_entry)
+                
+        except Exception as e:
+            self.logger.error(f"Errore scrittura su file desktop: {e}")
+    
+    def debug(self, message):
+        self.logger.debug(message)
+        self._write_to_desktop("DEBUG", message)
+    
+    def info(self, message):
+        self.logger.info(message)
+        self._write_to_desktop("INFO", message)
+    
+    def warning(self, message):
+        self.logger.warning(message)
+        self._write_to_desktop("WARNING", message)
+    
+    def error(self, message):
+        self.logger.error(message)
+        self._write_to_desktop("ERROR", message)
+
+# Inizializza il logger personalizzato
+logger = CustomLogger()
+
+class VoiceAssistant:
+    def __init__(self, documents: dict = None):
+        logger.debug("Inizializzazione VoiceAssistant")
+        init_start = time.time()
+        
+        self.documents = documents
+        
+        # Misurazione inizializzazione TTS
+        tts_start = time.time()
+        self.tts = Pyttsx3TTS()
+        tts_init_time = time.time() - tts_start
+        logger.info(f"TTS inizializzato in {tts_init_time:.3f} secondi")
+        
+        # Misurazione inizializzazione SoundPlayer
+        sound_start = time.time()
+        self.sound_player = SoundPlayer()
+        sound_init_time = time.time() - sound_start
+        logger.debug(f"SoundPlayer inizializzato in {sound_init_time:.3f} secondi")
+        
+        # Misurazione inizializzazione API Client
+        api_start = time.time()
+        self.api_client = APIClient()
+        api_init_time = time.time() - api_start
+        logger.info(f"API Client inizializzato in {api_init_time:.3f} secondi")
+        
+        # Misurazione inizializzazione Speech Recognizer
+        sr_start = time.time()
+        self.speech_recognizer = SpeechRecognizer()
+        sr_init_time = time.time() - sr_start
+        logger.info(f"Speech Recognizer inizializzato in {sr_init_time:.3f} secondi")
+        
+        # Initialize DocumentRetriever if documents are provided
+        if documents:
+            doc_start = time.time()
+            self.document_retriever = DocumentRetriever(documents)
+            doc_init_time = time.time() - doc_start
+            logger.info(f"Document Retriever inizializzato in {doc_init_time:.3f} secondi")
+        else:
+            self.document_retriever = None
+            logger.debug("Document Retriever non inizializzato (nessun documento)")
+        
+        total_init_time = time.time() - init_start
+        logger.info(f"VoiceAssistant completamente inizializzato in {total_init_time:.3f} secondi")
+
+    def process_command(self, command: str):
+        logger.debug(f"Inizio elaborazione comando: '{command}'")
+        process_start = time.time()
+        
+        if not command:
+            logger.warning("Nessun comando da processare.")
+            return
+
+        # Retrieve context from documents if available
+        context = ""
+        if self.document_retriever:
+            logger.debug("Inizio recupero contesto dai documenti")
+            retrieval_start = time.time()
+            retrieved_docs = self.document_retriever.retrieve(command)
+            context = "\n".join([doc for _, doc in retrieved_docs])
+            retrieval_time = time.time() - retrieval_start
+            logger.info(f"Contesto recuperato in {retrieval_time:.3f} secondi ({len(retrieved_docs)} documenti)")
+        else:
+            logger.debug("Nessun documento disponibile per il contesto")
+
+        # Determine whether to use 'think' or 'talk' mode based on the command
+        response_start = time.time()
+        
+        if config.PRES_Q_1 in command.lower() or config.PRES_Q_2 in command.lower() or config.PRES_Q_3 in command.lower():
+            logger.debug("Comando di presentazione rilevato")
+            option = random.randint(1,3)
+            command_pres = config.PRES_A_SWITCH[option]
+            
+            # Misurazione TTS per risposta predefinita
+            tts_start = time.time()
+            response = self.tts.speak(command_pres)
+            tts_time = time.time() - tts_start
+            logger.info(f"TTS risposta predefinita completato in {tts_time:.3f} secondi")
+            
+        else:
+            logger.debug("Invio comando all'API")
+            api_start = time.time()
+            response = self.api_client.talk(command, context)
+            api_time = time.time() - api_start
+            logger.info(f"Risposta API ricevuta in {api_time:.3f} secondi")
+            
+            # Misurazione TTS per risposta API
+            if response:
+                tts_start = time.time()
+                self.tts.speak(response)
+                tts_time = time.time() - tts_start
+                logger.info(f"TTS risposta API completato in {tts_time:.3f} secondi")
+
+        response_time = time.time() - response_start
+        total_process_time = time.time() - process_start
+        
+        logger.info(f"Risposta generata in {response_time:.3f} secondi")
+        logger.info(f"Comando processato completamente in {total_process_time:.3f} secondi")
+        logger.info(f"Risposta ricevuta: {response[:100]}..." if len(str(response)) > 100 else f"Risposta ricevuta: {response}")
+
+    def play_sound_async(self, sound_file: str):
+        """
+        Plays a sound in a separate process so that it doesn't block the main thread.
+        """
+        logger.debug(f"Inizio riproduzione audio asincrona: {sound_file}")
+        sound_start = time.time()
+        
+        process = Process(target=self._play_sound_with_timing, args=(sound_file, sound_start))
+        process.start()
+
+    def _play_sound_with_timing(self, sound_file: str, start_time: float):
+        """Helper method per misurare il tempo di riproduzione audio"""
+        try:
+            self.sound_player.play_sound(sound_file)
+            play_time = time.time() - start_time
+            logger.info(f"Audio '{sound_file}' riprodotto in {play_time:.3f} secondi")
+        except Exception as e:
+            logger.error(f"Errore nella riproduzione audio '{sound_file}': {e}")
+
+    def run(self):
+        logger.info("Avvio del Voice Assistant")
+        
+        # Speak a welcome message before starting to listen for the wake word
+        logger.debug("Preparazione messaggio di benvenuto")
+        welcome_start = time.time()
+        
+        if {config.LANGUAGE} == {"it"}:
+            welcome_message = f"Ciao... Mi sono appena svegliata"
+        else:
+            welcome_message = f"Hi there! I'm {config.NAME}, your friendly AI assistant. Just say '{config.WAKE_WORD}' whenever you need help, and I'll be right here, ready to assist you!"
+        
+        # Misurazione TTS messaggio di benvenuto
+        tts_welcome_start = time.time()
+        self.tts.speak(welcome_message)
+        tts_welcome_time = time.time() - tts_welcome_start
+        
+        welcome_total_time = time.time() - welcome_start
+        logger.info(f"Messaggio di benvenuto TTS: {tts_welcome_time:.3f} secondi")
+        logger.info(f"Messaggio di benvenuto totale: {welcome_total_time:.3f} secondi")
+        logger.info("Messaggio di benvenuto consegnato. In attesa della wake word.")
+        
+        while True:
+            try:
+                # Wait for the wake word
+                logger.debug(f"In ascolto per wake word: '{config.WAKE_WORD}'")
+                wake_listen_start = time.time()
+                
+                if self.speech_recognizer.listen_for_wake_word(config.WAKE_WORD):
+                    wake_detect_time = time.time() - wake_listen_start
+                    logger.info(f"Wake word rilevata in {wake_detect_time:.3f} secondi")
+                    
+                    # Suono di attivazione
+                    self.play_sound_async(config.WAKE_SOUND)
+                    logger.info("Modalità comando attivata.")
+                    
+                    # Enter command mode: continuously listen for commands
+                    while True:
+                        try:
+                            logger.debug("In ascolto per comandi")
+                            command_listen_start = time.time()
+                            
+                            command = self.speech_recognizer.listen(timeout=config.LISTEN_TIMEOUT)
+                            command_detect_time = time.time() - command_listen_start
+                            logger.info(f"Comando rilevato in {command_detect_time:.3f} secondi: '{command}'")
+                            
+                            # If the stop command is detected, exit command mode
+                            if "stop" in command.lower():
+                                stop_start = time.time()
+                                self.play_sound_async(config.STOP_SOUND)
+                                stop_time = time.time() - stop_start
+                                logger.info(f"Comando 'stop' rilevato, uscita dalla modalità comando in {stop_time:.3f} secondi")
+                                break
+
+                            # Process the received command - MISURAZIONE COMPLETA LATENZA
+                            total_response_start = time.time()
+                            self.process_command(command)
+                            total_response_time = time.time() - total_response_start
+                            
+                            logger.info(f"*** LATENZA TOTALE RISPOSTA: {total_response_time:.3f} secondi ***")
+                            logger.info(f"*** BREAKDOWN: Riconoscimento={command_detect_time:.3f}s + Elaborazione={total_response_time:.3f}s ***")
+                            
+                        except sr.WaitTimeoutError:
+                            timeout_time = time.time() - command_listen_start
+                            logger.info(f"Nessun comando ricevuto entro il timeout ({timeout_time:.3f} secondi)")
+                            self.play_sound_async(config.TIMEOUT_SOUND)
+                            # Exit command mode after a timeout
+                            break
+                            
+            except Exception as e:
+                logger.error(f"Errore nel loop principale: {e}")
+                logger.debug(f"Dettagli errore: {str(e)}", exc_info=True)
