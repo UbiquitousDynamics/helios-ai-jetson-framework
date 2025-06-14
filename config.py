@@ -6,6 +6,7 @@ TTS_FOLDER = 'tts_audio'
 
 # Configuration constants for the speech recognizer
 WAKE_WORD = 'emilia'
+RAG_WORD = 'rag'
 LISTEN_TIMEOUT = 5
 WAKE_SOUND = 'sounds/wake_up.wav'
 STOP_SOUND = 'sounds/stop.wav'
@@ -31,6 +32,7 @@ if LANGUAGE == "en":
     PRES_A_1 = ""
     PRES_A_2 = ""
     PRES_A_3 = ""
+    RAG_WORD = 'regulations'
 
 elif LANGUAGE == "it":
     VOSK_MODEL_PATH = "recognizer/models/vosk-model-small-it-0.22"
@@ -41,6 +43,7 @@ elif LANGUAGE == "it":
     PRES_A_1 = "sono emilia, un'auto solare dotata di intelligenza artificiale, soccia"
     PRES_A_2 = "io sono emilia, un'auto solare dotata di intelligenza artificiale"
     PRES_A_3 = "piacere di conoiscerti!, sono emilia, sono un'auto solare dotata di intelligenza artificiale"
+    RAG_WORD = 'regolamento'
 
 PRES_A_SWITCH = {
    1:PRES_A_1,

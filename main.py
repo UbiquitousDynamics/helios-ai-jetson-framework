@@ -20,14 +20,15 @@ if __name__ == '__main__':
     shared_documents = manager.dict()
     
     # Start a separate process for loading documents
-    doc_process = Process(target=load_documents, args=(shared_documents,))
-    doc_process.start()
-    doc_process.join()  # Wait for the document loading process to complete
+    #doc_process = Process(target=load_documents, args=(shared_documents,))
+    #doc_process.start()
+   # doc_process.join()  # Wait for the document loading process to complete
     
-    logging.info("Documents loaded.")
+   # logging.info("Documents loaded.")
     # Convert the shared manager dictionary to a normal dictionary
-    documents = dict(shared_documents)
+    #documents = dict(shared_documents)
     
     # Initialize and run the voice assistant with the loaded documents
-    assistant = VoiceAssistant(documents=documents)
+    assistant = VoiceAssistant()
     assistant.run()
+

@@ -48,7 +48,7 @@ class RagSystem:
         # Forza l'uso della CPU e ottimizza le impostazioni
         os.environ['TOKENIZERS_PARALLELISM'] = 'false'
         if torch.cuda.is_available():
-            logger.info("CUDA disponibile ma forziamo CPU per stabilità su Jetson Nano")
+            logger.info("CUDA disponibile ma forziamo CPU per stabilit  su Jetson Nano")
         
         logger.debug(f"Inizio caricamento modello: {model_name}")
         model_start = time.time()
@@ -57,7 +57,7 @@ class RagSystem:
         self.model = SentenceTransformer(model_name, device='cpu')  # Forza CPU
         
         # Ottimizzazioni aggiuntive
-        self.model.eval()  # Modalità evaluation per performance migliori
+        self.model.eval()  # Modalit  evaluation per performance migliori
         
         model_end = time.time()
         logger.info(f"Modello '{model_name}' caricato in {model_end - model_start:.2f} secondi")
@@ -89,13 +89,13 @@ class RagSystem:
         start_time = time.time()
         
         if data is None:
-            logger.debug("Data è None, carico da file")
+            logger.debug("Data   None, carico da file")
             data = self._read_data()
         
         logger.info(f"Inizio encoding di {len(data)} frasi")
         encode_start = time.time()
         
-        # Batch size molto più piccolo per Jetson Nano
+        # Batch size molto pi  piccolo per Jetson Nano
         batch_size = 16  # Ridotto da 100 a 16
         embeddings_list = []
         
@@ -106,7 +106,7 @@ class RagSystem:
                 batch = data[i:i+batch_size]
                 logger.debug(f"Processing batch {i//batch_size + 1}/{(len(data)-1)//batch_size + 1}: {len(batch)} frasi")
                 
-                # Encoding con parametri ottimizzati per velocità
+                # Encoding con parametri ottimizzati per velocit 
                 batch_embeddings = self.model.encode(
                     batch, 
                     convert_to_numpy=True,
@@ -187,22 +187,22 @@ class RagSystem:
             logger.error(f"Dimensione embedding query ({query_emb.shape[0]}) incompatibile con matrix ({embedding_matrix.shape[1]})")
             raise ValueError(f"Dimensione embedding query ({query_emb.shape[0]}) incompatibile con matrix ({embedding_matrix.shape[1]})")
         
-        logger.debug("Calcolo similarità coseno")
+        logger.debug("Calcolo similarit  coseno")
         similarity_start = time.time()
         
-        # Usa dot product invece di cosine_similarity per embeddings normalizzati (più veloce)
+        # Usa dot product invece di cosine_similarity per embeddings normalizzati (pi  veloce)
         if hasattr(embedding_matrix, 'dtype') and embedding_matrix.dtype == np.float32:
             sims = np.dot(embedding_matrix, query_emb.astype(np.float32))
         else:
             sims = cosine_similarity([query_emb], embedding_matrix)[0]
             
         similarity_time = time.time() - similarity_start
-        logger.debug(f"Similarità calcolata in {similarity_time:.2f} secondi")
+        logger.debug(f"Similarit  calcolata in {similarity_time:.2f} secondi")
         
         logger.debug("Ordinamento risultati")
         sort_start = time.time()
         
-        # Usa argpartition per top-k più efficiente se ci sono molti documenti
+        # Usa argpartition per top-k pi  efficiente se ci sono molti documenti
         if len(sims) > 100:
             top_indices = np.argpartition(sims, -min(50, len(sims)))[-min(50, len(sims)):]
             results = [(idx, sims[idx]) for idx in top_indices]
@@ -294,6 +294,8 @@ class RagSystem:
         logger.info(f"Inizio esecuzione RAG - Query: '{query}', top_k: {top_k}, visualize: {visualize}")
         total_start = time.time()
         
+        ret = 'Retry'
+
         logger.debug("Caricamento dati")
         data = self._read_data()
         
@@ -306,13 +308,13 @@ class RagSystem:
             logger.info("Caricamento embeddings esistenti")
             emb = self.load_embedding_matrix()
             
-            # Verifica compatibilità dimensionale
-            logger.debug("Verifica compatibilità dimensionale")
+            # Verifica compatibilit  dimensionale
+            logger.debug("Verifica compatibilit  dimensionale")
             compat_start = time.time()
             with torch.no_grad():
                 query_emb = self.model.encode([data[0]], convert_to_numpy=True)[0]
             compat_time = time.time() - compat_start
-            logger.debug(f"Test compatibilità completato in {compat_time:.2f} secondi")
+            logger.debug(f"Test compatibilit  completato in {compat_time:.2f} secondi")
             
             if query_emb.shape[0] != emb.shape[1]:
                 logger.warning(f"Dimensione embedding cambiata ({query_emb.shape[0]} vs {emb.shape[1]}), rigenero database...")
@@ -323,10 +325,12 @@ class RagSystem:
         results = self.search(query, emb)
         
         logger.info(f"Stampa risultati top-{top_k}")
-        print(f"\nTop-{top_k} frasi più simili a '{query}':")
+
+        ret = f"\nTop-{top_k} frasi pi  simili a '{query}':"
+
         for idx, score in results[:top_k]:
             print(f"  [{idx}] (score={score:.4f}): {data[idx]}")
-
+            ret = ret + f" {data[idx]};"
         # Visualizzazione
         if visualize:
             logger.info("Inizio visualizzazione")
@@ -334,6 +338,8 @@ class RagSystem:
         
         total_time = time.time() - total_start
         logger.info(f"Esecuzione RAG completata in {total_time:.2f} secondi totali")
+
+        return ret
 
 
 def main():
