@@ -59,7 +59,7 @@ class VoiceAssistant:
         if {config.LANGUAGE} == {"it"}:
             welcome_message = f"Ciao... Mi sono appena svegliata" #Sono {config.NAME}, il tuo amichevole assistente AI. Ogni volta che hai bisogno di aiuto, basta dire '{config.WAKE_WORD}' e io sarò qui, pronto ad assisterti!"
         else:
-            welcome_message = f"Hi there! I'm {config.NAME}, your friendly AI assistant. Just say '{config.WAKE_WORD}' whenever you need help, and I'll be right here, ready to assist you!"
+            welcome_message = f"Hi, Emilia Five point Nine here, good morning crew! How can I help you today in crossing the Australian desert?"
         self.tts.speak(welcome_message)
         logging.info("Welcome message delivered. Waiting for wake word.")
         
