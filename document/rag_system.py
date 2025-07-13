@@ -326,10 +326,11 @@ class RagSystem:
         
         logger.info(f"Stampa risultati top-{top_k}")
 
-        ret = f"\nTop-{top_k} frasi pi  simili a '{query}':"
+        #ret = f"\nTop-{top_k} frasi pi  simili a '{query}':"
+        ret = ""
 
         for idx, score in results[:top_k]:
-            print(f"  [{idx}] (score={score:.4f}): {data[idx]}")
+            #print(f"  [{idx}] (score={score:.4f}): {data[idx]}")
             ret = ret + f" {data[idx]};"
         # Visualizzazione
         if visualize:
@@ -347,12 +348,12 @@ def main():
     main_start = time.time()
     
     searcher = RagSystem(
-        txt_file="uploads/regolamento.txt",
+        txt_file="uploads/emilia_memory_en.txt",
         emb_file="embeddings.npy",
         model_name='all-MiniLM-L6-v2',
         reindex=False
     )
-    searcher.run(query="How mny liters of water?", top_k=5, visualize=False)
+    searcher.run(query="What's your name", top_k=1, visualize=False)
     
     main_time = time.time() - main_start
     logger.info(f"Programma principale completato in {main_time:.2f} secondi")
