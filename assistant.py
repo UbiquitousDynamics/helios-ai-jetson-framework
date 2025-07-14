@@ -4,7 +4,6 @@ from audio.tts import Pyttsx3TTS
 from audio.sound_player import SoundPlayer
 from api.api_client import APIClient
 from recognizer.speech_recognizer import SpeechRecognizer # you can switch to recognizer.speech_recognizer_pocketsphinx: lower performances
-from document.document_retriever import DocumentRetriever
 import speech_recognition as sr
 import config
 import random
@@ -73,8 +72,15 @@ class VoiceAssistant:
 
         logging.info(f"Processing RAG command: {command}")
         # Use the searcher to run the query
-        result = searcher.run(query=command, top_k=3, visualize=False)
-        self.tts.speak(result)
+        result = searcher.run(query=command, top_k=1)
+        # Convert result to a readable string for TTS
+        if isinstance(result, list):
+            result_str = "\n".join([
+                f"Risposta {i+1}: indice {idx}, score {score:.2f}" for i, (idx, score) in enumerate(result)
+            ])
+        else:
+            result_str = str(result)
+        self.tts.speak(result_str)
 
     def play_sound_async(self, sound_file: str):
         """
@@ -87,13 +93,13 @@ class VoiceAssistant:
         logging.info("Starting Voice Assistant...")
         # Initialize the text-to-speech engine  
         searcher = RagSystem(
-            txt_file="uploads/regolamento.txt",
-            emb_file="embeddings.npy",
-            model_name='all-MiniLM-L6-v2',
+            txt_dir="uploads",
+            emb_file="embeddings.npz",
+            model_name='./models/all-MiniLM-L6-v2',
             reindex=False
         )
-          # Test searcher
-        searcher.run(query="How many liters of water?", top_k=5, visualize=False)
+        # Test searcher
+        searcher.run(query="How many liters of water?", top_k=5)
 
         # Speak a welcome message before starting to listen for the wake word
         if config.LANGUAGE == "it":
@@ -173,3 +179,4 @@ class VoiceAssistant:
                 logging.error(f"Error in the main loop: {e}")
                 # Optional: add a small delay before retrying to prevent rapid error loops
                 time.sleep(1)
+

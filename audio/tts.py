@@ -7,7 +7,7 @@ import wave
 import config
 
 class Pyttsx3TTS:
-    def __init__(self, voice_model="audio/models/it_IT-paola-medium.onnx"):
+    def __init__(self, voice_model=config.TTS_MODEL):
         # Carica il modello vocale specificato
         self.voice = PiperVoice.load(voice_model)
         logging.debug(f"PiperTTS inizializzato con il modello: {voice_model}")
