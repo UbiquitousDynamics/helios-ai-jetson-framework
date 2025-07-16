@@ -6,7 +6,8 @@ __pycache__/
 venv/
 .venv/
 .env/
-
+.model/
+model/
 # Editor and IDE files
 .vscode/
 .idea/
@@ -40,6 +41,10 @@ docker-compose.override.yml
 
 #output piper-tts
 output.wav
+
+embeddings.npz
+embeddings.npy
+
 # Private deployment credentials and operator configuration
 **/.env
 **/.env.*

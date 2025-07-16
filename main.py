@@ -13,8 +13,8 @@ def load_documents(shared_documents):
 
 if __name__ == '__main__':
     # Configure logging to output debug information
-    #logging.basicConfig(level=logging.DEBUG)
-    logging.disable(logging.CRITICAL)
+    logging.basicConfig(level=logging.DEBUG)
+    #logging.disable(logging.CRITICAL)
     # Create a shared dictionary for the documents using a Manager
     manager = Manager()
     shared_documents = manager.dict()
@@ -31,4 +31,3 @@ if __name__ == '__main__':
     # Initialize and run the voice assistant with the loaded documents
     assistant = VoiceAssistant()
     assistant.run()
-
