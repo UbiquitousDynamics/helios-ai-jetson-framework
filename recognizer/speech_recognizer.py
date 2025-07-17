@@ -12,7 +12,7 @@ class SpeechRecognizer:
         # Initialize PyAudio
         self.p = pyaudio.PyAudio()
 
-    def listen(self, timeout: int = None) -> str:
+    def listen(self, timeout: int = None):
         # Configure recording parameters
         rate = 16000
         chunk = 4000
@@ -25,23 +25,29 @@ class SpeechRecognizer:
         recognizer = KaldiRecognizer(self.model, rate)
         result_text = ""
         start_time = time.time()
+        last_partial = None
 
         while True:
             data = stream.read(chunk, exception_on_overflow=False)
             if recognizer.AcceptWaveform(data):
                 res = json.loads(recognizer.Result())
-                result_text += res.get("text", "")
+                text = res.get("text", "")
+                if text:
+                    result_text += text
+                    yield text  # yield final recognized text
             else:
-                # Optionally, get partial result:
                 partial = json.loads(recognizer.PartialResult()).get("partial", "")
-                # You can log the partial result if needed
+                if partial and partial != last_partial:
+                    last_partial = partial
+                    yield partial  # yield partial result as it changes
             if timeout is not None and (time.time() - start_time) > timeout:
                 break
 
         stream.stop_stream()
         stream.close()
         logging.debug(f"Recognized command: {result_text}")
-        return result_text
+        # Optionally yield the final result_text at the end
+        # yield result_text
 
     def listen_for_wake_word(self, wake_word: str) -> bool:
         try:

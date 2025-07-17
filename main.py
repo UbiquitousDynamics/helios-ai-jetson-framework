@@ -2,6 +2,7 @@ import logging
 from multiprocessing import Process, Manager
 from document.document_loader import DocumentLoader
 from assistant import VoiceAssistant
+from config import LOG_LEVEL, LOG_FORMAT, LOG_FILE
 
 def load_documents(shared_documents):
     """
@@ -12,9 +13,11 @@ def load_documents(shared_documents):
     shared_documents.update(docs)
 
 if __name__ == '__main__':
-    # Configure logging to output debug information
-    logging.basicConfig(level=logging.DEBUG)
-    #logging.disable(logging.CRITICAL)
+    # Configure logging using config.py parameters
+    if LOG_FILE:
+        logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, filename=LOG_FILE, filemode='a')
+    else:
+        logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
     # Create a shared dictionary for the documents using a Manager
     manager = Manager()
     shared_documents = manager.dict()

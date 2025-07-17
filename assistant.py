@@ -9,7 +9,15 @@ import config
 import random
 import time
 from document.rag_system import RagSystem
+from enum import Enum, auto
+import threading
+import queue
 # -*- coding: utf-8 -*-
+
+class AssistantState(Enum):
+    IDLE = auto()
+    COMMAND = auto()
+    RAG = auto()
 
 class VoiceAssistant:
     def __init__(self):
@@ -23,11 +31,13 @@ class VoiceAssistant:
 
     def contains_wake_word(self, command: str) -> bool:
         """
-        Check if the command contains the wake word.
+        Check if the command contains the wake word or alternative activation words.
         """
         if not command:
             return False
-        return config.WAKE_WORD.lower() in command.lower()
+        wake_words = [config.WAKE_WORD.lower(), "hi", "hello", "amelia"]
+        command_lower = command.lower()
+        return any(word in command_lower for word in wake_words)
 
     def process_command(self, command: str):
         if not command:
@@ -89,94 +99,85 @@ class VoiceAssistant:
         process = Process(target=self.sound_player.play_sound, args=(sound_file,))
         process.start()
 
+    def threaded_listen(self, result_queue, stop_event, timeout):
+        try:
+            # Accumula i partial e i final result in una lista
+            partials = []
+            for partial in self.speech_recognizer.listen(timeout=timeout):
+                if stop_event.is_set():
+                    break
+                # Puoi processare qui ogni parola/frase parziale se vuoi
+                partials.append(partial)
+            # Alla fine, unisci i partial per ottenere il comando completo
+            command = " ".join(partials).strip()
+            if not stop_event.is_set():
+                result_queue.put(command)
+        except sr.WaitTimeoutError:
+            if not stop_event.is_set():
+                result_queue.put(None)
+
     def run(self):
         logging.info("Starting Voice Assistant...")
-        # Initialize the text-to-speech engine  
         searcher = RagSystem(
             txt_dir="uploads",
             emb_file="embeddings.npz",
             model_name='./models/all-MiniLM-L6-v2',
             reindex=False
         )
-        # Test searcher
         searcher.run(query="How many liters of water?", top_k=5)
 
-        # Speak a welcome message before starting to listen for the wake word
         if config.LANGUAGE == "it":
             welcome_message = f" Ciao! Mi sono appena svegliata e sono pronta ad aiutarti. Ricordati solo di chiamarmi '{config.WAKE_WORD}' quando mi parli."
         else:
             welcome_message = f" Hi! I just woke up and I'm ready to help. Just remember to call me '{config.WAKE_WORD}' when you talk to me."
-        
         self.tts.speak(welcome_message)
-        logging.info("Welcome message delivered. Waiting for wake word.")
-        
+        logging.info("Welcome message delivered. Waiting for commands.")
+        state = AssistantState.COMMAND  # Avvia direttamente in COMMAND mode
+
         while True:
             try:
-                # Wait for the wake word
-                if True: #self.speech_recognizer.listen_for_wake_word(config.WAKE_WORD):
-                   # self.play_sound_async(config.WAKE_SOUND)
-                    logging.info("Entering command mode.")
-                    
-                    # Enter command mode: continuously listen for commands
-                    while True:
-                        try:
-                            command = self.speech_recognizer.listen(timeout=config.LISTEN_TIMEOUT+2)
-                            
-                            # If the stop command is detected, exit command mode
-                            if "stop" in command.lower():
-                                self.play_sound_async(config.STOP_SOUND)
-                                logging.info("'Stop' command detected, exiting command mode.")
-                                break
-                    
-                            # Check for RAG mode activation
-                            if config.RAG_WORD in command.lower():
-                                self.play_sound_async(config.WAKE_SOUND)
-                                #time.sleep(0.1)
-                                #self.play_sound_async(config.WAKE_SOUND)
-                                #time.sleep(0.1)
-                                #self.play_sound_async(config.WAKE_SOUND)
-                                logging.info("'Regolamento' command detected")
-                                logging.info("Entering RAG mode.")
-            
-                                # Enter RAG mode: continuously listen for regulation questions
-                                while True:
-                                    try:
-                                        rag_command = self.speech_recognizer.listen(timeout=config.LISTEN_TIMEOUT)
-                                        
-                                        # If the stop command is detected, exit RAG mode
-                                        if "stop" in rag_command.lower():
-                                            self.play_sound_async(config.STOP_SOUND)
-                                            #time.sleep(0.1)
-                                            #self.play_sound_async(config.STOP_SOUND)
-                                            #time.sleep(0.1)
-                                            #self.play_sound_async(config.STOP_SOUND)
-                                            logging.info("'Stop' command detected, exiting RAG mode.")
-                                            break
-                                        
-                                        if rag_command:
-                                            self.process_rag_command(rag_command, searcher)
-                                        
-                                        time.sleep(0.3)
-                                        
-                                    except sr.WaitTimeoutError:
-                                        logging.info("No RAG command received within timeout.")
-                                        self.play_sound_async(config.TIMEOUT_SOUND)
-                                        # Exit RAG mode after a timeout
-                                        break
-                         
-                            # Process regular command ONLY if it contains the wake word
-                            elif self.contains_wake_word(command):
-                                self.process_command(command)
-                            # else: do nothing
+                if state == AssistantState.COMMAND:
+                    result_queue = queue.Queue()
+                    stop_event = threading.Event()
+                    listener = threading.Thread(target=self.threaded_listen, args=(result_queue, stop_event, config.LISTEN_TIMEOUT))
+                    listener.start()
+                    listener.join(timeout=config.LISTEN_TIMEOUT + 1)
+                    stop_event.set()
+                    try:
+                        command = result_queue.get_nowait()
+                    except queue.Empty:
+                        command = None
+                    if command:
+                        if config.RAG_WORD in command.lower():
+                            self.play_sound_async(config.WAKE_SOUND)
+                            logging.info("'Regolamento' command detected. Entering RAG mode.")
+                            state = AssistantState.RAG
+                        elif self.contains_wake_word(command):
+                            self.process_command(command)
+                    # Se timeout, semplicemente continua ad ascoltare
 
-                        except sr.WaitTimeoutError:
-                            logging.info("No command received within timeout.")
-                            self.play_sound_async(config.TIMEOUT_SOUND)
-                            # Exit command mode after a timeout
-                            break
+                elif state == AssistantState.RAG:
+                    # In RAG mode ascolta direttamente il comando, poi esce da RAG dopo la risposta
+                    result_queue = queue.Queue()
+                    stop_event = threading.Event()
+                    listener = threading.Thread(target=self.threaded_listen, args=(result_queue, stop_event, config.LISTEN_TIMEOUT))
+                    listener.start()
+                    listener.join(timeout=config.LISTEN_TIMEOUT + 1)
+                    stop_event.set()
+                    try:
+                        rag_command = result_queue.get_nowait()
+                    except queue.Empty:
+                        rag_command = None
+                    if rag_command:
+                        self.process_rag_command(rag_command, searcher)
+                        self.play_sound_async(config.STOP_SOUND)
+                        logging.info("Exiting RAG mode after response.")
+                        state = AssistantState.COMMAND
+                    else:
+                        # Se timeout, semplicemente continua ad ascoltare in RAG
+                        pass
 
             except Exception as e:
                 logging.error(f"Error in the main loop: {e}")
-                # Optional: add a small delay before retrying to prevent rapid error loops
                 time.sleep(1)
 

@@ -1,3 +1,19 @@
+import logging
+
+# Logging configuration parameters
+# To completely disable logging, set LOG_LEVEL to logging.CRITICAL + 1
+# To choose other levels:
+#   logging.DEBUG    -> detailed debug logs
+#   logging.INFO     -> general information
+#   logging.WARNING  -> warnings
+#   logging.ERROR    -> errors
+#   logging.CRITICAL -> only critical errors
+# Example to disable logging:
+#   LOG_LEVEL = logging.CRITICAL + 1
+LOG_LEVEL = logging.CRITICAL + 1
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+LOG_FILE = 'app.log'  # Set to None for console only
+
 # Configuration constants for the speech synthesizer
 NAME = "emilia"
 LANGUAGE = "en"
@@ -7,7 +23,7 @@ TTS_MODEL = "audio/models/en_GB-alba-medium.onnx"  # default, sovrascritto poi s
 # Configuration constants for the speech recognizer
 WAKE_WORD = 'emilia'
 RAG_WORD = 'rag'  # sovrascritto poi se necessario
-LISTEN_TIMEOUT = 5
+LISTEN_TIMEOUT = 6
 WAKE_SOUND = 'sounds/wake_up.wav'
 STOP_SOUND = 'sounds/stop.wav'
 TIMEOUT_SOUND = 'sounds/stop.wav'
@@ -31,12 +47,12 @@ MODEL_THINK = "qwen3:0.6b"
 if LANGUAGE == "en": 
     VOSK_MODEL_PATH = "recognizer/models/vosk-model-small-en-us-0.15"
     VOICE = "mb-us1"  # american english female voice
-    PRES_Q_1 = "What's your name"
-    PRES_Q_2 = "Who are you"
-    PRES_Q_3 = "Introduce yourself"
-    PRES_A_1 = "Hi, Emilia Five point Nine here, good morning crew! How can I help you today in crossing the Australian desert?"
-    PRES_A_2 = "Hi, Emilia Five point Nine here, good morning crew! How can I help you today in crossing the Australian desert?"
-    PRES_A_3 = "Hi, Emilia Five point Nine here, good morning crew! How can I help you today in crossing the Australian desert?"
+    PRES_Q_1 = "what's your name"
+    PRES_Q_2 = "who are you"
+    PRES_Q_3 = "introduce yourself"
+    PRES_A_1 = "hi, i'm emilia five point nine, your solar-powered ai vehicle, ready to support the crew across the australian desert!"
+    PRES_A_2 = "greetings, this is emilia five point nine, your intelligent solar companion—how can i assist you today on this desert mission?"
+    PRES_A_3 = "hi, emilia five point nine here, good morning crew! how can i help you today in crossing the australian desert?"
     RAG_WORD = 'regulations'
     TTS_MODEL = "audio/models/en_GB-alba-medium.onnx"
 
