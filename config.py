@@ -1,3 +1,19 @@
+import logging
+
+# Logging configuration parameters
+# To completely disable logging, set LOG_LEVEL to logging.CRITICAL + 1
+# To choose other levels:
+#   logging.DEBUG    -> detailed debug logs
+#   logging.INFO     -> general information
+#   logging.WARNING  -> warnings
+#   logging.ERROR    -> errors
+#   logging.CRITICAL -> only critical errors
+# Example to disable logging:
+#   LOG_LEVEL = logging.CRITICAL + 1
+LOG_LEVEL = logging.CRITICAL + 1
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+LOG_FILE = 'app.log'  # Set to None for console only
+
 # Configuration constants for the speech synthesizer
 NAME = "emilia"
 LANGUAGE = "en"
@@ -7,7 +23,7 @@ TTS_MODEL = "audio/models/en_GB-alba-medium.onnx"  # default, sovrascritto poi s
 # Configuration constants for the speech recognizer
 WAKE_WORD = 'emilia'
 RAG_WORD = 'rag'  # sovrascritto poi se necessario
-LISTEN_TIMEOUT = 7
+LISTEN_TIMEOUT = 6
 WAKE_SOUND = 'sounds/wake_up.wav'
 STOP_SOUND = 'sounds/stop.wav'
 TIMEOUT_SOUND = 'sounds/stop.wav'
