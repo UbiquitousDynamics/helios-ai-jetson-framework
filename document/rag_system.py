@@ -34,7 +34,7 @@ class RagSystem:
         logger.debug("Configurazione ottimizzazioni per dispositivi low-end")
         os.environ['TOKENIZERS_PARALLELISM'] = 'false'
         if torch.cuda.is_available():
-            logger.info("CUDA disponibile ma forziamo CPU per stabilità su Jetson Nano")
+            logger.info("CUDA disponibile ma forziamo CPU per stabilita su Jetson Nano")
 
         # Forza il percorso assoluto per evitare che SentenceTransformer provi a scaricare
         model_path = os.path.abspath(model_name)
