@@ -148,11 +148,7 @@ class VoiceAssistant:
                     except queue.Empty:
                         command = None
                     if command:
-                        if "stop" in command.lower():
-                            self.play_sound_async(config.STOP_SOUND)
-                            logging.info("'Stop' command detected, stopping system.")
-                            break
-                        elif config.RAG_WORD in command.lower():
+                        if config.RAG_WORD in command.lower():
                             self.play_sound_async(config.WAKE_SOUND)
                             logging.info("'Regolamento' command detected. Entering RAG mode.")
                             state = AssistantState.RAG
@@ -173,15 +169,10 @@ class VoiceAssistant:
                     except queue.Empty:
                         rag_command = None
                     if rag_command:
-                        if "stop" in rag_command.lower():
-                            self.play_sound_async(config.STOP_SOUND)
-                            logging.info("'Stop' command detected, stopping system.")
-                            break
-                        else:
-                            self.process_rag_command(rag_command, searcher)
-                            self.play_sound_async(config.STOP_SOUND)
-                            logging.info("Exiting RAG mode after response.")
-                            state = AssistantState.COMMAND
+                        self.process_rag_command(rag_command, searcher)
+                        self.play_sound_async(config.STOP_SOUND)
+                        logging.info("Exiting RAG mode after response.")
+                        state = AssistantState.COMMAND
                     else:
                         # Se timeout, semplicemente continua ad ascoltare in RAG
                         pass
