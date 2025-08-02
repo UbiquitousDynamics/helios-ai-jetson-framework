@@ -35,7 +35,7 @@ class VoiceAssistant:
         """
         if not command:
             return False
-        wake_words = [config.WAKE_WORD.lower(), "hi", "hello", "amelia"]
+        wake_words = [config.WAKE_WORD.lower(), "hello", "amelia"]
         command_lower = command.lower()
         return any(word in command_lower for word in wake_words)
 
