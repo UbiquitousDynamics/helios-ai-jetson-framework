@@ -64,14 +64,3 @@ class SpeechRecognizer:
         logging.debug(f"Recognized command: {result_text}")
         # Optionally yield the final result_text at the end
         # yield result_text
-
-    def listen_for_wake_word(self, wake_word: str) -> bool:
-        try:
-            command = self.listen(timeout=4)
-            logging.debug(f"Recognized command: {command}")
-            if wake_word.lower() in command.lower() or  "hello" in command.lower() or  "amelia" in command.lower():
-                logging.info("Wake word detected!")
-                return True
-        except Exception as e:
-            logging.error(f"Error listening for wake word: {e}")
-        return False
