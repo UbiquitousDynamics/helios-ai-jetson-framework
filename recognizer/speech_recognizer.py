@@ -53,7 +53,7 @@ class SpeechRecognizer:
         try:
             command = self.listen(timeout=4)
             logging.debug(f"Recognized command: {command}")
-            if wake_word.lower() in command.lower() or "hi" in command.lower() or  "hello" in command.lower() or  "amelia" in command.lower() or  "ciao" in command.lower():
+            if wake_word.lower() in command.lower() or "hello" in command.lower() or  "amelia" in command.lower():
                 logging.info("Wake word detected!")
                 return True
         except Exception as e:
