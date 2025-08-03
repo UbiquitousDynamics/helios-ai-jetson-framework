@@ -23,7 +23,7 @@ TTS_MODEL = "audio/models/en_GB-alba-medium.onnx"  # default, sovrascritto poi s
 # Configuration constants for the speech recognizer
 WAKE_WORD = 'emilia'
 RAG_WORD = 'rag'  # sovrascritto poi se necessario
-LISTEN_TIMEOUT = 6
+LISTEN_TIMEOUT = 7
 WAKE_SOUND = 'sounds/wake_up.wav'
 STOP_SOUND = 'sounds/stop.wav'
 TIMEOUT_SOUND = 'sounds/stop.wav'
