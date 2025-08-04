@@ -1,8 +1,8 @@
-import logging
-from multiprocessing import Process, Manager
+from multiprocessing import Manager
 from document.document_loader import DocumentLoader
 from assistant import VoiceAssistant
-from config import LOG_LEVEL, LOG_FORMAT, LOG_FILE
+import logging
+
 
 def load_documents(shared_documents):
     """
@@ -14,10 +14,12 @@ def load_documents(shared_documents):
 
 if __name__ == '__main__':
     # Configure logging using config.py parameters
-    if LOG_FILE:
-        logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, filename=LOG_FILE, filemode='a')
-    else:
-        logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
+    # Disabilitato logging
+    logging.disable(logging.CRITICAL)
+    # if LOG_FILE:
+    #     logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, filename=LOG_FILE, filemode='a')
+    # else:
+    #     logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
     # Create a shared dictionary for the documents using a Manager
     manager = Manager()
     shared_documents = manager.dict()
