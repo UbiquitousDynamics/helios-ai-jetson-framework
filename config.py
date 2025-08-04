@@ -53,7 +53,7 @@ if LANGUAGE == "en":
     PRES_A_1 = "hi, i'm emilia five point nine, your solar-powered ai vehicle, ready to support the crew across the australian desert!"
     PRES_A_2 = "greetings, this is emilia five point nine, your intelligent solar companion—how can i assist you today on this desert mission?"
     PRES_A_3 = "hi, emilia five point nine here, good morning crew! how can i help you today in crossing the australian desert?"
-    RAG_WORD = 'regulations'
+    RAG_WORD = 'regulation'
     TTS_MODEL = "audio/models/en_GB-alba-medium.onnx"
 
 elif LANGUAGE == "it":

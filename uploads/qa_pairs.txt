@@ -137,3 +137,18 @@ How is 'apparent surface' defined for a lamp: 'Apparent surface' is defined in t
 How must a Team demonstrate compliance with photometric requirements for lamps under UNECE or SAE/DOT regulations: Teams must demonstrate compliance by either: - the presence of compliance markings on the lamps, or - detailed documentation that demonstrates compliance with the photometric requirements of the UNECE or SAE/DOT regulations, confirmed by the Team's certifying engineer.
 Which type of lamp is optional but may enhance practicality for Cruiser class vehicles: Headlamps and tail lamps are not required, though would increase the practicality of Cruiser vehicles.
 What printed diagrams and how many copies must be displayed to identify electrical isolation procedures in an emergency: Two printed A4 copies of a diagram of the Competition Vehicle in top view, with the front of the Competition Vehicle depicted at the top of the diagram, and clearly showing how emergency isolation is to be activated.
+what is team notice #22/2025: Team Notice #22/2025 was issued by World Solar Challenge Mission Control on July 25, 2025, and outlines the official opening and closing times of all control stops along the route.
+are teams required to follow the control stop operating times exactly: Yes, teams must strictly adhere to the opening and closing times as defined in the Route Notes.
+what happens if a team does not comply with control stop times: Failure to comply may result in penalties or disqualification.
+when is the katherine control stop open: Katherine is open on Sunday, August 24, 2025, from 11:00 to 17:00.
+when is the dunmarra control stop open: Dunmarra opens on Sunday, August 24 at 15:00 and closes on Monday, August 25 at 14:00.
+when is the tennant creek control stop open: Tennant Creek opens on Monday, August 25 at 10:00 and closes on Tuesday, August 26 at 11:00.
+when is the barrow creek control stop open: Barrow Creek is open from Monday, August 25 at 13:00 until Tuesday, August 26 at 15:00.
+when is the alice springs control stop open: Alice Springs opens on Tuesday, August 26 at 08:00 and closes on Wednesday, August 27 at 10:30.
+when is the erldunda control stop open: Erldunda is open from Tuesday, August 26 at 11:00 until Wednesday, August 27 at 14:00
+when is the coober pedy control stop open: Coober Pedy opens on Tuesday, August 26 at 16:00 and closes on Thursday, August 28 at 13:00.
+when is the glendambo control stop open: Glendambo operates from Wednesday, August 27 at 10:00 until Thursday, August 28 at 17:00.
+when is the port augusta control stop open: Port Augusta opens on Wednesday, August 27 at 14:00 and closes on Friday, August 29 at 13:00.
+when is the victoria park control stop open: Victoria Park is open from Thursday, August 28 at 08:00 until Friday, August 29 at 17:30.
+how are teams arriving by trailer on saturday managed: Teams arriving on Saturday by trailer will be staged into Victoria Square, with the order of arrival managed and confirmed by Mission Control.
+who can teams contact for questions about the schedule or logistics: Teams can contact the organization via email at teams@worldsolarchallenge.org.
