@@ -266,7 +266,7 @@ Helios AI was started through a collaboration with [Onda Solare](https://device.
   <img src="pictures/emilia5.9.bmp" alt="Emilia 5.9 solar car of Onda Solare" width="900">
 </p>
 
-Watch the event footage: [Bridgestone World Solar Challenge 2025 — Emilia 5.9](https://www.youtube.com/watch?v=8vY06AmO5Fg).
+Watch the Teaser trailer : [Surfin’ the wave - Emilia 5.9](https://www.youtube.com/watch?v=8vY06AmO5Fg).
 
 ## License
 
