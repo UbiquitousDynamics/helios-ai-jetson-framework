@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "catalog_revision": "REPLACE-BEFORE-USE",
+  "verified_on": "1970-01-01",
+  "expires_on": "1970-01-01",
+  "models": [
+    {
+      "id": "groq/replace-me",
+      "provider": "groq",
+      "model": "REPLACE_WITH_VERIFIED_GROQ_MODEL",
+      "input_per_million_usd": "999999",
+      "output_per_million_usd": "999999",
+      "context_window": 8192,
+      "max_output_tokens": 1024,
+      "free_tier": false
+    },
+    {
+      "id": "openai/replace-me",
+      "provider": "openai",
+      "model": "REPLACE_WITH_VERIFIED_OPENAI_MODEL",
+      "input_per_million_usd": "999999",
+      "output_per_million_usd": "999999",
+      "context_window": 8192,
+      "max_output_tokens": 1024,
+      "free_tier": false
+    }
+  ]
+}

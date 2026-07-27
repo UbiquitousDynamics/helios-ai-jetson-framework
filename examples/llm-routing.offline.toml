@@ -1,0 +1,54 @@
+schema_version = 1
+
+[router]
+policy = "local_only"
+remote_enabled = false
+allowlist = ["ollama"]
+denylist = []
+unknown_connectivity = "prefer_local"
+
+[privacy]
+default = "local_only"
+allow_remote_transcripts = false
+allow_remote_context = false
+allow_remote_rag_context = false
+redaction_failure = "local_only"
+
+[budget]
+enabled = true
+per_request_usd = "0"
+daily_usd = "0"
+monthly_usd = "0"
+zero_cost_only = true
+missing_usage = "settle_reserved"
+
+[observability]
+metrics_enabled = true
+metrics_path = "../logs/llm-metrics.jsonl"
+log_content = false
+log_headers = false
+metrics_retention_days = 14
+
+[modes.talk]
+candidates = ["local-talk"]
+max_output_tokens = 64
+complexity_threshold = 3
+first_speech_min_chars = 0
+
+[modes.think]
+candidates = ["local-think"]
+max_output_tokens = 256
+complexity_threshold = 2
+first_speech_min_chars = 0
+
+[targets.local-talk]
+provider = "ollama"
+model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
+languages = ["it", "en"]
+retry_attempts = 3
+
+[targets.local-think]
+provider = "ollama"
+model = "qwen3:0.6b"
+languages = ["it", "en"]
+retry_attempts = 3

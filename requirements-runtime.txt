@@ -6,3 +6,4 @@ PyAudio>=0.2.14,<1
 sentence-transformers>=3,<6
 sounddevice>=0.5,<1
 vosk>=0.3.45,<1
+tomli>=2,<3; python_version < "3.11"

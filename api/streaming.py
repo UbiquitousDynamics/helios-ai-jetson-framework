@@ -1,0 +1,830 @@
+"""Provider-independent streaming, speech buffering, retry, and failover."""
+
+from __future__ import annotations
+
+import re
+import threading
+import time
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from decimal import Decimal
+from typing import Any
+
+from api.budget import BudgetError, BudgetLedger, Reservation
+from api.catalog import ModelPrice
+from api.health import HealthTracker
+from api.metrics import MetricEvent, SafeMetricsRecorder
+from api.privacy import PrivacyGuard
+from api.providers.contracts import (
+    CancellationToken,
+    ChatRequest,
+    Completed,
+    CompletionMetadata,
+    ErrorCategory,
+    FinishReason,
+    ProviderError,
+    ReasoningDelta,
+    Refused,
+    TextDelta,
+)
+from api.routing import ProviderRegistry, ProviderTarget, RoutePlanner
+
+_SPEECH_MARKUP = re.compile(r"[*$#@]")
+_SENTENCE_BOUNDARY = re.compile(r"[.!?;:,](?:\s|$)")
+_TERMINAL_ERRORS = frozenset(
+    {
+        ErrorCategory.CANCELLED,
+        ErrorCategory.SAFETY_REFUSAL,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionTarget:
+    """A routed target plus attempt-specific controls not used for selection."""
+
+    route: ProviderTarget
+    retry_attempts: int = 1
+    max_output_tokens: int | None = None
+    options: Mapping[str, Any] = field(default_factory=dict)
+    price: ModelPrice | None = None
+
+    def __post_init__(self) -> None:
+        if self.retry_attempts < 1:
+            raise ValueError("retry_attempts must be at least one")
+        if self.max_output_tokens is not None and self.max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be at least one")
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingResult:
+    text: str
+    metadata: CompletionMetadata
+    target: ProviderTarget
+    attempts: int
+    first_token_seconds: float | None
+    first_audio_seconds: float | None
+
+
+class SpeechReplayUnsafeError(RuntimeError):
+    """A provider failed after audio may already have reached the listener."""
+
+    def __init__(self, error: ProviderError) -> None:
+        super().__init__("The model stream failed after speech output began; replay is unsafe")
+        self.error = error
+
+
+class _SpeechFailure(Exception):
+    def __init__(self, error: Exception) -> None:
+        super().__init__("speech output failed")
+        self.error = error
+
+
+class CancellationController:
+    """Thread-safe cancellation token used by the synchronous public API."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    def raise_if_cancelled(self) -> None:
+        if self.cancelled:
+            raise RuntimeError("request cancelled")
+
+
+@dataclass(slots=True)
+class _AttemptState:
+    started_at: float
+    first_token_at: float | None = None
+    first_audio_at: float | None = None
+    speech_committed: bool = False
+
+
+class StreamingResponseCoordinator:
+    """Execute a deterministic route without replaying spoken partial output."""
+
+    def __init__(
+        self,
+        registry: ProviderRegistry,
+        *,
+        privacy: PrivacyGuard | None = None,
+        health: HealthTracker | None = None,
+        budget: BudgetLedger | None = None,
+        metrics: SafeMetricsRecorder | None = None,
+        require_priced_remote: bool = False,
+        retry_wait: float = 5.0,
+        maximum_retry_delay: float = 5.0,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if retry_wait < 0 or maximum_retry_delay < 0:
+            raise ValueError("retry delays cannot be negative")
+        self.registry = registry
+        self.privacy = privacy
+        self.health = health
+        self.budget = budget
+        self.metrics = metrics or SafeMetricsRecorder(enabled=False)
+        self.require_priced_remote = require_priced_remote
+        self.retry_wait = retry_wait
+        self.maximum_retry_delay = maximum_retry_delay
+        self._sleep = sleep
+        self._clock = clock
+
+    def run(
+        self,
+        request: ChatRequest,
+        targets: tuple[ExecutionTarget, ...],
+        *,
+        speak: Callable[[str], Any] | None = None,
+        first_speech_min_chars: int = 0,
+        maximum_first_audio_seconds: float | None = None,
+        cancellation: CancellationToken | None = None,
+        route_reason: str | None = None,
+    ) -> StreamingResult:
+        if not targets:
+            raise ProviderError(
+                ErrorCategory.PROVIDER_UNAVAILABLE,
+                "No language-model route is available",
+                provider="router",
+                model=request.model,
+                transmitted=False,
+            )
+        if first_speech_min_chars < 0:
+            raise ValueError("first_speech_min_chars cannot be negative")
+        if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
+            raise ValueError("maximum_first_audio_seconds must be positive")
+
+        last_error: ProviderError | None = None
+        total_attempts = 0
+        for fallback_index, execution in enumerate(targets):
+            target = execution.route
+            routed_request = self._request_for_target(request, execution)
+            try:
+                routed_request = self._authorize(routed_request, target)
+            except ProviderError as error:
+                last_error = error
+                self._record_failure(
+                    execution,
+                    error,
+                    fallback_index=fallback_index,
+                    attempt_id=None,
+                    state=None,
+                    route_reason=route_reason,
+                )
+                continue
+
+            for provider_attempt in range(1, execution.retry_attempts + 1):
+                self._raise_if_cancelled(cancellation, target)
+                total_attempts += 1
+                attempt_id = uuid.uuid4().hex
+                reservation: Reservation | None = None
+                state = _AttemptState(started_at=self._clock())
+                try:
+                    reservation = self._reserve(
+                        execution,
+                        routed_request,
+                        attempt_id=attempt_id,
+                    )
+                    provider = self._provider(target)
+                    result = self._stream_once(
+                        provider=provider,
+                        execution=execution,
+                        request=routed_request,
+                        speak=speak,
+                        first_speech_min_chars=first_speech_min_chars,
+                        cancellation=cancellation,
+                        state=state,
+                    )
+                    self._require_priced_model_identity(execution, result.metadata)
+                    charged = self._settle_success(
+                        reservation,
+                        execution,
+                        result.metadata,
+                        speech_committed=state.speech_committed,
+                    )
+                    latency = self._clock() - state.started_at
+                    if self.health is not None:
+                        rate_limits = result.metadata.rate_limits
+                        if rate_limits is not None and (
+                            rate_limits.remaining_requests == 0
+                            or rate_limits.remaining_tokens == 0
+                        ):
+                            self.health.record_failure(
+                                target.health_key,
+                                ErrorCategory.RATE_LIMITED,
+                                retry_after_seconds=rate_limits.retry_after_seconds,
+                            )
+                        elif (
+                            maximum_first_audio_seconds is not None
+                            and target.remote
+                            and len(targets) > 1
+                            and result.first_audio_seconds is not None
+                            and result.first_audio_seconds > maximum_first_audio_seconds
+                        ):
+                            self.health.record_failure(
+                                target.health_key,
+                                ErrorCategory.FIRST_TOKEN_TIMEOUT,
+                            )
+                        else:
+                            self.health.record_success(
+                                target.health_key,
+                                latency_seconds=latency,
+                            )
+                    self._record_metric(
+                        MetricEvent.from_usage(
+                            "llm_attempt_succeeded",
+                            result.metadata.usage,
+                            provider=target.provider,
+                            model=target.model,
+                            mode=request.mode,
+                            language=request.language,
+                            route_reason=route_reason,
+                            request_id=result.metadata.request_id,
+                            attempt_id=attempt_id,
+                            latency_ms=latency * 1_000,
+                            first_token_ms=self._elapsed_ms(
+                                state.started_at,
+                                state.first_token_at,
+                            ),
+                            first_audio_ms=self._elapsed_ms(
+                                state.started_at,
+                                state.first_audio_at,
+                            ),
+                            remaining_requests=(
+                                result.metadata.rate_limits.remaining_requests
+                                if result.metadata.rate_limits is not None
+                                else None
+                            ),
+                            remaining_tokens=(
+                                result.metadata.rate_limits.remaining_tokens
+                                if result.metadata.rate_limits is not None
+                                else None
+                            ),
+                            cost_usd=charged,
+                            fallback_count=fallback_index,
+                        )
+                    )
+                    return replace(result, attempts=total_attempts)
+                except _SpeechFailure as wrapped:
+                    speech_error = ProviderError(
+                        ErrorCategory.UNKNOWN,
+                        "Speech output failed during a provider stream",
+                        provider=target.provider,
+                        model=target.model,
+                        retryable_same_provider=False,
+                        transmitted=True,
+                    )
+                    try:
+                        self._settle_failure(
+                            reservation,
+                            execution,
+                            speech_error,
+                            speech_committed=True,
+                        )
+                    except SpeechReplayUnsafeError:
+                        # The outstanding reservation remains a conservative
+                        # charge and the original TTS exception stays intact.
+                        pass
+                    raise wrapped.error from None
+                except SpeechReplayUnsafeError:
+                    raise
+                except ProviderError as error:
+                    last_error = error
+                    self._settle_failure(
+                        reservation,
+                        execution,
+                        error,
+                        speech_committed=state.speech_committed,
+                    )
+                    if self.health is not None and error.category not in {
+                        ErrorCategory.BUDGET_EXHAUSTED,
+                        ErrorCategory.PRIVACY_BLOCKED,
+                    }:
+                        self.health.record_failure(target.health_key, error)
+                    self._record_failure(
+                        execution,
+                        error,
+                        fallback_index=fallback_index,
+                        attempt_id=attempt_id,
+                        state=state,
+                        route_reason=route_reason,
+                    )
+                    if state.speech_committed:
+                        raise SpeechReplayUnsafeError(error) from None
+                    if error.category in _TERMINAL_ERRORS:
+                        raise
+                    if not self._can_retry(error, provider_attempt, execution):
+                        break
+                    delay = max(self.retry_wait, error.retry_after_seconds or 0.0)
+                    if delay > self.maximum_retry_delay:
+                        break
+                    if delay:
+                        self._sleep(delay)
+                except Exception:
+                    error = ProviderError(
+                        ErrorCategory.UNKNOWN,
+                        "Language-model provider failed unexpectedly",
+                        provider=target.provider,
+                        model=target.model,
+                        retryable_same_provider=False,
+                        transmitted=None,
+                    )
+                    self._settle_failure(
+                        reservation,
+                        execution,
+                        error,
+                        speech_committed=state.speech_committed,
+                    )
+                    if self.health is not None:
+                        self.health.record_failure(target.health_key, error)
+                    self._record_failure(
+                        execution,
+                        error,
+                        fallback_index=fallback_index,
+                        attempt_id=attempt_id,
+                        state=state,
+                        route_reason=route_reason,
+                    )
+                    if state.speech_committed:
+                        raise SpeechReplayUnsafeError(error) from None
+                    last_error = error
+                    break
+
+        if last_error is not None:
+            last_error.attempts = total_attempts
+            raise last_error
+        raise ProviderError(
+            ErrorCategory.PROVIDER_UNAVAILABLE,
+            "No language-model route completed successfully",
+            provider="router",
+            model=request.model,
+            transmitted=False,
+        )
+
+    def _stream_once(
+        self,
+        *,
+        provider: Any,
+        execution: ExecutionTarget,
+        request: ChatRequest,
+        speak: Callable[[str], Any] | None,
+        first_speech_min_chars: int,
+        cancellation: CancellationToken | None,
+        state: _AttemptState,
+    ) -> StreamingResult:
+        response_parts: list[str] = []
+        sentence_parts: list[str] = []
+        boundary_seen = False
+        completed: CompletionMetadata | None = None
+
+        def flush_speech() -> None:
+            nonlocal boundary_seen
+            if speak is None or not sentence_parts:
+                return
+            sentence = _SPEECH_MARKUP.sub("", "".join(sentence_parts)).strip()
+            sentence_parts.clear()
+            boundary_seen = False
+            if not sentence:
+                return
+            state.speech_committed = True
+            if state.first_audio_at is None:
+                state.first_audio_at = self._clock()
+            try:
+                speak(sentence)
+            except Exception as error:
+                raise _SpeechFailure(error) from None
+
+        iterator: Any = None
+        try:
+            events = provider.stream(request, cancellation=cancellation)
+            iterator = iter(events)
+            for event in iterator:
+                if isinstance(event, TextDelta):
+                    if not event.text:
+                        continue
+                    if state.first_token_at is None:
+                        state.first_token_at = self._clock()
+                    response_parts.append(event.text)
+                    if speak is not None:
+                        sentence_parts.append(event.text)
+                        boundary_seen = (
+                            boundary_seen or _SENTENCE_BOUNDARY.search(event.text) is not None
+                        )
+                        generated_chars = sum(len(part) for part in response_parts)
+                        if boundary_seen and generated_chars >= first_speech_min_chars:
+                            flush_speech()
+                elif isinstance(event, ReasoningDelta):
+                    continue
+                elif isinstance(event, Refused):
+                    raise ProviderError(
+                        ErrorCategory.SAFETY_REFUSAL,
+                        event.safe_message or "The provider declined this request",
+                        provider=execution.route.provider,
+                        model=execution.route.model,
+                        retryable_same_provider=False,
+                        transmitted=True,
+                        request_id=event.metadata.request_id,
+                    )
+                elif isinstance(event, Completed):
+                    completed = event.metadata
+                    break
+                else:
+                    raise ProviderError(
+                        ErrorCategory.MALFORMED_RESPONSE,
+                        "Provider emitted an unsupported streaming event",
+                        provider=execution.route.provider,
+                        model=execution.route.model,
+                        retryable_same_provider=False,
+                        transmitted=True,
+                    )
+        except _SpeechFailure:
+            raise
+        except ProviderError:
+            raise
+        except Exception:
+            raise ProviderError(
+                ErrorCategory.UNKNOWN,
+                "Language-model stream failed unexpectedly",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=False,
+                transmitted=None,
+            ) from None
+        finally:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+        if completed is None:
+            raise ProviderError(
+                ErrorCategory.MALFORMED_RESPONSE,
+                "Provider stream ended without completion metadata",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=True,
+                transmitted=True,
+            )
+        if completed.finish_reason is FinishReason.SAFETY:
+            raise ProviderError(
+                ErrorCategory.SAFETY_REFUSAL,
+                "The provider declined this request",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=False,
+                transmitted=True,
+                request_id=completed.request_id,
+            )
+        if completed.finish_reason is FinishReason.CANCELLED:
+            raise ProviderError(
+                ErrorCategory.CANCELLED,
+                "Provider stream was cancelled",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=False,
+                transmitted=True,
+                request_id=completed.request_id,
+            )
+        if completed.finish_reason is FinishReason.ERROR:
+            raise ProviderError(
+                ErrorCategory.UNKNOWN,
+                "Provider reported an unsuccessful completion",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=False,
+                transmitted=True,
+                request_id=completed.request_id,
+            )
+        if completed.finish_reason is FinishReason.TOOL_CALL:
+            raise ProviderError(
+                ErrorCategory.UNSUPPORTED_FEATURE,
+                "Provider returned an unsupported tool call",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=False,
+                transmitted=True,
+                request_id=completed.request_id,
+            )
+
+        text = "".join(response_parts)
+        if not text.strip():
+            raise ProviderError(
+                ErrorCategory.EMPTY_COMPLETION,
+                "Provider returned an empty completion",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=True,
+                transmitted=True,
+            )
+        if speak is not None:
+            flush_speech()
+        return StreamingResult(
+            text=text,
+            metadata=completed,
+            target=execution.route,
+            attempts=1,
+            first_token_seconds=self._elapsed_seconds(
+                state.started_at,
+                state.first_token_at,
+            ),
+            first_audio_seconds=self._elapsed_seconds(
+                state.started_at,
+                state.first_audio_at,
+            ),
+        )
+
+    @staticmethod
+    def _request_for_target(
+        request: ChatRequest,
+        execution: ExecutionTarget,
+    ) -> ChatRequest:
+        max_output = execution.max_output_tokens
+        if max_output is None:
+            max_output = request.max_output_tokens
+        if execution.route.max_output_tokens is not None and max_output is not None:
+            max_output = min(max_output, execution.route.max_output_tokens)
+        return replace(
+            request,
+            model=execution.route.model,
+            max_output_tokens=max_output,
+            options={
+                **dict(execution.options),
+                **{
+                    name: value
+                    for name, value in request.options.items()
+                    if name not in {"complex", "resource_offload"}
+                },
+            },
+        )
+
+    def _authorize(
+        self,
+        request: ChatRequest,
+        target: ProviderTarget,
+    ) -> ChatRequest:
+        if not target.remote:
+            return PrivacyGuard.for_local(request)
+        if self.privacy is None:
+            if not request.remote_authorized:
+                raise ProviderError(
+                    ErrorCategory.PRIVACY_BLOCKED,
+                    "Remote request was not privacy-authorized",
+                    provider=target.provider,
+                    model=target.model,
+                    transmitted=False,
+                )
+            return request
+        return self.privacy.authorize_remote(request)
+
+    def _provider(self, target: ProviderTarget) -> Any:
+        try:
+            return self.registry.get(target.provider)
+        except ProviderError:
+            raise
+        except Exception:
+            raise ProviderError(
+                ErrorCategory.PROVIDER_UNAVAILABLE,
+                "Language-model provider could not be initialized",
+                provider=target.provider,
+                model=target.model,
+                retryable_same_provider=False,
+                transmitted=False,
+            ) from None
+
+    @staticmethod
+    def _raise_if_cancelled(
+        cancellation: CancellationToken | None,
+        target: ProviderTarget,
+    ) -> None:
+        if cancellation is None:
+            return
+        try:
+            cancellation.raise_if_cancelled()
+            cancelled = cancellation.cancelled
+            if not isinstance(cancelled, bool):
+                raise TypeError
+        except ProviderError:
+            raise
+        except Exception:
+            raise ProviderError(
+                ErrorCategory.CANCELLED,
+                "Language-model request was cancelled",
+                provider=target.provider,
+                model=target.model,
+                retryable_same_provider=False,
+                transmitted=False,
+            ) from None
+        if cancelled:
+            raise ProviderError(
+                ErrorCategory.CANCELLED,
+                "Language-model request was cancelled",
+                provider=target.provider,
+                model=target.model,
+                retryable_same_provider=False,
+                transmitted=False,
+            )
+
+    def _reserve(
+        self,
+        execution: ExecutionTarget,
+        request: ChatRequest,
+        *,
+        attempt_id: str,
+    ) -> Reservation | None:
+        if not execution.route.remote:
+            return None
+        if execution.price is None:
+            if self.require_priced_remote:
+                raise ProviderError(
+                    ErrorCategory.BUDGET_EXHAUSTED,
+                    "Remote model has no current catalog entry",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    transmitted=False,
+                )
+            return None
+        if self.budget is None:
+            if self.require_priced_remote:
+                raise ProviderError(
+                    ErrorCategory.BUDGET_EXHAUSTED,
+                    "Remote budget accounting is unavailable",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    transmitted=False,
+                )
+            return None
+        try:
+            return self.budget.reserve(
+                provider=execution.route.provider,
+                model=execution.route.model,
+                attempt_id=attempt_id,
+                price=execution.price,
+                estimated_input_tokens=RoutePlanner.estimate_input_tokens(request),
+                max_output_tokens=(
+                    request.max_output_tokens
+                    or execution.route.max_output_tokens
+                    or execution.price.max_output_tokens
+                ),
+            )
+        except (BudgetError, ValueError):
+            raise ProviderError(
+                ErrorCategory.BUDGET_EXHAUSTED,
+                "Remote request was blocked by the configured budget",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                transmitted=False,
+            ) from None
+
+    def _settle_success(
+        self,
+        reservation: Reservation | None,
+        execution: ExecutionTarget,
+        metadata: CompletionMetadata,
+        *,
+        speech_committed: bool,
+    ) -> Decimal | None:
+        if reservation is None or self.budget is None:
+            return None
+        try:
+            settlement = self.budget.settle(
+                reservation.reservation_id,
+                usage=metadata.usage,
+                price=execution.price,
+            )
+        except (BudgetError, ValueError):
+            error = ProviderError(
+                ErrorCategory.BUDGET_EXHAUSTED,
+                "Remote usage could not be reconciled safely",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                transmitted=True,
+            )
+            if speech_committed:
+                raise SpeechReplayUnsafeError(error) from None
+            raise error from None
+        return settlement.charged_usd
+
+    @staticmethod
+    def _require_priced_model_identity(
+        execution: ExecutionTarget,
+        metadata: CompletionMetadata,
+    ) -> None:
+        if execution.price is None:
+            return
+        if metadata.resolved_model != execution.route.model:
+            raise ProviderError(
+                ErrorCategory.MALFORMED_RESPONSE,
+                "Provider model identity did not match the priced route",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                retryable_same_provider=False,
+                transmitted=True,
+                request_id=metadata.request_id,
+            )
+
+    def _settle_failure(
+        self,
+        reservation: Reservation | None,
+        execution: ExecutionTarget,
+        error: ProviderError,
+        *,
+        speech_committed: bool,
+    ) -> None:
+        if reservation is None or self.budget is None:
+            return
+        try:
+            if error.transmitted is False:
+                self.budget.settle(
+                    reservation.reservation_id,
+                    actual_amount_usd=Decimal(0),
+                )
+            else:
+                self.budget.settle(reservation.reservation_id)
+        except (BudgetError, ValueError):
+            settlement_error = ProviderError(
+                ErrorCategory.BUDGET_EXHAUSTED,
+                "Remote usage could not be reconciled safely",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                transmitted=error.transmitted,
+            )
+            if speech_committed:
+                raise SpeechReplayUnsafeError(settlement_error) from None
+            raise settlement_error from None
+
+    def _record_failure(
+        self,
+        execution: ExecutionTarget,
+        error: ProviderError,
+        *,
+        fallback_index: int,
+        attempt_id: str | None,
+        state: _AttemptState | None,
+        route_reason: str | None,
+    ) -> None:
+        latency_ms = None
+        first_token_ms = None
+        first_audio_ms = None
+        if state is not None:
+            latency_ms = (self._clock() - state.started_at) * 1_000
+            first_token_ms = self._elapsed_ms(state.started_at, state.first_token_at)
+            first_audio_ms = self._elapsed_ms(state.started_at, state.first_audio_at)
+        self._record_metric(
+            MetricEvent(
+                event="llm_attempt_failed",
+                provider=execution.route.provider,
+                model=execution.route.model,
+                mode=next(iter(execution.route.modes)),
+                language=None,
+                route_reason=route_reason,
+                request_id=error.request_id,
+                attempt_id=attempt_id,
+                latency_ms=latency_ms,
+                first_token_ms=first_token_ms,
+                first_audio_ms=first_audio_ms,
+                error_category=error.category,
+                fallback_count=fallback_index,
+            )
+        )
+
+    def _record_metric(self, event: MetricEvent) -> None:
+        try:
+            self.metrics.record(event)
+        except Exception:
+            # Observability must never change routing, speech, or budget behavior.
+            return
+
+    @staticmethod
+    def _can_retry(
+        error: ProviderError,
+        provider_attempt: int,
+        execution: ExecutionTarget,
+    ) -> bool:
+        return error.retryable_same_provider and provider_attempt < execution.retry_attempts
+
+    @staticmethod
+    def _elapsed_seconds(started_at: float, observed_at: float | None) -> float | None:
+        return None if observed_at is None else observed_at - started_at
+
+    @staticmethod
+    def _elapsed_ms(started_at: float, observed_at: float | None) -> float | None:
+        elapsed = StreamingResponseCoordinator._elapsed_seconds(started_at, observed_at)
+        return None if elapsed is None else elapsed * 1_000
+
+
+__all__ = [
+    "CancellationController",
+    "ExecutionTarget",
+    "SpeechReplayUnsafeError",
+    "StreamingResponseCoordinator",
+    "StreamingResult",
+]

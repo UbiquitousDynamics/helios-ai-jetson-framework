@@ -24,9 +24,10 @@ vehicle control, telemetry, navigation, battery management, or GPIO
 integration.
 
 > **Current implementation:** Vosk transcribes the microphone, an explicit
-> state machine routes finalized utterances, Ollama generates conversational
-> answers, a local SentenceTransformer retrieves regulations through an
-> integrity-checked index, and a shared Piper instance speaks the result.
+> state machine routes finalized utterances, a local-first hybrid LLM layer
+> selects Ollama or an explicitly authorized remote SSE endpoint, a local
+> SentenceTransformer retrieves regulations through an integrity-checked
+> index, and a shared Piper instance speaks the result.
 
 ## Contents
 
@@ -86,6 +87,8 @@ Implemented capabilities include:
 - consecutive-word deduplication for Vosk results;
 - whole-word wake and RAG trigger detection;
 - local streaming chat through the official Ollama Python client;
+- optional, fail-closed remote Chat Completions SSE routing with privacy,
+  health, cost, and no-replay controls;
 - custom Italian and English Ollama definitions for concise responses;
 - offline Italian and English Piper voices bundled as ONNX models;
 - one Piper instance shared by direct and Ollama-generated responses;
@@ -109,8 +112,11 @@ flowchart LR
     Router -->|Wake word| Command[COMMAND path]
     Command --> Intro{Presentation question?}
     Intro -->|Yes| Preset[Local predefined answer]
-    Intro -->|No| Ollama[Ollama chat model]
-    Ollama --> Stream[Streaming text chunks]
+    Intro -->|No| LLMRouter{Hybrid LLM router}
+    LLMRouter -->|Default| Ollama[Local Ollama model]
+    LLMRouter -->|Explicit opt-in| Remote[Remote SSE provider]
+    Ollama --> Stream[Normalized text deltas]
+    Remote --> Stream
 
     Router -->|Regolamento / Regulation| RagState[RAG state]
     RagState --> Query[Next finalized utterance]
@@ -136,7 +142,8 @@ The application uses a small composition-root architecture:
 - `main.py` configures logging and owns the top-level application lifecycle.
 - `VoiceAssistant` coordinates state without implementing hardware details.
 - `SpeechRecognizer` isolates PyAudio and Vosk.
-- `APIClient` isolates Ollama, streaming, retry policy, and optional speech.
+- `APIClient` preserves the public model API while provider adapters, routing,
+  streaming safety, privacy, health, and budget controls remain internal.
 - `RagSystem` owns corpus chunking, index generation, integrity validation, and
   ranking.
 - `PiperTTS` isolates voice loading, synthesis, WAV parsing, and playback.
@@ -443,7 +450,8 @@ classes and protocols.
 | `requirements-runtime.txt` | Dependencies that resolve consistently across desktop and Jetson |
 | `requirements.txt` | Desktop install, adding generic Torch, ONNX Runtime, and Piper |
 | `requirements-jetson.txt` | Shared dependencies after platform backends are provisioned |
-| `requirements-dev.txt` | NumPy, Pytest, and Ruff only; no models or audio hardware required |
+| `requirements-remote.txt` | Optional HTTP transport for remote SSE providers |
+| `requirements-dev.txt` | Model-free test and lint dependencies, including the fake-transport HTTP surface |
 
 Jetson inference packages are deliberately not pinned to guessed public wheel
 URLs. Torch and ONNX Runtime must match the exact JetPack/L4T image.
@@ -499,18 +507,16 @@ Explicit input-device selection is not implemented.
 
 ### `APIClient`
 
-The Ollama adapter:
+The compatibility boundary:
 
-- accepts a base host or a legacy endpoint URL and normalizes it;
-- creates the SDK client only on first use;
-- performs no constructor warm-up unless `warm_up()` is called explicitly;
-- shares the assistant's Piper instance;
-- uses one parser for `talk()` and `think()`;
-- reads the SDK's `done` and `done_reason` completion fields;
-- flushes speech at punctuation;
-- retries transient transport failures before speech begins;
-- avoids replaying partially spoken streams;
-- raises `APIClientError` after exhausted or non-transient API failures.
+- defaults to the same lazy Ollama client and model payloads;
+- keeps `talk()`, `think()`, `warm_up()`, shared Piper, and idempotent cleanup;
+- normalizes provider streams before sentence-level speech;
+- retries or switches targets only before speech is committed;
+- supports strict remote privacy authorization, health cooldowns, an expiring
+  price catalog, durable budgets, and content-free metrics;
+- never performs remote warm-up;
+- raises sanitized `APIClientError` values after routing is exhausted.
 
 The configured host defaults to `http://localhost:11434`.
 
@@ -669,7 +675,7 @@ module-level constants remain as compatibility aliases.
 
 ### Environment variables
 
-Two deployment overrides are supported:
+The two original deployment overrides remain supported:
 
 ```bash
 export HELIOS_LANGUAGE=it
@@ -688,6 +694,21 @@ Supported language values are `it` and `en`. Unsupported values raise
 
 Legacy values such as `http://localhost:11434/api/generate` are accepted for the
 Ollama host and normalized to the SDK base host.
+
+Optional hybrid routing uses a versioned TOML file:
+
+```bash
+export HELIOS_LLM_CONFIG=examples/llm-routing.offline.toml
+export HELIOS_LLM_REMOTE_ENABLED=false
+```
+
+Remote operation is opt-in and fails closed. The repository includes offline,
+free-tier-first, paid-first, and local-first escalation examples. The committed
+catalog is intentionally stale and must be replaced with reviewed current
+provider data. See
+[`docs/HYBRID_LLM_OPERATIONS.md`](docs/HYBRID_LLM_OPERATIONS.md) for the full
+configuration, credential, privacy, budget, live-test, benchmark, rollout, and
+human-review checklist.
 
 ### Active settings
 
@@ -918,13 +939,15 @@ RAG corruption and stale-index errors are intentionally explicit. They include
 a rebuild instruction instead of silently returning a potentially unrelated
 passage.
 
-Do not publish logs if deployment prompts or operational queries are sensitive.
+Provider metrics use a closed schema that has no prompt, transcript, retrieved
+passage, response, header, or key field. Do not publish general application
+logs if other operational queries are sensitive.
 
 ## Testing and development
 
 ### Automated coverage
 
-The repository contains **35 model-free tests**. They do not require Ollama,
+The default suite is model-free and network-free. It does not require Ollama,
 microphone access, Piper, Vosk, Torch, or the bundled neural models.
 
 Covered behaviors include:
@@ -939,6 +962,10 @@ Covered behaviors include:
 - SDK `done`/`done_reason` stream parsing;
 - retry success, exhaustion, and no-replay behavior;
 - preservation of TTS failures;
+- normalized Ollama and OpenAI-compatible SSE adapters;
+- deterministic routing, privacy authorization, cooldowns, catalog freshness,
+  durable budget limits, and content-free metrics;
+- fallback before speech and the global no-replay rule after speech;
 - PCM-frame playback without WAV-header corruption;
 - lazy and bounded `aplay` execution;
 - microphone stream cleanup and PyAudio termination;
@@ -1058,6 +1085,10 @@ target-device measurements.
   incomplete.
 - `think()` exists as an API capability but is not used by the active assistant
   state machine.
+- The only remote vertical slice is strict OpenAI-compatible Chat Completions
+  SSE. Providers with different semantics require a separately tested adapter.
+- Provider accounts, current catalogs, legal/privacy approval, connectivity and
+  battery signals, and target-Jetson benchmarks are deployment responsibilities.
 
 ## Troubleshooting
 
@@ -1066,6 +1097,8 @@ target-device measurements.
 | No welcome message | Verify the selected Piper `.onnx` and adjacent `.onnx.json`, `piper-tts`, ONNX Runtime, and the default output device. |
 | Ollama cannot be reached | Start `ollama serve`, verify `HELIOS_OLLAMA_HOST`, and check the configured tag with `ollama list`. |
 | Conversational stream stops after speaking part of an answer | Check `app.log`. The request is intentionally not replayed after speech begins. |
+| Remote route always falls back locally | Check the privacy gates, connectivity state, catalog expiry, ledger permissions, budget, provider allowlist, and named credential variable. |
+| Remote routing must be stopped immediately | Set `HELIOS_LLM_EMERGENCY_LOCAL_ONLY=true` and restart Helios. |
 | Vosk model fails to load | Verify `HELIOS_LANGUAGE` and the corresponding bundled Vosk directory. |
 | No microphone transcription | Confirm PortAudio/PyAudio and the default 16 kHz-capable input device. |
 | RAG index is missing | Run `python scripts/build_index.py`, or allow the first RAG request to build it. |
