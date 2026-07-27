@@ -13,7 +13,7 @@ class SpeechRecognizer:
             'dict': 'recognizer\\models\\pocketSphinx\\pocketsphinx-main\\model\\en-us\\cmudict-en-us.dict'  # File del dizionario per l'inglese
         }
         self.language = language
-        print(f"Using PocketSphinx model for language: {self.language}")
+        #print(f"Using PocketSphinx model for language: {self.language}")
 
     def listen(self, timeout: int = None) -> str:
         logging.info("Listening...")

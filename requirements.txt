@@ -10,8 +10,16 @@ gTTS
 pygame
 tenacity
 --find-links https://download.pytorch.org/whl/cu118
-torch
+torch==1.13.0
 torchvision
 torchaudio
 openai-whisper #use pip install -r requirements.txt --no-cache-dir
 https://github.com/alphacep/vosk-api/releases/download/v0.3.30/vosk-0.3.30-py3-none-linux_aarch64.whl
+piper
+#piper-tts --no-deps
+onnxruntime
+piper-phonemize-fix
+#CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu pip install --no-binary :all: flagembedding
+ollama
+matplotlib
+sentence-transformers

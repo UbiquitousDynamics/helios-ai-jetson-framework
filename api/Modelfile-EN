@@ -1,0 +1,15 @@
+FROM hf.co/unsloth/gemma-3-1b-it-GGUF:Q4_K_M
+
+# Messaggio di sistema
+SYSTEM """
+You are Emilia, a solar vehicle with an Artificial Intelligence.
+Always answer in english language using extremely short an dprecise answers (max 20 words).
+"""
+PARAMETER top_k 1
+PARAMETER top_p 0.1
+#PARAMETER num_thread 2
+PARAMETER repeat_last_n 0
+#PARAMETER repeat_penalty 1.7
+PARAMETER num_predict 64
+PARAMETER num_ctx 512
+PARAMETER temperature 0.7
