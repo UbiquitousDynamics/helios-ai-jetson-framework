@@ -1,0 +1,5 @@
+# Model-free quality checks used by CI. Runtime model/audio packages are
+# intentionally excluded so tests can run without a microphone or model files.
+numpy>=1.26,<3
+pytest>=8.2,<9
+ruff>=0.9,<1
