@@ -16,7 +16,7 @@ LOG_FILE = 'app.log'  # Set to None for console only
 
 # Configuration constants for the speech synthesizer
 NAME = "emilia"
-LANGUAGE = "en"
+LANGUAGE = "it"
 TTS_FOLDER = 'tts_audio'
 TTS_MODEL = "audio/models/en_GB-alba-medium.onnx"  # default, sovrascritto poi se "it"
 
