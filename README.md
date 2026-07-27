@@ -6,31 +6,39 @@
 
 ## Local voice and RAG framework for NVIDIA Jetson
 
-Helios AI turns an edge computer into a hands-free, voice-driven assistant. A user
-can speak to the system, ask a local language model a question, or search a bundled
-knowledge base without needing a keyboard or display.
+Helios AI turns an edge computer into a hands-free, voice-driven assistant. A
+user can speak to the system, ask a local language model a question, or search a
+bundled knowledge base without needing a keyboard or display.
 
 The project was created for **Emilia 5.9**, Onda Solare's solar vehicle, and is
-primarily aimed at developers building voice interfaces for NVIDIA Jetson devices,
-robots, demonstrators, and other installations where interaction must remain
-simple and local. Its distinguishing feature is the combination of offline speech
-recognition, local neural text-to-speech, local semantic search, and an
-Ollama-hosted language model in one Python application.
+primarily aimed at developers building voice interfaces for NVIDIA Jetson
+devices, robots, demonstrators, and other installations where interaction must
+remain simple and local. Its distinguishing feature is the combination of
+offline speech recognition, local neural text-to-speech, local semantic search,
+and an Ollama-hosted language model in one Python application.
 
-Helios AI is a developer-oriented framework, not a packaged consumer application.
-The current repository contains the complete voice pipeline and the knowledge
-files used by the Emilia deployment, but it does not implement vehicle control,
-telemetry, navigation, battery management, or GPIO integration.
+Helios AI is a developer-oriented framework, not a packaged consumer
+application. The repository contains the complete voice pipeline and the
+knowledge files used by the Emilia deployment, but it does not implement
+vehicle control, telemetry, navigation, battery management, or GPIO
+integration.
 
-> **Current implementation:** Vosk transcribes the microphone, a small state
-> machine routes commands, Ollama generates conversational answers, a local
-> SentenceTransformers model retrieves regulations, and Piper speaks the result.
+> **Current implementation:** Vosk transcribes the microphone, an explicit
+> state machine routes finalized utterances, Ollama generates conversational
+> answers, a local SentenceTransformer retrieves regulations through an
+> integrity-checked index, and a shared Piper instance speaks the result.
 
 ## Contents
 
 - [What Helios AI does](#what-helios-ai-does)
 - [Architecture](#architecture)
+  - [Design and responsibilities](#design-and-responsibilities)
+  - [Component interaction](#component-interaction)
 - [Runtime workflows](#runtime-workflows)
+  - [Startup](#startup)
+  - [Conversational command](#conversational-command)
+  - [RAG query](#rag-query)
+  - [Shutdown](#shutdown)
 - [Repository structure](#repository-structure)
 - [Technology stack and dependencies](#technology-stack-and-dependencies)
 - [Main components](#main-components)
@@ -40,6 +48,7 @@ telemetry, navigation, battery management, or GPIO integration.
 - [Configuration](#configuration)
 - [Running and using the assistant](#running-and-using-the-assistant)
 - [Knowledge base and embeddings](#knowledge-base-and-embeddings)
+- [Asset validation and provenance](#asset-validation-and-provenance)
 - [Logging and diagnostics](#logging-and-diagnostics)
 - [Testing and development](#testing-and-development)
 - [Performance considerations](#performance-considerations)
@@ -51,39 +60,42 @@ telemetry, navigation, battery management, or GPIO integration.
 
 ## What Helios AI does
 
-The default configuration runs in Italian and continuously samples the default
-microphone in fixed 6.5-second windows.
+The default profile runs in Italian and listens through the default microphone.
+Each recognition call has a maximum duration of 6.5 seconds, but it returns
+earlier as soon as Vosk produces a finalized phrase.
 
-It supports two user flows:
+Helios supports two user flows:
 
 1. **Conversational command**
-   - Include `emilia`, `hello`, or `amelia` in the spoken phrase.
+   - Include `emilia`, `amelia`, or `hello` as a complete word in the spoken
+     phrase.
    - Helios sends the phrase to the configured Ollama chat model.
    - The streamed answer is synthesized locally with Piper as punctuation is
      received.
 
 2. **Knowledge-base query**
    - Say `regolamento` to enter RAG mode (`regulation` in English mode).
-   - Ask a question in the following listening window.
-   - Helios embeds the question, compares it with precomputed sentence embeddings,
-     selects the closest sentence, and speaks it.
+   - Ask a question in the following finalized utterance.
+   - Helios embeds the query, validates and searches the local vector index,
+     selects the configured number of passages, and speaks them.
 
 Implemented capabilities include:
 
 - offline Italian and English speech recognition with bundled Vosk models;
-- consecutive-word deduplication for Vosk partial and final results;
+- structured partial/final recognition events and first-final routing;
+- consecutive-word deduplication for Vosk results;
+- whole-word wake and RAG trigger detection;
 - local streaming chat through the official Ollama Python client;
-- custom Italian and English Ollama model definitions for short responses;
+- custom Italian and English Ollama definitions for concise responses;
 - offline Italian and English Piper voices bundled as ONNX models;
-- sentence-level semantic search with SentenceTransformers and cosine similarity;
-- local, precomputed compressed embeddings for the bundled text knowledge base;
+- one Piper instance shared by direct and Ollama-generated responses;
+- in-memory WAV synthesis that plays PCM frames without a temporary file;
+- source-aware semantic retrieval with SentenceTransformers and NumPy;
+- an atomic vector-index format bound to the corpus and embedding model;
 - wake and completion sounds through ALSA `aplay`;
-- predefined self-introduction responses for demonstration use;
-- CPU-only embedding inference for predictable behavior on low-end Jetson hardware.
-
-The repository also contains older TF-IDF document-loading and PocketSphinx
-implementations. They are available for reference but are not connected to the
-current `main.py` execution path.
+- explicit service cleanup and graceful `Ctrl+C` shutdown;
+- model-free automated tests and cross-platform CI;
+- asset checksum, companion-file, and provenance validation.
 
 ## Architecture
 
@@ -91,92 +103,131 @@ current `main.py` execution path.
 flowchart LR
     User([User]) --> Mic[Default microphone]
     Mic --> Vosk[Vosk SpeechRecognizer]
-    Vosk --> Router{Assistant state}
+    Vosk --> Event[RecognitionResult]
+    Event --> Router{VoiceAssistant state}
 
-    Router -->|Contains Emilia / Hello / Amelia| Command[COMMAND path]
-    Command --> Intro{Introduction question?}
-    Intro -->|Yes| Preset[Random predefined answer]
+    Router -->|Wake word| Command[COMMAND path]
+    Command --> Intro{Presentation question?}
+    Intro -->|Yes| Preset[Local predefined answer]
     Intro -->|No| Ollama[Ollama chat model]
     Ollama --> Stream[Streaming text chunks]
 
     Router -->|Regolamento / Regulation| RagState[RAG state]
-    RagState --> Query[Next spoken query]
+    RagState --> Query[Next finalized utterance]
     Query --> Encoder[Local all-MiniLM-L6-v2]
-    Knowledge[(uploads/*.txt)] --> Sentences[Sentence splitter]
-    Embeddings[(embeddings.npz)] --> Search[Dot-product similarity]
-    Encoder --> Search
-    Sentences --> Search
-    Search --> Match[Top matching sentence]
+    Knowledge[(uploads/*.txt)] --> Chunks[Source-aware chunks]
+    Chunks --> Manifest[Corpus fingerprint]
+    Index[(generated embeddings.npz)] --> Validation[Index validation]
+    Manifest --> Validation
+    Encoder --> Search[Normalized dot-product ranking]
+    Validation --> Search
+    Search --> Passages[RetrievedPassage results]
 
-    Preset --> Piper[Piper TTS]
+    Preset --> Piper[Shared PiperTTS]
     Stream --> Piper
-    Match --> Piper
+    Passages --> Piper
     Piper --> Speaker([Default audio output])
 ```
 
 ### Design and responsibilities
 
-The code is separated into small hardware and service adapters:
+The application uses a small composition-root architecture:
 
-- `main.py` is the process entry point.
-- `VoiceAssistant` owns the interaction state and coordinates the adapters.
-- `SpeechRecognizer` isolates microphone capture and Vosk transcription.
-- `APIClient` isolates Ollama chat and response streaming.
-- `RagSystem` owns knowledge loading, embedding generation, and similarity search.
-- `Pyttsx3TTS` wraps Piper synthesis despite retaining its historical class name.
-- `SoundPlayer` delegates short sound effects to ALSA.
+- `main.py` configures logging and owns the top-level application lifecycle.
+- `VoiceAssistant` coordinates state without implementing hardware details.
+- `SpeechRecognizer` isolates PyAudio and Vosk.
+- `APIClient` isolates Ollama, streaming, retry policy, and optional speech.
+- `RagSystem` owns corpus chunking, index generation, integrity validation, and
+  ranking.
+- `PiperTTS` isolates voice loading, synthesis, WAV parsing, and playback.
+- `SoundPlayer` delegates short cues to `aplay` with a bounded timeout.
+- `Settings` and `LanguageProfile` centralize validated configuration.
 
-This organization allows the recognizer, model client, retrieval strategy, or
-speech backend to be replaced independently. Some older implementations remain in
-the tree and have not yet been removed or adapted to the current interfaces.
+Production services have defaults, but `VoiceAssistant` accepts injected
+recognizer, TTS, sound, API, RAG, executor, random-choice, and sleep
+implementations. This keeps the hardware path convenient while allowing the
+same orchestration to be tested without opening a microphone, loading neural
+models, or contacting Ollama.
+
+Dependency direction is intentionally one-way:
+
+```text
+main.py
+  `-- VoiceAssistant
+      |-- SpeechRecognizer
+      |-- APIClient
+      |   `-- shared PiperTTS
+      |-- RagSystem (created only when RAG is first used)
+      `-- SoundPlayer
+```
 
 ### Component interaction
 
 ```mermaid
 classDiagram
+    class Settings {
+        +Path project_root
+        +str language
+        +float listen_timeout
+        +str ollama_host
+        +int top_k
+        +LanguageProfile profile
+    }
+
     class VoiceAssistant {
-        +SpeechRecognizer speech_recognizer
-        +APIClient api_client
-        +Pyttsx3TTS tts
-        +SoundPlayer sound_player
+        +AssistantState state
         +contains_wake_word(command) bool
-        +process_command(command)
-        +process_rag_command(command, searcher)
-        +run()
+        +process_command(command) str
+        +process_rag_command(command, searcher) str
+        +run_once() bool
+        +run(max_iterations)
+        +stop()
+        +close()
     }
 
     class SpeechRecognizer {
+        +listen_events(timeout) Iterator~RecognitionResult~
+        +listen_once(timeout) RecognitionResult
         +listen(timeout) Iterator~str~
-        +remove_consecutive_duplicates(text) str
+        +close()
     }
 
     class APIClient {
+        +warm_up(mode)
         +talk(message, context) str
         +think(message, context, tts) str
+        +close()
     }
 
     class RagSystem {
+        +read_chunks() tuple~CorpusChunk~
         +index_database(data) ndarray
         +load_embedding_matrix() ndarray
         +search(query, matrix, top_k) list
+        +retrieve(query, top_k) list~RetrievedPassage~
         +run(query, top_k, visualize) str
+        +clear_cache()
     }
 
-    class Pyttsx3TTS {
+    class PiperTTS {
+        +synthesize_wave(text) BytesIO
         +speak(text)
         +play_audio(filename)
+        +close()
     }
 
     class SoundPlayer {
+        +available bool
         +play_sound(path)
     }
 
+    Settings --> VoiceAssistant
     VoiceAssistant --> SpeechRecognizer
     VoiceAssistant --> APIClient
     VoiceAssistant --> RagSystem
-    VoiceAssistant --> Pyttsx3TTS
+    VoiceAssistant --> PiperTTS
     VoiceAssistant --> SoundPlayer
-    APIClient --> Pyttsx3TTS
+    APIClient --> PiperTTS
 ```
 
 ## Runtime workflows
@@ -187,49 +238,63 @@ classDiagram
 sequenceDiagram
     participant Main as main.py
     participant VA as VoiceAssistant
-    participant O as Ollama
-    participant V as Vosk
-    participant R as RagSystem
-    participant P as Piper
+    participant P as PiperTTS
+    participant V as SpeechRecognizer
+    participant O as APIClient
 
-    Main->>VA: Construct
-    VA->>P: Load configured voice model
-    VA->>O: Construct client and warm chat model
-    VA->>V: Load configured language model
+    Main->>Main: configure_logging()
+    Main->>VA: Construct adapters
+    Note over VA,O: Constructors do not contact Ollama or load Vosk/Piper weights
     Main->>VA: run()
-    VA->>R: Load local embedding model on CPU
-    VA->>R: Run one startup search
     VA->>P: Speak welcome message
-    VA->>V: Start repeated listening windows
+    P->>P: Lazily load configured voice
+    VA->>V: listen_once(timeout)
+    V->>V: Lazily load Vosk and initialize PyAudio
+    V-->>VA: First finalized RecognitionResult
+    VA->>O: Contact Ollama only for a conversational command
 ```
 
-Initialization is synchronous. The application will not reach the welcome message
-if the configured Ollama model, Vosk model, Piper model, local embedding model,
-knowledge files, or embedding file cannot be initialized.
+The constructor establishes the dependency graph without performing network
+requests or opening audio devices. The first welcome message loads Piper, and
+the first listening cycle loads Vosk and PyAudio. The Ollama SDK client remains
+lazy until a conversational request or an explicit `warm_up()` call.
 
-`APIClient` and `VoiceAssistant` each construct their own `Pyttsx3TTS` instance,
-so the configured Piper model is currently loaded twice.
+The embedding model and corpus are not loaded during normal startup. RAG is
+initialized only after the user enters RAG mode and asks a question.
 
 ### Conversational command
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant STT as Vosk
+    participant STT as SpeechRecognizer
     participant VA as VoiceAssistant
-    participant O as Ollama
-    participant TTS as Piper
+    participant O as APIClient / Ollama
+    participant TTS as Shared PiperTTS
 
     User->>STT: "Emilia, raccontami del veicolo"
-    STT-->>VA: Partial and final transcripts
-    VA->>VA: Keep the latest non-empty transcript
-    VA->>VA: Validate activation word
-    VA->>O: Stream chat request
-    loop Until response completes
-        O-->>VA: Text chunk
-        VA->>TTS: Speak buffered text at punctuation
+    STT-->>VA: RecognitionResult(final=True)
+    VA->>VA: Match wake word as a complete word
+    VA->>VA: Check local presentation questions
+    alt Predefined answer
+        VA->>TTS: Speak local response
+    else Ollama answer
+        VA->>O: talk(message)
+        loop Until stream completes
+            O-->>VA: ChatResponse chunk
+            VA->>TTS: Speak buffered text at punctuation
+        end
     end
 ```
+
+Only finalized recognition results are executed. Partial phrases are available
+through `listen_events()` for other consumers, but they do not trigger commands
+in `VoiceAssistant`.
+
+Ollama transport failures are retried only while retrying is safe. Once speech
+has started, a failed stream is not replayed because doing so could duplicate
+audio already heard by the user. TTS failures are preserved as TTS errors
+rather than being relabeled as network failures.
 
 ### RAG query
 
@@ -238,228 +303,272 @@ sequenceDiagram
     participant User
     participant VA as VoiceAssistant
     participant R as RagSystem
-    participant TTS as Piper
+    participant FS as Corpus and index
+    participant TTS as PiperTTS
 
     User->>VA: "regolamento"
-    VA->>VA: Enter RAG state and play wake sound
-    User->>VA: Ask a question in the next listening window
-    VA->>R: run(query, top_k=1)
-    R->>R: Read and split every uploads/*.txt file
-    R->>R: Load embeddings.npz
-    R->>R: Embed query and rank with dot product
-    R-->>VA: Closest sentence
-    VA->>TTS: Speak "Here's what I found" + sentence
-    VA->>VA: Play stop sound and return to COMMAND
+    VA->>VA: Enter RAG state
+    VA->>VA: Queue wake sound
+    User->>VA: Ask question
+    VA->>R: run(query, top_k=settings.top_k)
+    R->>FS: Read corpus snapshot
+    alt embeddings.npz is missing
+        R->>R: Encode all chunks
+        R->>FS: Atomically write matrix + manifest
+    else index exists
+        R->>FS: Load matrix + manifest
+        R->>R: Validate corpus, model, shape, dtype and hashes
+    end
+    R->>R: Encode query once and rank
+    R-->>VA: Semicolon-joined passages
+    VA->>TTS: Speak localized prefix + passages
+    VA->>VA: Return to COMMAND and queue stop sound
 ```
 
-The RAG path is extractive: it speaks the closest source sentence directly. It
-does not send the retrieved text to Ollama for answer generation.
+The active RAG path is extractive. It returns matching source passages directly
+and does not send them to Ollama for generative synthesis. The structured
+`retrieve()` API retains source filenames and scores; the compatibility
+`run()` method returns plain semicolon-joined text.
+
+### Shutdown
+
+`Ctrl+C`, `VoiceAssistant.stop()`, context-manager exit, or the end of a bounded
+test run reaches the same idempotent cleanup path:
+
+1. stop the assistant loop;
+2. wait for the single notification-sound worker;
+3. close the microphone recognizer;
+4. terminate owned PyAudio resources;
+5. close the API/TTS adapters without closing shared instances twice;
+6. mark the assistant closed so it cannot be restarted accidentally.
+
+Each `aplay` operation has a default ten-second timeout, preventing a wedged cue
+process from blocking shutdown indefinitely.
 
 ## Repository structure
 
 ```text
 .
-|-- main.py                         Primary application entry point
-|-- assistant.py                    State machine and voice orchestration
-|-- config.py                       Hard-coded runtime configuration
-|-- requirements.txt                Python dependency list
-|-- embeddings.npz                  Active compressed sentence embeddings
-|-- embeddings.npy                  Older uncompressed embedding artifact
+|-- main.py                         Application entry point and logging setup
+|-- assistant.py                    Dependency composition and state machine
+|-- config.py                       Settings, language profiles, compatibility aliases
+|-- pyproject.toml                  Pytest/Ruff configuration; source-checkout contract
+|-- requirements.txt                Portable desktop dependency entry point
+|-- requirements-runtime.txt        Platform-neutral direct dependencies
+|-- requirements-jetson.txt         Jetson-specific installation contract
+|-- requirements-dev.txt            Model-free test and quality dependencies
+|-- assets-manifest.json            Machine-readable asset inventory and hashes
+|-- THIRD_PARTY_NOTICES.md          Provenance and redistribution gaps
 |-- api/
-|   |-- api_client.py               Ollama streaming client
+|   |-- api_client.py               Lazy Ollama streaming client
 |   |-- Modelfile-IT                Italian Emilia Ollama definition
 |   `-- Modelfile-EN                English Emilia Ollama definition
 |-- audio/
-|   |-- tts.py                      Active Piper speech synthesis
-|   |-- sound_player.py             Active ALSA sound-effect playback
-|   |-- playback.py                 Standalone/duplicate TTS smoke script
-|   `-- models/                     Bundled Italian and English Piper models
+|   |-- tts.py                      Piper synthesis and PCM playback
+|   |-- sound_player.py             Bounded ALSA cue playback
+|   |-- playback.py                 Compatibility exports for historical imports
+|   `-- models/                     Bundled Italian and English Piper voices
 |-- document/
-|   |-- rag_system.py               Active semantic retrieval implementation
-|   |-- document_loader.py          Legacy PDF/TXT loader
-|   |-- document_retriever.py       Legacy TF-IDF retriever
-|   |-- model_download.py           SentenceTransformer download utility
-|   |-- rag_system_copy.py          Older experimental RAG implementation
-|   `-- bozzaComandi.txt            Development notes/command draft
+|   `-- rag_system.py               Chunking, indexing, validation, and retrieval
 |-- models/
-|   `-- all-MiniLM-L6-v2/           Bundled local SentenceTransformer model
+|   `-- all-MiniLM-L6-v2/           Bundled SentenceTransformer model
 |-- recognizer/
-|   |-- speech_recognizer.py        Active Vosk/PyAudio recognizer
-|   |-- speech_recognizer_pocketsphinx.py
-|   |                                Inactive English PocketSphinx alternative
-|   `-- models/                     Bundled Vosk and PocketSphinx assets
+|   |-- speech_recognizer.py        Vosk/PyAudio recognition boundary
+|   `-- models/                     Bundled Italian and English Vosk models
+|-- scripts/
+|   |-- build_index.py              Explicit RAG index builder
+|   |-- doctor.py                   Environment and asset validator
+|   `-- smoke_tts.py                Side-effect-free manual TTS smoke command
+|-- tests/
+|   |-- test_api_client.py          Ollama streaming and retry behavior
+|   |-- test_assistant.py           State routing and lifecycle behavior
+|   |-- test_doctor.py              Asset validation behavior
+|   |-- test_rag_system.py          Index integrity and retrieval behavior
+|   |-- test_recognizer.py          Recognition result and cleanup behavior
+|   `-- test_tts.py                 WAV, TTS, and cue playback behavior
 |-- uploads/
 |   |-- qa_pairs.txt                Question-and-answer knowledge
 |   |-- regolamento.txt             Competition regulations
 |   `-- team_notice.txt             Control-stop notice
-|-- sounds/                         Wake and completion WAV files
-|-- pictures/                       Project logo and Emilia photograph
-|-- prompts/update_readme.txt        Historical documentation prompt
-|-- main_video.py                   Manual Piper demonstration script
-|-- main_sim.py                     Outdated diagnostic script
-|-- test_rag_system_import.py        Outdated import diagnostic script
-|-- assistant.bk                    Historical assistant backup
-|-- main.py.save                    Historical main backup
-|-- requirements_backup.txt         Historical dependency snapshot
-|-- .github/workflows/pylint.yml    Push-triggered Pylint workflow
+|-- sounds/
+|   |-- wake_up.wav                 RAG-entry cue
+|   `-- stop.wav                    RAG-completion cue
+|-- pictures/
+|   |-- heliosAI.png                Project logo
+|   `-- emilia5.9.bmp               Emilia 5.9 photograph
+|-- prompts/
+|   `-- update_readme.txt           Technical-writing prompt for this README
+|-- .github/workflows/quality.yml   Cross-platform quality workflow
+|-- .gitattributes                  Line-ending and future LFS policy
+|-- .gitignore                      Generated/runtime artifact exclusions
 `-- LICENSE                         MIT license
 ```
 
-An empty tracked file named `ollama_RAG_integration` also exists at the repository
-root. It is not imported or used by the application.
+Generated files such as `embeddings.npz`, logs, caches, virtual environments,
+and synthesized audio are intentionally ignored.
 
-### Active versus legacy modules
-
-| Area | Active implementation | Present but inactive |
-|---|---|---|
-| Speech recognition | `recognizer/speech_recognizer.py` (Vosk) | PocketSphinx recognizer |
-| Retrieval | `document/rag_system.py` (dense embeddings) | `DocumentLoader` + TF-IDF `DocumentRetriever` |
-| Speech synthesis | `audio/tts.py` (Piper) | Historical class name and unused TTS packages |
-| Application entry | `main.py` + `assistant.py` | `main.py.save`, `assistant.bk`, `main_sim.py` |
-| Embeddings | `embeddings.npz` | `embeddings.npy` |
+Helios currently runs from a source checkout. The bundled models, corpus, and
+audio assets are not packaged into a Python wheel, so `pyproject.toml`
+deliberately configures repository tools without advertising an installable
+console command.
 
 ## Technology stack and dependencies
 
 | Technology | Role in the active runtime |
 |---|---|
-| Python | Application, orchestration, state machine, and adapters |
+| Python 3.10+ | Application, orchestration, adapters, scripts, and tests |
 | Vosk | Offline Italian/English speech recognition |
-| PyAudio / PortAudio | 16 kHz microphone capture |
-| Ollama Python SDK | Streaming communication with the local chat model |
-| Gemma 3 GGUF | Base conversational model referenced by the Ollama Modelfiles |
+| PyAudio / PortAudio | 16 kHz mono microphone capture |
+| Ollama Python SDK | Streaming communication with a local chat model |
+| Gemma 3 GGUF | Base model referenced by the included Ollama Modelfiles |
 | Piper | Offline neural text-to-speech |
-| ONNX Runtime | Execution backend required by the Piper voice models |
-| `sounddevice` | Playback of synthesized Piper audio |
-| ALSA `aplay` | Playback of wake and completion sounds |
-| SentenceTransformers | Local sentence and query encoding |
-| PyTorch | SentenceTransformer execution on CPU |
-| NumPy | Embedding persistence and dot-product similarity search |
-| Tenacity | Retry decoration around Ollama client methods |
+| ONNX Runtime | Piper inference backend |
+| `sounddevice` | Playback of synthesized PCM audio |
+| ALSA `aplay` | Wake and completion cue playback |
+| SentenceTransformers | Local corpus and query encoding |
+| PyTorch | SentenceTransformer inference backend |
+| NumPy | Matrix storage, validation, normalization, and ranking |
+| Pytest | Model-free unit tests |
+| Ruff | Linting and formatting checks |
+| GitHub Actions | Linux/Windows automated quality checks |
 
-The active source imports `numpy` and `sounddevice`, but they are not declared
-directly in `requirements.txt`; installation currently relies on them arriving as
-transitive dependencies. They should be pinned explicitly for reproducible
-environments.
+There is no HTTP API exposed by Helios itself. `APIClient` is an internal Python
+adapter over Ollama's chat interface; the other interfaces are in-process
+classes and protocols.
 
-Several declared packages support legacy or experimental files rather than the
-primary runtime:
+### Dependency files
 
-| Dependency | Current use |
+| File | Intended use |
 |---|---|
-| `pdfplumber`, `scikit-learn` | Legacy PDF/TXT loader and TF-IDF retriever |
-| `pocketsphinx` | Inactive alternative recognizer |
-| `requests` | Imported by `APIClient` but not used by its Ollama SDK path |
-| `pyttsx3`, `gTTS`, `pygame` | Historical audio implementations; inactive |
-| `SpeechRecognition` | No longer imported by the active assistant |
-| `openai-whisper` | Declared but not used in tracked Python code |
-| `torchvision`, `torchaudio`, `matplotlib` | Not required by the active entry path |
+| `requirements-runtime.txt` | Dependencies that resolve consistently across desktop and Jetson |
+| `requirements.txt` | Desktop install, adding generic Torch, ONNX Runtime, and Piper |
+| `requirements-jetson.txt` | Shared dependencies after platform backends are provisioned |
+| `requirements-dev.txt` | NumPy, Pytest, and Ruff only; no models or audio hardware required |
 
-There is no HTTP API exposed by Helios AI itself. `APIClient` is an internal
-adapter over Ollama's chat interface; all other component APIs are Python class
-methods used in-process.
+Jetson inference packages are deliberately not pinned to guessed public wheel
+URLs. Torch and ONNX Runtime must match the exact JetPack/L4T image.
 
 ## Main components
 
 ### `main.py`
 
-`main.py` disables logging at `CRITICAL` level, constructs a
-`multiprocessing.Manager`, creates `VoiceAssistant`, and calls `run()`.
+`main.py` is intentionally small:
 
-It still defines a `load_documents()` helper and creates a shared dictionary, but
-the process that would call this helper is commented out. The active RAG system
-loads text from `uploads/` directly.
+1. configure file or stream logging from `Settings`;
+2. construct `VoiceAssistant` as a context manager;
+3. call `run()`;
+4. return through deterministic cleanup.
+
+The default log is `app.log` under the project root. It is opened in append mode
+and library logging is not globally disabled.
 
 ### `VoiceAssistant`
 
-`VoiceAssistant` implements the `COMMAND` and `RAG` states:
+`VoiceAssistant` implements two states:
 
-- `COMMAND` accepts phrases containing the activation words and routes normal
-  questions to Ollama.
-- `RAG` consumes the next listening window as a semantic-search query and then
+- `COMMAND` accepts wake-word commands and the RAG trigger;
+- `RAG` treats the next finalized utterance as a retrieval query and then always
   returns to `COMMAND`.
-- `IDLE` is declared in `AssistantState` but is never entered.
 
-Self-introduction questions are detected through language-specific substring
-checks and answered with one of three predefined phrases.
+Its most important methods are:
+
+- `run_once()` — consume and route at most one finalized utterance;
+- `process_command()` — answer presentation questions locally or call Ollama;
+- `process_rag_command()` — execute retrieval and speak the localized result;
+- `run()` — speak the greeting and maintain the recoverable main loop;
+- `close()` — release owned resources exactly once.
+
+Wake words are matched as complete words, avoiding accidental activation by
+larger words such as `emiliana`.
 
 ### `SpeechRecognizer`
 
 The active recognizer:
 
-- loads the Vosk model selected by `config.LANGUAGE`;
-- opens the default PyAudio input as 16 kHz, 16-bit mono PCM;
+- lazily loads the selected Vosk model;
+- lazily creates the PyAudio interface;
+- opens the default input as 16 kHz, 16-bit mono PCM;
 - reads 4,000 frames per iteration;
-- yields changing partial results and accepted final results;
-- removes immediately repeated words;
-- stops after `LISTEN_TIMEOUT`.
+- emits `RecognitionResult(text, is_final)` values;
+- returns from `listen_once()` on the first final phrase;
+- can retain the historical text-only `listen()` generator interface;
+- stops and closes every stream in a `finally` block;
+- terminates an owned PyAudio instance during `close()`.
 
-Because the method is a generator, `VoiceAssistant` iterates over all yielded
-transcripts and keeps the latest non-empty value.
+Explicit input-device selection is not implemented.
 
 ### `APIClient`
 
-The Ollama adapter uses `ollama.Client().chat()`:
+The Ollama adapter:
 
-- a non-streaming empty chat warms the conversational model during construction;
-- `talk()` streams the response and sends buffered segments to Piper when a
-  punctuation character is observed;
-- `think()` targets the secondary model, but the active assistant never calls it;
-- optional context is represented as a system message.
+- accepts a base host or a legacy endpoint URL and normalizes it;
+- creates the SDK client only on first use;
+- performs no constructor warm-up unless `warm_up()` is called explicitly;
+- shares the assistant's Piper instance;
+- uses one parser for `talk()` and `think()`;
+- reads the SDK's `done` and `done_reason` completion fields;
+- flushes speech at punctuation;
+- retries transient transport failures before speech begins;
+- avoids replaying partially spoken streams;
+- raises `APIClientError` after exhausted or non-transient API failures.
 
-The constructor accepts `api_url`, but the value is not passed to `Client` and is
-not otherwise used. Connection behavior therefore follows the Ollama SDK default
-(normally the local Ollama service), not `config.OLLAMA_API_URL`.
+The configured host defaults to `http://localhost:11434`.
 
 ### `RagSystem`
 
-`RagSystem` uses a bundled `all-MiniLM-L6-v2` SentenceTransformer:
+`RagSystem` uses the bundled `all-MiniLM-L6-v2` model:
 
-1. concatenate all top-level `uploads/*.txt` files in sorted filename order;
-2. split the combined text at whitespace following `.`, `!`, or `?`;
-3. encode sentences in batches of 16 and normalize the vectors;
-4. save them as compressed `embeddings.npz` when indexing;
-5. encode and normalize each query;
-6. calculate cosine-equivalent scores with a NumPy dot product;
-7. return the top matching source sentence or sentences.
+1. read top-level `uploads/*.txt` files in deterministic filename order;
+2. split each source independently at sentence boundaries;
+3. retain source filename and ordinal for every chunk;
+4. encode chunks in configurable batches;
+5. explicitly L2-normalize every vector;
+6. write an atomic compressed NPZ containing the matrix and manifest;
+7. validate the complete index before searching;
+8. encode each query once;
+9. rank by normalized dot product with deterministic tie ordering;
+10. cache the corpus and matrix for subsequent queries.
 
-Inference is explicitly forced to CPU, even when CUDA is available.
+The current corpus produces 1,115 deterministic chunks. At this size a stable
+full ranking is simpler and sufficiently fast; an approximate-nearest-neighbor
+service is not justified without a substantially larger measured corpus.
 
 ### Audio
 
-`Pyttsx3TTS` loads the configured Piper ONNX voice, writes each synthesized
-utterance to the fixed file `output.wav`, and plays it through `sounddevice`.
-`output.wav` is ignored by Git.
+`PiperTTS` synthesizes into an in-memory WAV buffer, reopens the buffer with the
+standard `wave` module, and passes only PCM frames plus their format metadata to
+`sounddevice`. It does not write a shared `output.wav` file and does not treat
+the WAV header as audio samples.
 
-`SoundPlayer` checks for `aplay` at module import and invokes it in a child process
-for wake and completion WAV files.
+The old public name `Pyttsx3TTS` remains as an alias to `PiperTTS` for
+compatibility. It does not import or use `pyttsx3`.
+
+`SoundPlayer` resolves `aplay` only when a cue is requested. Cue playback runs
+on one reusable assistant worker and has a configurable timeout.
 
 ## Prerequisites
 
 ### Hardware
 
-- NVIDIA Jetson or another Linux system capable of running the dependencies;
-- microphone exposed as the default PyAudio input;
-- speaker or audio device exposed as the default `sounddevice`/ALSA output;
-- enough storage and memory for the bundled speech, embedding, TTS, and Ollama
+- NVIDIA Jetson or another machine capable of running the selected backends;
+- microphone available as the default PyAudio input;
+- speaker or audio device available to `sounddevice`;
+- ALSA output and `aplay` for notification cues on Linux;
+- enough storage and memory for Vosk, Piper, SentenceTransformer, and Ollama
   models.
 
-The exact tested Jetson model, JetPack release, CUDA release, microphone, and
-audio-device configuration could not be determined from the current codebase.
+The exact production Jetson model, JetPack release, microphone, and audio-device
+configuration are deployment-specific and could not be determined completely
+from the current codebase.
 
 ### Software
 
-- **Python 3.10 is recommended.** The active code uses Python 3.10 union-type
-  syntax (`list[str] | None`). Python 3.8 and 3.9 cannot parse it.
-- a working Python virtual environment and compiler/toolchain for native packages;
+- Python 3.10 or newer;
+- a virtual environment;
 - PortAudio development/runtime support for PyAudio;
-- ALSA and the `aplay` command for sound effects;
-- a running Ollama service with the selected Emilia model;
+- a running Ollama service;
+- the configured Ollama model tags;
 - platform-compatible PyTorch and ONNX Runtime builds.
-
-`requirements.txt` mixes generic packages with a Linux AArch64 Vosk wheel, a CUDA
-11.8 PyTorch index, and `torch==1.13.0`. It is tailored toward an ARM/Linux
-deployment and may require adjustment for a specific JetPack release. It is not a
-portable lock file for Windows, macOS, x86 Linux, or every Jetson image.
 
 ## Installation
 
@@ -470,124 +579,146 @@ git clone https://github.com/UbiquitousDynamics/helios-ai-jetson-framework.git
 cd helios-ai-jetson-framework
 ```
 
-Create a Python 3.10 virtual environment:
+### Desktop development
+
+Create a virtual environment:
 
 ```bash
-python3.10 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
-Install the dependencies:
+PowerShell activation:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+```
+
+Install the portable desktop dependencies:
 
 ```bash
-python -m pip install --no-cache-dir -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-Before using this command on a different platform, review these entries in
-`requirements.txt`:
+On Linux, PyAudio may require PortAudio headers supplied by the distribution.
 
-```text
---find-links https://download.pytorch.org/whl/cu118
-torch==1.13.0
-https://github.com/alphacep/vosk-api/.../vosk-0.3.30-py3-none-linux_aarch64.whl
+### NVIDIA Jetson
+
+Provision PyTorch and ONNX Runtime for the exact JetPack/L4T image first. Do not
+allow generic pip wheels to replace working NVIDIA/vendor backends.
+
+Verify the platform installations:
+
+```bash
+python -c "import torch, onnxruntime; print(torch.__version__, onnxruntime.__version__)"
 ```
 
-Choose PyTorch, ONNX Runtime, PyAudio, and Vosk builds supported by the actual
-host. Exact alternative package versions could not be determined from the
-current codebase.
+The known Helios target uses `piper-phonemize-fix`. Preserve that backend and
+install Piper without transitive dependency resolution:
 
-There is no Python package build, Docker image, installer, or generated
-application artifact. Running the source tree is the deployment model.
+```bash
+python -m pip install piper-phonemize-fix==1.2.1
+python -m pip install --no-deps piper-tts==1.2.0
+python -m pip install -r requirements-jetson.txt
+python -c "import piper, torch, onnxruntime; print('Jetson backends import successfully')"
+```
+
+Revalidate these versions whenever JetPack changes. The repository does not
+embed a third-party wheel URL because those URLs and ABI combinations are tied
+to the target image.
 
 ## Ollama model setup
 
-The default Italian configuration expects `emilia-gemma3:1b`. Create it from the
-included Modelfile:
+The default Italian profile expects `emilia-gemma3:1b`:
 
 ```bash
 ollama create emilia-gemma3:1b -f api/Modelfile-IT
 ```
 
-For English mode, create the model configured as `emilia-en-gemma3:1b`:
+The English profile expects `emilia-en-gemma3:1b`:
 
 ```bash
 ollama create emilia-en-gemma3:1b -f api/Modelfile-EN
 ```
 
-Both definitions derive from
-`hf.co/unsloth/gemma-3-1b-it-GGUF:Q4_K_M`, request very short answers, and use a
-512-token context window. Creating them may require network access the first time
-Ollama obtains the base model.
+The secondary `think()` API defaults to `qwen3:0.6b`:
 
-Check that Ollama can see the result:
+```bash
+ollama pull qwen3:0.6b
+```
+
+Both Emilia Modelfiles derive from
+`hf.co/unsloth/gemma-3-1b-it-GGUF:Q4_K_M`, request very short answers, and use a
+512-token context window. Creating the models may require network access the
+first time Ollama retrieves the base model.
+
+Check the installed tags:
 
 ```bash
 ollama list
 ```
 
-The application constructs a default `ollama.Client()` and immediately warms the
-selected model. Start or configure Ollama before launching `main.py`.
-
 ## Configuration
 
-Configuration is implemented as Python constants in [`config.py`](config.py).
-There is no CLI parser, `.env` loader, or environment-variable mapping in this
-repository. Edit the file and restart the process.
+Configuration is defined in [`config.py`](config.py). New code should use the
+immutable `config.SETTINGS` object and its `LanguageProfile`. Historical
+module-level constants remain as compatibility aliases.
+
+### Environment variables
+
+Two deployment overrides are supported:
+
+```bash
+export HELIOS_LANGUAGE=it
+export HELIOS_OLLAMA_HOST=http://localhost:11434
+```
+
+PowerShell:
+
+```powershell
+$env:HELIOS_LANGUAGE = "it"
+$env:HELIOS_OLLAMA_HOST = "http://localhost:11434"
+```
+
+Supported language values are `it` and `en`. Unsupported values raise
+`ConfigurationError` rather than selecting an incomplete profile.
+
+Legacy values such as `http://localhost:11434/api/generate` are accepted for the
+Ollama host and normalized to the SDK base host.
 
 ### Active settings
 
-| Setting | Default | Runtime effect |
+| `Settings` field | Default | Runtime effect |
 |---|---|---|
-| `LANGUAGE` | `"it"` | Selects Italian/English Vosk, Piper, prompts, RAG trigger, and chat model. |
-| `WAKE_WORD` | `"emilia"` | Primary conversational activation substring. |
-| `RAG_WORD` | `"regolamento"` in Italian | Substring that switches `COMMAND` to `RAG`. |
-| `LISTEN_TIMEOUT` | `6.5` seconds | Duration of each microphone listening window. |
-| `WAKE_SOUND` | `sounds/wake_up.wav` | Played when entering RAG mode. |
-| `STOP_SOUND` | `sounds/stop.wav` | Played after a RAG response. |
-| `VOSK_MODEL_PATH` | Italian model path | Model loaded by Vosk. |
-| `TTS_MODEL` | Italian Paola ONNX model | Voice loaded by Piper. |
-| `MODEL_TALK` | `emilia-gemma3:1b` in Italian | Ollama model used by `talk()`. |
-| `PRES_Q_1..3` | Language-specific phrases | Substrings identifying self-introduction questions. |
-| `PRES_A_1..3` | Language-specific phrases | Random canned self-introduction answers. |
+| `project_root` | Repository root | Anchors models, corpus, index, sounds, and logs |
+| `language` | `"it"` | Selects Vosk, Piper, prompts, trigger, and chat model |
+| `name` | `"emilia"` | Compatibility assistant identity |
+| `listen_timeout` | `6.5` seconds | Maximum duration of one recognition call |
+| `log_level` | `INFO` | Root logging level |
+| `log_file_name` | `app.log` | Append-only log under the project root |
+| `ollama_host` | `http://localhost:11434` | Host passed to the Ollama SDK |
+| `think_model` | `qwen3:0.6b` | Model used by `APIClient.think()` |
+| `top_k` | `4` | Number of RAG passages returned and spoken |
 
-`uploads`, `embeddings.npz`, and `./models/all-MiniLM-L6-v2` are passed directly
-inside `VoiceAssistant.run()` rather than being fully controlled by configuration.
+Language profiles select:
 
-### Defined but inactive or partially active settings
+| Profile value | Italian | English |
+|---|---|---|
+| Vosk model | `vosk-model-small-it-0.22` | `vosk-model-small-en-us-0.15` |
+| Piper voice | `it_IT-paola-medium.onnx` | `en_GB-alba-medium.onnx` |
+| Ollama model | `emilia-gemma3:1b` | `emilia-en-gemma3:1b` |
+| RAG trigger | `regolamento` | `regulation` |
+| RAG prefix | `Ecco cosa ho trovato:` | `Here's what I found:` |
 
-| Setting | Status |
-|---|---|
-| `LOG_LEVEL`, `LOG_FORMAT`, `LOG_FILE` | Defined, but `main.py` disables logging directly and does not configure these values. |
-| `NAME` | Defined but not used in the active welcome message or routing. |
-| `VOICE` | Set by language but not used by Piper. |
-| `TTS_FOLDER` | Defined but unused by the current TTS implementation. |
-| `TIMEOUT_SOUND` | Defined but no timeout sound is played in the current state loop. |
-| `UPLOAD_FOLDER`, `ALLOWED_EXTENSIONS` | Used only by the inactive `DocumentLoader` path. |
-| `MODEL_THINK` | Loaded into `APIClient.models`; `think()` is not called by the active assistant. |
-| `OLLAMA_API_URL` | Passed into `APIClient.__init__` but ignored when constructing the Ollama client. |
-| `QA_JSON_PATH`, `TOP_K`, `EMBEDDING_MODEL` | Defined but unused by the active RAG implementation. |
-
-### Switching to English
-
-Edit:
-
-```python
-LANGUAGE = "en"
-```
-
-The language branch then selects:
-
-- `recognizer/models/vosk-model-small-en-us-0.15`;
-- `audio/models/en_GB-alba-medium.onnx`;
-- `emilia-en-gemma3:1b`;
-- `regulation` as the RAG trigger.
-
-Restart the application after the change.
+All derived paths use `project_root`; launching from another working directory
+does not redirect model, corpus, sound, index, or log files.
 
 ## Running and using the assistant
 
-From the repository root, with Ollama running and the Python environment active:
+From the repository root, with Ollama and the Python environment ready:
 
 ```bash
 python main.py
@@ -595,15 +726,12 @@ python main.py
 
 Expected behavior:
 
-1. the application loads two Piper instances, warms the Ollama model, loads Vosk,
-   and initializes the local SentenceTransformer;
-2. it performs a startup RAG search for `"How many liters of water?"` and discards
-   the returned text;
-3. it speaks an Italian or English welcome message;
-4. it continuously listens in `COMMAND` state.
-
-Logging is disabled by `main.py`, so successful startup does not produce a useful
-console trace by default.
+1. logging is configured;
+2. lightweight service adapters are constructed;
+3. Piper loads and speaks the localized welcome message;
+4. Vosk/PyAudio initialize on the first listening cycle;
+5. the assistant waits in `COMMAND` state;
+6. Ollama or RAG resources initialize only when their flow is used.
 
 ### Example: conversational answer
 
@@ -613,8 +741,8 @@ Say:
 Emilia, spiegami come funziona la tua intelligenza artificiale
 ```
 
-The activation substring is required. The complete recognized phrase, including
-`Emilia`, is passed to Ollama.
+The complete recognized phrase is passed to Ollama. The wake word is retained in
+the prompt.
 
 ### Example: predefined introduction
 
@@ -624,8 +752,8 @@ Say:
 Emilia, chi sei?
 ```
 
-The assistant selects one of the configured Italian introduction responses
-without contacting Ollama for that answer.
+The assistant selects one of the configured Italian introduction responses and
+speaks it without contacting Ollama.
 
 ### Example: regulations search
 
@@ -635,251 +763,371 @@ First say:
 regolamento
 ```
 
-After the wake sound, ask:
+After the wake cue, ask:
 
 ```text
 Quanta acqua deve avere ogni occupante?
 ```
 
-The closest sentence from the bundled text files is spoken, prefixed with the
-English phrase `"Here's what I found:"`.
+The top passages from the local knowledge base are spoken with the Italian RAG
+prefix. The stop cue plays when the assistant returns to `COMMAND`.
 
-The current application has no spoken shutdown command. Stop it from the terminal
-with `Ctrl+C`.
+The application has no spoken shutdown command. Stop it from the terminal with
+`Ctrl+C`.
+
+### Manual TTS smoke check
+
+The smoke script has no import-time audio side effects and no artificial sleep:
+
+```bash
+python scripts/smoke_tts.py
+python scripts/smoke_tts.py "Frase di prova"
+```
 
 ## Knowledge base and embeddings
 
-The active knowledge base is every top-level `.txt` file in `uploads/`, sorted by
-filename:
+The active knowledge base consists of every top-level UTF-8 `.txt` file in
+`uploads/`, sorted deterministically:
 
 - `qa_pairs.txt`;
 - `regolamento.txt`;
 - `team_notice.txt`.
 
-`RagSystem` does not recurse into directories and does not read PDF files. The
-legacy `DocumentLoader` supports PDFs, but it is not used by `main.py`.
+The system does not recurse into subdirectories and does not ingest PDFs.
+Convert other formats to reviewed UTF-8 text before adding them.
 
-### Rebuilding embeddings
+### Index lifecycle
 
-Rebuild `embeddings.npz` whenever a text file is added, removed, renamed, or
-edited:
+`embeddings.npz` is generated output and is not tracked by Git. Build it
+explicitly before production deployment:
 
 ```bash
-python -c "from document.rag_system import RagSystem; RagSystem(reindex=True).run('index check', top_k=1)"
+python scripts/build_index.py
 ```
 
-Run the command from the repository root. It loads the bundled model on CPU,
-regenerates all sentence vectors, writes `embeddings.npz`, and performs a final
-test search.
+Available overrides:
 
-The embedding file stores vectors only. It does not store the source sentences,
-filenames, checksums, or model identifier. At runtime the code checks vector
-dimension compatibility but does not verify that:
+```bash
+python scripts/build_index.py \
+  --corpus uploads \
+  --model models/all-MiniLM-L6-v2 \
+  --output embeddings.npz \
+  --batch-size 16 \
+  --device cpu
+```
 
-- the number of embeddings equals the number of current sentences;
-- file order and content still match the indexed data;
-- the same model produced the file.
+If the index is missing, the first RAG query builds it automatically.
+Prebuilding is recommended on constrained devices because loading the model and
+encoding all chunks adds first-use latency.
 
-Keeping the text files and embedding file synchronized is therefore a manual
-requirement.
+### Integrity manifest
 
-`embeddings.npy` is an older artifact and is not loaded by the active code.
+Every generated index stores both `embeddings` and a JSON manifest. Validation
+binds the matrix to:
+
+- schema version;
+- splitter version;
+- ordered source filenames, ordinals, and chunk text;
+- corpus SHA-256;
+- content-derived embedding-model identity;
+- row count and vector dimension;
+- NumPy dtype;
+- the normalized-vector contract;
+- embedding-matrix SHA-256.
+
+The runtime rejects:
+
+- old NPZ files without a manifest;
+- a different number of rows and corpus chunks;
+- content changes even when row counts remain equal;
+- embedding-model content changes while allowing the repository to be relocated;
+- incompatible dimensions or dtypes;
+- NaN, infinite, zero, or non-unit vectors;
+- a corrupted matrix checksum.
+
+Index writes use a temporary file in the destination directory, flush and
+`fsync` it, and atomically replace the target. A failed build cannot silently
+leave a half-written canonical index.
+
+### Retrieval API
+
+```python
+from document.rag_system import RagSystem
+
+rag = RagSystem()
+passages = rag.retrieve("How much water is required?", top_k=4)
+
+for passage in passages:
+    print(passage.source, passage.score, passage.text)
+```
+
+For compatibility:
+
+```python
+text = rag.run("How much water is required?", top_k=4)
+```
+
+`run()` returns a semicolon-joined string.
+
+## Asset validation and provenance
+
+[`assets-manifest.json`](assets-manifest.json) inventories the bundled
+SentenceTransformer, Piper voices, Vosk models, corpus, cues, images, and
+generated RAG index. It records:
+
+- required or optional status;
+- role;
+- companion files;
+- upstream information when known;
+- licensing status;
+- representative SHA-256 checksums.
+
+Validate the checkout without loading a neural model or opening audio devices:
+
+```bash
+python scripts/doctor.py --assets-only --check-hashes
+```
+
+Validate installed runtime imports as well:
+
+```bash
+python scripts/doctor.py
+```
+
+Missing generated `embeddings.npz` is an expected warning before the first
+build. Missing provenance or license metadata is also reported as a warning;
+hash mismatches and absent required assets are errors.
+
+See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) before redistribution.
 
 ## Logging and diagnostics
 
-`document/rag_system.py` configures both console logging and a fresh
-`rag_debug.log` file at import time. Shortly afterward, `main.py` calls:
+`main.py` configures logging from `Settings`:
 
-```python
-logging.disable(logging.CRITICAL)
-```
+- default level: `INFO`;
+- default file: `app.log` under the repository root;
+- default mode: append;
+- UTF-8 encoding;
+- no module configures and truncates its own log at import time;
+- logging is not globally disabled.
 
-This suppresses application logs at runtime, regardless of `LOG_LEVEL` in
-`config.py`. To diagnose startup or runtime problems, temporarily remove or
-comment out that line and configure logging explicitly.
+Recoverable API, recognition, TTS, sound, and assistant errors are logged. The
+assistant resets to `COMMAND` and continues when recovery is safe.
 
-Be aware that debug logging in `APIClient` includes complete chat messages and
-individual model chunks. RAG logging includes the query. Do not enable or publish
-debug logs when prompts or knowledge files contain sensitive information.
+RAG corruption and stale-index errors are intentionally explicit. They include
+a rebuild instruction instead of silently returning a potentially unrelated
+passage.
 
-Errors inside the main assistant loop are caught and followed by a one-second
-delay. TTS and sound errors are also caught and only logged; when logging is
-disabled, audio failures may therefore appear silent.
+Do not publish logs if deployment prompts or operational queries are sensitive.
 
 ## Testing and development
 
-### Current automated coverage
+### Automated coverage
 
-There is no maintained unit or integration test suite and no `pytest`
-configuration.
+The repository contains **35 model-free tests**. They do not require Ollama,
+microphone access, Piper, Vosk, Torch, or the bundled neural models.
 
-The GitHub Actions workflow runs Pylint on pushes across Ubuntu and Windows with
-Python 3.8-3.11. It installs Pylint only, not the project dependencies. The matrix
-does not prove runtime compatibility; in particular, the active Python 3.10 type
-syntax is incompatible with Python 3.8 and 3.9.
+Covered behaviors include:
 
-### Static checks
+- whole-word wake detection;
+- partial versus finalized recognition routing;
+- `COMMAND`/`RAG` state transitions;
+- configured RAG `top_k`;
+- idempotent service shutdown;
+- profile-specific shared TTS injection;
+- Ollama host normalization and lazy construction;
+- SDK `done`/`done_reason` stream parsing;
+- retry success, exhaustion, and no-replay behavior;
+- preservation of TTS failures;
+- PCM-frame playback without WAV-header corruption;
+- lazy and bounded `aplay` execution;
+- microphone stream cleanup and PyAudio termination;
+- legacy RAG index rejection;
+- the historical 1,116-row/1,115-chunk mismatch;
+- corpus and model content fingerprints;
+- vector normalization, finite-value checks, and stable ranking;
+- asset paths, companion files, checksums, and manifest safety.
 
-Compile all Python sources:
-
-```bash
-python -m compileall -q .
-```
-
-Run the same style of lint check used by CI:
-
-```bash
-python -m pip install pylint
-pylint $(git ls-files '*.py')
-```
-
-On PowerShell:
-
-```powershell
-pylint (git ls-files '*.py')
-```
-
-### Manual checks
-
-Test the Piper welcome message:
+Install development dependencies:
 
 ```bash
-python main_video.py
+python -m pip install -r requirements-dev.txt
 ```
 
-This script speaks a fixed English sentence and then sleeps for 60 seconds.
+Run the complete local quality suite:
 
-Perform a full smoke test by running `python main.py` with:
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m compileall -q main.py assistant.py config.py api audio document recognizer scripts tests
+python -m pytest
+python scripts/doctor.py --assets-only --check-hashes
+```
 
-- Ollama and the configured chat model available;
-- a working microphone and audio output;
-- all bundled models readable;
-- knowledge text and embeddings synchronized.
+### CI
 
-Then exercise both a conversational command and a RAG query.
+`.github/workflows/quality.yml` runs on pushes, pull requests, and manual
+dispatches:
+
+- Ubuntu and Windows;
+- Python 3.10 and 3.12;
+- Ruff linting;
+- Ruff format verification;
+- bytecode compilation;
+- all model-free tests;
+- one asset hash-validation job.
+
+The workflow installs `requirements-dev.txt`, not the hardware runtime stack.
+Passing CI validates code and repository assets but does not prove that a
+specific Jetson audio/inference image is correctly provisioned.
 
 ### Suggested development workflow
 
 1. Create a feature branch from the latest `main`.
-2. Make source and configuration changes in the repository root.
-3. If any `uploads/*.txt` content changed, rebuild and review
+2. Install `requirements-dev.txt`.
+3. Add or update model-free regression tests before changing behavior.
+4. Make the smallest cohesive source change.
+5. Run Ruff, compilation, Pytest, and the asset doctor.
+6. If `uploads/*.txt` or the embedding model changed, rebuild
    `embeddings.npz`.
-4. Run the static checks above.
-5. Run the Piper smoke check and a hardware-assisted `main.py` smoke test.
-6. Inspect `git diff` and ensure generated `output.wav`, logs, virtual
-   environments, and caches remain untracked.
-7. Commit the source change together with any intentionally regenerated
-   embedding artifact.
-
-### Outdated diagnostic scripts
-
-`main_sim.py` and `test_rag_system_import.py` describe older interfaces. For
-example, they pass the removed `documents` argument to `VoiceAssistant` or the
-removed `txt_file` argument to `RagSystem`. They should not be treated as passing
-tests for the current code.
+7. Run `scripts/smoke_tts.py` and a target-device `main.py` smoke test.
+8. Inspect `git diff` and keep logs, caches, generated indexes, and environments
+   untracked.
+9. Commit source, tests, and documentation together when they describe one
+   behavior.
 
 ## Performance considerations
 
-- SentenceTransformer inference is forced to CPU for stability on Jetson Nano.
-- Knowledge embeddings are normalized and compressed to reduce search work and
-  storage.
-- Reindexing uses batches of 16 and periodic garbage collection.
-- Query ranking is an in-memory NumPy dot product over every sentence.
-- All knowledge files are reread and sentence-split for every RAG query.
-- Ollama response text is streamed so speech can begin before generation
-  completes.
-- The Piper voice is currently loaded twice at startup.
-- Each synthesized segment overwrites `output.wav`.
-- A new process is created for every wake/completion sound.
+### Confirmed improvements
 
-For a larger knowledge base, store sentence metadata with the embeddings, load
-the corpus once, validate row counts, and consider an approximate nearest-neighbor
-index. For lower startup memory, share one Piper instance between
-`VoiceAssistant` and `APIClient`.
+- The corpus and compressed embedding matrix are loaded once and cached.
+- Every query is encoded once.
+- No startup RAG query is executed and discarded.
+- No constructor sends an Ollama warm-up request by default.
+- Vosk, PyAudio, the Ollama client, Piper weights, and RAG are lazy at their
+  relevant boundary.
+- One Piper object is shared between direct responses and streamed chat.
+- Synthesis stays in memory and does not repeatedly write a fixed WAV file.
+- Recognition returns on the first finalized phrase instead of always waiting
+  the full timeout.
+- Notification cues reuse one bounded worker instead of creating a process per
+  state change.
+- Index writes are atomic, and valid data is not repeatedly decompressed.
+
+### Current algorithmic choices
+
+- Corpus encoding uses configurable batches, defaulting to 16.
+- Embeddings and queries are explicitly L2-normalized.
+- Search uses an in-memory NumPy dot product.
+- Stable full ranking is used instead of partial or approximate ranking.
+- Model identity hashes relevant model/tokenizer content once when RAG is
+  created.
+
+With approximately 1,115 chunks, the full ranking cost is small and the simpler
+algorithm improves determinism. An ANN database should be considered only after
+the corpus grows enough for profiling to show a material bottleneck.
+
+### Optimizations that still require target profiling
+
+- CPU versus GPU placement for SentenceTransformers;
+- batch-size changes on a specific Jetson memory budget;
+- overlap between LLM generation and audio playback;
+- audio device latency and buffer tuning;
+- alternative embedding models or chunking strategies.
+
+The repository does not claim a Jetson speedup for these changes without
+target-device measurements.
 
 ## Known limitations
 
-- There is no command-line interface, GUI, web API, packaging metadata, or Docker
-  deployment.
-- Configuration is hard-coded in Python.
-- `IDLE` state exists but is unused; microphone windows run continuously.
-- Activation and RAG triggers use substring matching and may activate
-  unintentionally.
-- The latest Vosk partial result can replace an earlier accepted final result.
-- The PyAudio object is never explicitly terminated during shutdown.
-- RAG returns matching sentences rather than a generated, source-cited answer.
-- The RAG prefix remains English even in Italian mode.
-- Embedding/source alignment is not validated.
-- The configured Ollama URL is not applied to the SDK client.
-- `talk()` catches exceptions internally, so its Tenacity decorator cannot retry
-  those failures.
-- The Ollama warm-up request is not protected by the `talk()` error handling.
-- Audio output uses a fixed temporary filename and is not safe for concurrent
-  synthesis.
-- `audio/tts.py` reads the complete WAV file as raw `int16` data, including its
-  header, rather than reading WAV frames through the `wave` module.
-- Logging settings in `config.py` are not honored by `main.py`.
-- Several dependencies and backup modules are no longer part of the active path.
-- There is no maintained automated test coverage or graceful shutdown procedure.
+- The project runs from a source checkout; it is not distributed as a wheel,
+  container, or appliance image.
+- Only top-level UTF-8 `.txt` files are ingested into RAG.
+- RAG is extractive and does not generate a source-cited answer through Ollama.
+- Explicit microphone and speaker selection are not configurable through a CLI.
+- Notification cues rely on Linux ALSA `aplay`.
+- There is no spoken shutdown command.
+- The active loop is single-session and does not expose a web or remote API.
+- The first RAG build can be expensive on constrained hardware.
+- Retrieval quality needs a language-specific gold-question set before changing
+  the embedding model or splitter.
+- CI does not exercise real microphones, audio outputs, Ollama, or neural-model
+  inference.
+- Existing large binary history has not been migrated to Git LFS.
+- Some voice, Vosk, corpus, sound, and image provenance/license metadata remains
+  incomplete.
+- `think()` exists as an API capability but is not used by the active assistant
+  state machine.
 
 ## Troubleshooting
 
 | Symptom | Likely cause and action |
 |---|---|
-| Startup stops before the greeting | Confirm Ollama is running and `MODEL_TALK` exists. The constructor sends a warm-up chat immediately. |
-| `FileNotFoundError` for the embedding model | Run from the repository root and verify `models/all-MiniLM-L6-v2/model.safetensors` exists. |
-| `FileNotFoundError` for `uploads` or no text files | Keep at least one top-level `.txt` file in `uploads/`. |
-| RAG answer does not match the source | Rebuild `embeddings.npz` after every knowledge-file change. |
-| Vosk model fails to load | Verify `LANGUAGE` and the selected `VOSK_MODEL_PATH`. |
-| No microphone transcription | Check the default PortAudio input and 16 kHz mono support. Device selection is not configurable in code. |
-| No Piper speech | Verify the selected `.onnx` and adjacent `.onnx.json` files, plus the default `sounddevice` output. |
-| Wake/stop sounds are silent | Install/check ALSA `aplay` and verify the WAV paths in `config.py`. |
-| No useful error appears | Re-enable logging in `main.py`; several subsystems catch and log failures without raising them. |
-| `pip install` rejects a wheel | The requirements include a Linux AArch64 Vosk wheel and CUDA-specific PyTorch source. Select builds compatible with the host. |
-| English mode cannot chat | Create `emilia-en-gemma3:1b` from `api/Modelfile-EN` or change `MODEL_TALK` to an installed Ollama model. |
-| Process does not stop after speech | The application has an infinite state loop. Use `Ctrl+C`; there is no spoken stop command. |
+| No welcome message | Verify the selected Piper `.onnx` and adjacent `.onnx.json`, `piper-tts`, ONNX Runtime, and the default output device. |
+| Ollama cannot be reached | Start `ollama serve`, verify `HELIOS_OLLAMA_HOST`, and check the configured tag with `ollama list`. |
+| Conversational stream stops after speaking part of an answer | Check `app.log`. The request is intentionally not replayed after speech begins. |
+| Vosk model fails to load | Verify `HELIOS_LANGUAGE` and the corresponding bundled Vosk directory. |
+| No microphone transcription | Confirm PortAudio/PyAudio and the default 16 kHz-capable input device. |
+| RAG index is missing | Run `python scripts/build_index.py`, or allow the first RAG request to build it. |
+| RAG reports a legacy/stale/corrupt index | Remove only generated `embeddings.npz` and rebuild it from the current corpus/model. |
+| RAG returns poor matches | Verify the corpus language/content and evaluate queries against a reviewed relevance set before changing models. |
+| Wake/stop cues are silent | Install ALSA utilities and run `aplay sounds/wake_up.wav`. |
+| Cue playback times out | Check the ALSA device; `SoundPlayer` terminates the wait after its configured timeout. |
+| Asset doctor reports a hash mismatch | Restore the expected artifact or deliberately update and review `assets-manifest.json`. |
+| Asset doctor reports license warnings | Review `THIRD_PARTY_NOTICES.md`; warnings mark unresolved release metadata. |
+| Jetson pip install replaces an inference backend | Reinstall the JetPack-compatible backend and follow `requirements-jetson.txt`, including Piper `--no-deps`. |
+| Process continues listening | Use `Ctrl+C`; there is currently no spoken stop command. |
 
 ## FAQ
 
 ### Does Helios AI require internet access?
 
-The runtime components are intended to run locally: Vosk, SentenceTransformers,
-Piper, and the default Ollama client. Initial dependency installation and model
-creation may require internet access. Remote Ollama behavior depends on the SDK
-environment and deployment configuration.
+The active runtime is designed to operate locally when all dependencies and
+models are already installed. Initial pip installation, Ollama model creation,
+or retrieving missing assets may require internet access.
 
-### Are documents sent to the language model?
+### Are RAG documents sent to Ollama?
 
-Not in the active RAG flow. The semantic search is local and its closest sentence
-is spoken directly. The inactive `DocumentRetriever` code previously supported
-adding document text as model context.
+No. The active RAG flow embeds and ranks text locally, then speaks the retrieved
+passages directly.
 
 ### Can I add PDFs?
 
-Not to the active RAG pipeline. Convert them to UTF-8 text and place the `.txt`
-file in `uploads/`, then rebuild `embeddings.npz`. PDF extraction exists only in
-the inactive `DocumentLoader`.
+Not directly. Convert a PDF to reviewed UTF-8 text, place the `.txt` file in
+`uploads/`, and rebuild the index.
 
 ### Can I use a different Ollama model?
 
-Yes. Change `MODEL_TALK` in `config.py` to the name reported by `ollama list`.
-The active assistant does not use `MODEL_THINK`.
+Yes. Change the relevant `LanguageProfile.talk_model` or inject a `Settings`
+profile that names a tag shown by `ollama list`.
 
 ### Can I use a different microphone or speaker?
 
-The current code always uses the default PyAudio and `sounddevice` devices.
-Explicit device selection is not implemented.
+The libraries currently use their default devices. The adapters are injectable,
+but a user-facing device-selection option has not been implemented.
 
 ### Is CUDA used for RAG?
 
-No. `RagSystem` explicitly selects `device='cpu'`, even if PyTorch reports CUDA
-as available.
+The default builder and assistant use CPU. `scripts/build_index.py` accepts
+`--device`, but any GPU choice must match the installed Torch build and should
+be validated on the target.
+
+### Why is `embeddings.npz` not in Git?
+
+It is reproducible generated data derived from the corpus and model. Keeping it
+local prevents a stale vector file from being mistaken for source truth. Its
+embedded manifest provides runtime integrity after generation.
+
+### Why does the doctor show warnings on a clean checkout?
+
+The generated index may not exist yet, and some third-party asset provenance is
+not fully recorded. These conditions are warnings. Missing required assets or
+checksum mismatches are errors.
 
 ### Is this a complete vehicle-control system?
 
 No. The repository implements voice interaction and information retrieval only.
-Vehicle hardware control and telemetry could not be determined from the current
-codebase because they are not implemented here.
+Vehicle actuation and telemetry are outside the current codebase.
 
 ## Project background
 
@@ -892,14 +1140,15 @@ participation in the 2025 Bridgestone World Solar Challenge in Australia.
   <img src="pictures/emilia5.9.bmp" alt="Onda Solare's Emilia 5.9 solar vehicle" width="900">
 </p>
 
-Project video: [Surfin' the wave - Emilia 5.9](https://www.youtube.com/watch?v=8vY06AmO5Fg)
+Project video:
+[Surfin' the wave - Emilia 5.9](https://www.youtube.com/watch?v=8vY06AmO5Fg)
 
 ## License
 
 Helios AI is released under the [MIT License](LICENSE), copyright 2025
 Ubiquitous Dynamics.
 
-The repository also contains third-party model assets. Review the documentation
-and licensing terms distributed with the Vosk, PocketSphinx,
-SentenceTransformers, Piper, and Ollama base models before redistribution or
-commercial deployment.
+The repository also contains third-party model and content assets. The project
+license does not relicense them. Review
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), the bundled model cards, and
+the applicable upstream terms before redistribution or commercial deployment.

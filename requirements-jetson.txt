@@ -1,0 +1,16 @@
+# Jetson install contract
+# -----------------------
+# Provision PyTorch and ONNX Runtime for the exact JetPack/L4T release before
+# installing this file. Piper is also deliberately excluded: piper-tts 1.2.0
+# declares the differently named upstream `piper-phonemize` distribution and
+# may replace a target that uses `piper-phonemize-fix`. For the known Helios
+# image, preserve the platform backends and install Piper without dependencies:
+#
+#   python -c "import torch, onnxruntime; print(torch.__version__, onnxruntime.__version__)"
+#   python -m pip install piper-phonemize-fix==1.2.1
+#   python -m pip install --no-deps piper-tts==1.2.0
+#
+# Revalidate those versions for every JetPack upgrade. No third-party wheel URL
+# is embedded here because NVIDIA/ONNX URLs and ABI combinations are tied to the
+# target image.
+-r requirements-runtime.txt

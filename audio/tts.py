@@ -1,37 +1,161 @@
+"""Piper text-to-speech with in-memory WAV playback."""
+
+from __future__ import annotations
+
+import io
 import logging
-import os
-from piper.voice import PiperVoice
-import sounddevice as sd
-import numpy as np
 import wave
+from pathlib import Path
+from typing import Any, Protocol
+
 import config
 
-class Pyttsx3TTS:
-    def __init__(self, voice_model=config.TTS_MODEL):
-        # Carica il modello vocale specificato
-        self.voice = PiperVoice.load(voice_model)
-        logging.debug(f"PiperTTS inizializzato con il modello: {voice_model}")
+logger = logging.getLogger(__name__)
 
-    def speak(self, text: str):
+
+class AudioBackend(Protocol):
+    def play(
+        self,
+        frames: bytes,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> None: ...
+
+
+class TTSError(RuntimeError):
+    """Base class for TTS failures."""
+
+
+class AudioSynthesisError(TTSError):
+    """Raised when Piper cannot synthesize speech."""
+
+
+class AudioPlaybackError(TTSError):
+    """Raised when synthesized audio cannot be played."""
+
+
+class SoundDeviceBackend:
+    """Lazy sounddevice adapter used by the production runtime."""
+
+    def play(
+        self,
+        frames: bytes,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> None:
         try:
-            # Logga il testo (primi 50 caratteri) che sarà pronunciato
-            logging.debug(f"Pronuncia TTS per il testo: {text[:50]}...")
-            # Crea un oggetto wave per scrivere l'audio
-            with wave.open("output.wav", "wb") as wav_file:
-                # Sintetizza il testo in audio e scrivilo nel file wave
+            import numpy as np
+            import sounddevice as sd
+        except ImportError as exc:  # pragma: no cover - deployment dependency
+            raise AudioPlaybackError("numpy and sounddevice are required for TTS playback") from exc
+
+        dtype_by_width = {1: np.uint8, 2: np.int16, 4: np.int32}
+        try:
+            dtype = dtype_by_width[sample_width]
+        except KeyError as exc:
+            raise AudioPlaybackError(
+                f"Unsupported PCM sample width: {sample_width} byte(s)"
+            ) from exc
+
+        samples = np.frombuffer(frames, dtype=dtype)
+        if channels > 1:
+            samples = samples.reshape((-1, channels))
+        sd.play(samples, sample_rate)
+        sd.wait()
+
+
+class PiperTTS:
+    """Synthesize speech with Piper and play PCM frames without a temp file."""
+
+    def __init__(
+        self,
+        voice_model: str | Path = config.TTS_MODEL,
+        *,
+        voice: Any | None = None,
+        audio_backend: AudioBackend | None = None,
+    ) -> None:
+        self.voice_model = Path(voice_model)
+        self._voice = voice
+        self._audio_backend = audio_backend or SoundDeviceBackend()
+
+    @property
+    def voice(self) -> Any:
+        if self._voice is None:
+            try:
+                from piper.voice import PiperVoice
+            except ImportError as exc:  # pragma: no cover - deployment dependency
+                raise AudioSynthesisError(
+                    "The 'piper-tts' package is required for speech synthesis"
+                ) from exc
+            try:
+                self._voice = PiperVoice.load(str(self.voice_model))
+            except Exception as exc:
+                raise AudioSynthesisError(
+                    f"Unable to load Piper voice model: {self.voice_model}"
+                ) from exc
+            logger.info("Loaded Piper voice model %s", self.voice_model)
+        return self._voice
+
+    def synthesize_wave(self, text: str) -> io.BytesIO:
+        if not text or not text.strip():
+            raise ValueError("text cannot be empty")
+
+        output = io.BytesIO()
+        try:
+            with wave.open(output, "wb") as wav_file:
                 self.voice.synthesize(text, wav_file)
-            # Riproduci l'audio generato
-            self.play_audio("output.wav")
-        except Exception as e:
-            logging.error(f"Errore durante la sintesi vocale con Piper: {e}")
+        except TTSError:
+            raise
+        except Exception as exc:
+            raise AudioSynthesisError("Piper failed to synthesize speech") from exc
+        output.seek(0)
+        return output
 
-    def play_audio(self, filename: str):
+    def _play_wave(self, source: Any) -> None:
         try:
-            # Leggi i dati audio dal file
-            with open(filename, "rb") as f:
-                audio_data = np.frombuffer(f.read(), dtype=np.int16)
-            # Riproduci l'audio
-            sd.play(audio_data, self.voice.config.sample_rate)
-            sd.wait()  # Attendi che la riproduzione finisca
-        except Exception as e:
-            logging.error(f"Errore durante la riproduzione dell'audio: {e}")
+            with wave.open(source, "rb") as wav_file:
+                sample_rate = wav_file.getframerate()
+                channels = wav_file.getnchannels()
+                sample_width = wav_file.getsampwidth()
+                frames = wav_file.readframes(wav_file.getnframes())
+            self._audio_backend.play(
+                frames,
+                sample_rate,
+                channels,
+                sample_width,
+            )
+        except AudioPlaybackError:
+            raise
+        except Exception as exc:
+            raise AudioPlaybackError("Unable to play synthesized audio") from exc
+
+    def speak(self, text: str) -> None:
+        logger.debug("Synthesizing %s character(s) of speech", len(text))
+        output = self.synthesize_wave(text)
+        self._play_wave(output)
+
+    def play_audio(self, filename: str | Path) -> None:
+        """Play a WAV file while retaining the legacy public method."""
+
+        path = Path(filename)
+        if not path.is_file():
+            raise AudioPlaybackError(f"Audio file not found: {path}")
+        self._play_wave(str(path))
+
+    def close(self) -> None:
+        close = getattr(self._audio_backend, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> PiperTTS:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+# Compatibility alias: despite the historical name, this implementation uses
+# Piper and never imports pyttsx3.
+Pyttsx3TTS = PiperTTS

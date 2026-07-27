@@ -1,0 +1,33 @@
+# Helios currently runs from a source checkout because its local models,
+# sounds, corpus, and generated index live outside Python packages. This file
+# configures repository tools only; it deliberately does not advertise a wheel
+# or an installed console command.
+[tool.helios]
+deployment-model = "source-checkout"
+requires-python = ">=3.10"
+shared-requirements = "requirements-runtime.txt"
+desktop-requirements = "requirements.txt"
+jetson-requirements = "requirements-jetson.txt"
+development-requirements = "requirements-dev.txt"
+asset-manifest = "assets-manifest.json"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+minversion = "8.2"
+python_files = ["test_*.py"]
+testpaths = ["tests"]
+markers = [
+    "hardware: requires local audio hardware or bundled inference models",
+    "integration: requires a running external service such as Ollama",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    "models",
+    "recognizer/models",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

@@ -1,159 +1,336 @@
+"""Runtime orchestration for the voice assistant."""
+
+from __future__ import annotations
+
 import logging
-from multiprocessing import Process
-from audio.tts import Pyttsx3TTS
-from audio.sound_player import SoundPlayer
-from api.api_client import APIClient
-from recognizer.speech_recognizer import SpeechRecognizer # you can switch to recognizer.speech_recognizer_pocketsphinx: lower performances
-import config
 import random
+import re
 import time
-from document.rag_system import RagSystem
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from enum import Enum, auto
-# -- coding: utf-8 --
+from typing import Any
+
+import config
+from api.api_client import APIClient, APIClientError
+from audio.sound_player import SoundPlaybackError, SoundPlayer
+from audio.tts import PiperTTS, TTSError
+from recognizer.speech_recognizer import (
+    RecognitionResult,
+    SpeechRecognitionError,
+    SpeechRecognizer,
+)
+
+logger = logging.getLogger(__name__)
+
 
 class AssistantState(Enum):
-    IDLE = auto()
     COMMAND = auto()
     RAG = auto()
 
+
+class AssistantRuntimeError(RuntimeError):
+    """Base class for recoverable orchestration failures."""
+
+
+class RagCommandError(AssistantRuntimeError):
+    """Raised when retrieval or RAG result presentation fails."""
+
+
 class VoiceAssistant:
-    def __init__(self):
-        #self.documents = documents
-        self.tts = Pyttsx3TTS()
-        self.sound_player = SoundPlayer()
-        self.api_client = APIClient()
-        self.speech_recognizer = SpeechRecognizer()
-        # Initialize DocumentRetriever if documents are provided
-       # self.document_retriever = DocumentRetriever(documents) if documents else None
+    """Compose runtime services and coordinate the command/RAG state machine."""
+
+    def __init__(
+        self,
+        *,
+        settings: config.Settings = config.SETTINGS,
+        tts: Any | None = None,
+        sound_player: Any | None = None,
+        api_client: Any | None = None,
+        speech_recognizer: Any | None = None,
+        rag_searcher: Any | None = None,
+        rag_factory: Callable[[], Any] | None = None,
+        sound_executor: Any | None = None,
+        choice: Callable[[tuple[str, ...]], str] = random.choice,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.settings = settings
+        self.profile = settings.profile
+
+        if tts is None and api_client is not None:
+            if isinstance(api_client, APIClient):
+                tts = api_client.configured_tts
+            else:
+                tts = getattr(api_client, "tts", None)
+        self.tts = tts if tts is not None else PiperTTS(self.profile.tts_model)
+        self.sound_player = sound_player if sound_player is not None else SoundPlayer()
+        if api_client is None:
+            self.api_client = APIClient(
+                api_url=settings.ollama_host,
+                model_talk=self.profile.talk_model,
+                model_think=settings.think_model,
+                tts=self.tts,
+            )
+        else:
+            self.api_client = api_client
+            if isinstance(api_client, APIClient) and api_client.configured_tts is None:
+                api_client.tts = self.tts
+        self.speech_recognizer = (
+            speech_recognizer
+            if speech_recognizer is not None
+            else SpeechRecognizer(self.profile.vosk_model)
+        )
+
+        self._rag_searcher = rag_searcher
+        self._rag_factory = rag_factory
+        self._sound_executor = sound_executor or ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="helios-sound",
+        )
+        self._owns_sound_executor = sound_executor is None
+        self._choice = choice
+        self._sleep = sleep
+        self.state = AssistantState.COMMAND
+        self._running = False
+        self._closed = False
+
+    @staticmethod
+    def _contains_phrase(text: str, phrase: str) -> bool:
+        return bool(
+            re.search(
+                rf"(?<!\w){re.escape(phrase.lower())}(?!\w)",
+                text.lower(),
+            )
+        )
 
     def contains_wake_word(self, command: str) -> bool:
-        """
-        Check if the command contains the wake word or alternative activation words.
-        """
         if not command:
             return False
-        wake_words = [config.WAKE_WORD.lower(), "hello", "amelia"]
-        command_lower = command.lower()
-        return any(word in command_lower for word in wake_words)
-
-    def process_command(self, command: str):
-        if not command:
-            logging.warning("No command to process.")
-            return
-
-        # Check if command contains wake word - only process if it does
-        if not self.contains_wake_word(command):
-            logging.info(f"Command '{command}' does not contain wake word '{config.WAKE_WORD}'. Ignoring.")
-        #    if config.LANGUAGE == "it":
-        #        rejection_message = f"Devi includere '{config.WAKE_WORD}' nel tuo comando."
-        #    else:
-        #        rejection_message = f"You must include '{config.WAKE_WORD}' in your command."
-        #    self.tts.speak(rejection_message)
-            return
-
-        logging.info(f"Processing command: {command}")
-
-        # Retrieve context from documents if available
-        context = ""
-        #if self.document_retriever:
-        #    retrieved_docs = self.document_retriever.retrieve(command)
-        #    context = "\n".join([doc for _, doc in retrieved_docs])
-
-        # Check for predefined questions
-        if config.PRES_Q_1 in command.lower() or config.PRES_Q_2 in command.lower() or config.PRES_Q_3 in command.lower():
-            option = random.randint(1, 3)
-            command_pres = config.PRES_A_SWITCH[option]
-            response = self.tts.speak(command_pres)
-        else:
-            response = self.api_client.talk(command, context)
-
-        logging.info(f"Received response: {response}")
-
-    def process_rag_command(self, command: str, searcher):
-        """
-        Process RAG commands with wake word validation.
-        """
-        logging.debug("Entered process_rag_command")
-        if not command:
-            logging.debug("Command is empty or None")
-            logging.warning("No RAG command to process.")
-            return
-
-        logging.debug(f"Processing RAG command: {command}")
-        # Use the searcher to run the query
-        logging.debug("Calling searcher.run() with query and top_k=1")
-        result = searcher.run(query=command, top_k=1)
-        logging.debug(f"Result from searcher.run: {result}")
-        # Convert result to a readable string for TTS
-        if isinstance(result, list):
-            logging.debug("Result is a list, formatting result_str as list of answers")
-            result_str = "\n".join([
-                f"Risposta {i+1}: indice {idx}, score {score:.2f}" for i, (idx, score) in enumerate(result)
-            ])
-        else:
-            logging.debug("Result is not a list, converting result to string")
-            result_str = str(result)
-        logging.debug(f"Final result_str to speak: {result_str}")
-        self.tts.speak("Here's what I found: " + result_str)
-        logging.debug("Called self.tts.speak with result_str")
-
-    def play_sound_async(self, sound_file: str):
-        """
-        Plays a sound in a separate process so that it doesn't block the main thread.
-        """
-        process = Process(target=self.sound_player.play_sound, args=(sound_file,))
-        process.start()
-
-    # threaded_listen rimossa: ora si usa direttamente listen()
-
-    def run(self):
-        logging.info("Starting Voice Assistant...")
-        searcher = RagSystem(
-            txt_dir="uploads",
-            emb_file="embeddings.npz",
-            model_name='./models/all-MiniLM-L6-v2',
-            reindex=False
+        return any(
+            self._contains_phrase(command, wake_word)
+            for wake_word in self.profile.wake_word_aliases
         )
-        searcher.run(query="How many liters of water?", top_k=1)
 
-        if config.LANGUAGE == "it":
-            welcome_message = f" Ciao! Mi sono appena svegliata e sono pronta ad aiutarti. Ricordati solo di chiamarmi '{config.WAKE_WORD}' quando mi parli."
-        else:
-            welcome_message = f" Hi! I just woke up and I'm ready to help. Just remember to call me '{config.WAKE_WORD}' when you talk to me."
-        self.tts.speak(welcome_message)
-        logging.info("Welcome message delivered. Waiting for commands.")
-        state = AssistantState.COMMAND  # Avvia direttamente in COMMAND mode
+    def _contains_rag_word(self, command: str) -> bool:
+        return self._contains_phrase(command, self.profile.rag_word)
 
-        while True:
+    def process_command(self, command: str) -> str | None:
+        if not command:
+            logger.warning("No command to process")
+            return None
+        if not self.contains_wake_word(command):
+            logger.info("Ignoring command without a configured wake word")
+            return None
+
+        normalized = command.lower()
+        for question in self.profile.presentation_questions:
+            if question in normalized:
+                response = self._choice(self.profile.presentation_answers)
+                self.tts.speak(response)
+                return response
+
+        return self.api_client.talk(command, context=None)
+
+    @staticmethod
+    def _rag_result_text(result: Any) -> str:
+        if isinstance(result, str):
+            return result
+        if result is None:
+            return ""
+
+        if isinstance(result, (list, tuple)):
+            formatted: list[str] = []
+            for position, item in enumerate(result, start=1):
+                text = getattr(item, "text", None)
+                if text is not None:
+                    formatted.append(str(text))
+                elif (
+                    isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[0], int)
+                ):
+                    formatted.append(
+                        f"Risposta {position}: indice {item[0]}, score {float(item[1]):.2f}"
+                    )
+                else:
+                    formatted.append(str(item))
+            return "\n".join(formatted)
+        return str(result)
+
+    def process_rag_command(self, command: str, searcher: Any | None = None) -> str:
+        if not command:
+            raise RagCommandError("RAG command cannot be empty")
+        try:
+            result = (searcher or self._get_rag_searcher()).run(
+                query=command,
+                top_k=self.settings.top_k,
+            )
+            result_text = self._rag_result_text(result).strip()
+            if not result_text:
+                raise RagCommandError("The RAG search returned no text")
+            self.tts.speak(self.profile.rag_result_prefix + result_text)
+            return result_text
+        except RagCommandError:
+            raise
+        except Exception as exc:
+            raise RagCommandError("Unable to answer the RAG command") from exc
+
+    def _get_rag_searcher(self) -> Any:
+        if self._rag_searcher is None:
             try:
-                if state == AssistantState.COMMAND:
-                    command = None
-                    for text in self.speech_recognizer.listen(timeout=config.LISTEN_TIMEOUT):
-                        if text.strip():
-                            command = text.strip()  # Prendi sempre l'ultimo non vuoto
-                    if command:
-                        if config.RAG_WORD in command.lower():
-                            self.play_sound_async(config.WAKE_SOUND)
-                            logging.info("'Regolamento' command detected. Entering RAG mode.")
-                            state = AssistantState.RAG
-                        elif self.contains_wake_word(command):
-                            self.process_command(command)
-                    # Se timeout, semplicemente continua ad ascoltare
+                if self._rag_factory is not None:
+                    self._rag_searcher = self._rag_factory()
+                else:
+                    from document.rag_system import RagSystem
 
-                elif state == AssistantState.RAG:
-                    rag_command = None
-                    for text in self.speech_recognizer.listen(timeout=config.LISTEN_TIMEOUT):
-                        if text.strip():
-                            rag_command = text.strip()  # Prendi sempre l'ultimo non vuoto
-                    if rag_command:
-                        self.process_rag_command(rag_command, searcher)
-                        self.play_sound_async(config.STOP_SOUND)
-                        logging.info("Exiting RAG mode after response.")
-                        state = AssistantState.COMMAND
-                    else:
-                        # Se timeout, semplicemente continua ad ascoltare in RAG
-                        pass
+                    self._rag_searcher = RagSystem(
+                        txt_dir=str(self.settings.upload_folder),
+                        emb_file=str(self.settings.embeddings_file),
+                        model_name=str(self.settings.sentence_transformer_model),
+                        reindex=False,
+                    )
+            except Exception as exc:
+                raise RagCommandError("Unable to initialize the RAG searcher") from exc
+        return self._rag_searcher
 
-            except Exception as e:
-                logging.error(f"Error in the main loop: {e}")
-                time.sleep(1)
+    @staticmethod
+    def _log_sound_failure(future: Future[Any]) -> None:
+        try:
+            future.result()
+        except Exception:
+            logger.warning("Notification sound playback failed", exc_info=True)
+
+    def play_sound_async(self, sound_file: str) -> Any:
+        future = self._sound_executor.submit(
+            self.sound_player.play_sound,
+            sound_file,
+        )
+        add_done_callback = getattr(future, "add_done_callback", None)
+        if callable(add_done_callback):
+            add_done_callback(self._log_sound_failure)
+        return future
+
+    def _recognize_once(self) -> RecognitionResult | None:
+        listen_once = getattr(self.speech_recognizer, "listen_once", None)
+        if callable(listen_once):
+            result = listen_once(timeout=self.settings.listen_timeout)
+            if result is None:
+                return None
+            if isinstance(result, str):
+                return RecognitionResult(result.strip(), is_final=True)
+            return RecognitionResult(
+                str(getattr(result, "text", "")).strip(),
+                bool(getattr(result, "is_final", True)),
+            )
+
+        # Compatibility with recognizers that only implement the legacy
+        # generator.  The final non-empty item is treated as final.
+        latest = ""
+        for text in self.speech_recognizer.listen(timeout=self.settings.listen_timeout):
+            if str(text).strip():
+                latest = str(text).strip()
+        return RecognitionResult(latest, is_final=True) if latest else None
+
+    def run_once(self) -> bool:
+        """Process at most one finalized utterance.
+
+        Returns ``True`` when an utterance caused a state transition or command
+        execution, and ``False`` for a timeout/partial-only result.
+        """
+
+        result = self._recognize_once()
+        if result is None or not result.text or not result.is_final:
+            return False
+        command = result.text
+
+        if self.state is AssistantState.COMMAND:
+            if self._contains_rag_word(command):
+                self.play_sound_async(str(self.settings.wake_sound))
+                self.state = AssistantState.RAG
+                logger.info("Entering RAG mode")
+                return True
+            if self.contains_wake_word(command):
+                self.process_command(command)
+                return True
+            return False
+
+        if self.state is AssistantState.RAG:
+            try:
+                self.process_rag_command(command)
+            finally:
+                self.state = AssistantState.COMMAND
+                self.play_sound_async(str(self.settings.stop_sound))
+                logger.info("Returning to command mode")
+            return True
+
+        return False
+
+    def run(self, *, max_iterations: int | None = None) -> None:
+        if max_iterations is not None and max_iterations < 0:
+            raise ValueError("max_iterations cannot be negative")
+        if self._closed:
+            raise AssistantRuntimeError("Voice assistant is closed")
+
+        logger.info("Starting voice assistant")
+        self._running = True
+        iterations = 0
+        recoverable_errors = (
+            APIClientError,
+            TTSError,
+            SoundPlaybackError,
+            SpeechRecognitionError,
+            AssistantRuntimeError,
+        )
+        try:
+            self.tts.speak(self.profile.welcome_message.format(wake_word=self.profile.wake_word))
+            while self._running and (max_iterations is None or iterations < max_iterations):
+                iterations += 1
+                try:
+                    self.run_once()
+                except recoverable_errors:
+                    logger.exception("Recoverable runtime error")
+                    self.state = AssistantState.COMMAND
+                    self._sleep(1.0)
+        except KeyboardInterrupt:
+            logger.info("Voice assistant interrupted")
+        finally:
+            self._running = False
+            self.close()
+
+    def stop(self) -> None:
+        self._running = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._running = False
+
+        if self._owns_sound_executor:
+            self._sound_executor.shutdown(wait=True)
+
+        closed_ids: set[int] = set()
+        for service in (
+            self.speech_recognizer,
+            self.api_client,
+            self.tts,
+            self.sound_player,
+            self._rag_searcher,
+        ):
+            if service is None or id(service) in closed_ids:
+                continue
+            closed_ids.add(id(service))
+            close = getattr(service, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.warning(
+                        "Unable to close %s",
+                        type(service).__name__,
+                        exc_info=True,
+                    )
+        self._closed = True
+
+    def __enter__(self) -> VoiceAssistant:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()

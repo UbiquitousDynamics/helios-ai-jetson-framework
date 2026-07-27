@@ -133,7 +133,6 @@ Your task is to thoroughly analyze the entire Visual Studio Code workspace and p
     * clear headings;
     * tables where appropriate;
     * bullet lists;
-    * code blocks;
     * diagrams;
     * concise explanations.
 

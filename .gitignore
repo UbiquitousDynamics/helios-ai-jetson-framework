@@ -1,49 +1,60 @@
-# Bytecode files
+# Python bytecode and tool caches
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
 
-# Virtual environment
-venv/
-.venv/
-.env/
-.model/
-model/
+# Local environments and secrets
+/venv/
+/.venv/
+/.env
+/.env.*
+!/.env.example
+/.model/
+/model/
+
 # Editor and IDE files
 .vscode/
 .idea/
 *.sublime-workspace
+*.sublime-project
 
-# Distribution files
+# Distribution and coverage output
 dist/
 build/
 *.egg-info/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
 
-# Logs and database
+# Runtime output
 debug.log
 *.log
 *.sqlite3
+/tts_audio/
+/output.wav
+/output-*.wav
+/output_*.wav
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
-# pytest cache
-.pytest_cache/
-
-# MyPy cache
-.mypy_cache/
-
-# Coverage reports
-htmlcov/
-.coverage
-
-# Docker files
+# Local container overrides
 docker-compose.override.yml
 
-#output piper-tts
-output.wav
-
-embeddings.npz
-embeddings.npy
+# Generated retrieval indexes. The integrity manifest is embedded in the NPZ,
+# and the canonical index is rebuilt from uploads/ on first use or via the
+# index-building script.
+/embeddings.npz
+/embeddings.npy
+/.embeddings.npz.*.tmp
+/*.npz.tmp
+/*.npy.tmp
+/embeddings-*.npz
+/embeddings-*.npy
 
 # Private deployment credentials and operator configuration
 **/.env

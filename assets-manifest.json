@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-27",
+  "policy": {
+    "canonical_path_format": "repository-relative POSIX",
+    "hash_algorithm": "sha256",
+    "third_party_notice": "THIRD_PARTY_NOTICES.md",
+    "lfs_migration_status": "not-started"
+  },
+  "artifacts": [
+    {
+      "id": "sentence-transformer-all-minilm-l6-v2",
+      "path": "models/all-MiniLM-L6-v2",
+      "kind": "directory",
+      "required": true,
+      "role": "dense-retrieval-encoder",
+      "companions": [
+        "models/all-MiniLM-L6-v2/config.json",
+        "models/all-MiniLM-L6-v2/modules.json",
+        "models/all-MiniLM-L6-v2/1_Pooling/config.json"
+      ],
+      "source": {
+        "locator": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
+        "revision": null,
+        "status": "model-identity-recorded-revision-missing"
+      },
+      "license": {
+        "spdx": "Apache-2.0",
+        "status": "declared-in-bundled-model-card",
+        "evidence": "models/all-MiniLM-L6-v2/README.md"
+      },
+      "integrity": {
+        "file": "models/all-MiniLM-L6-v2/model.safetensors",
+        "sha256": "1377e9af0ca0b016a9f2aa584d6fc71ab3ea6804fae21ef9fb1416e2944057ac"
+      }
+    },
+    {
+      "id": "piper-it-it-paola-medium",
+      "path": "audio/models/it_IT-paola-medium.onnx",
+      "kind": "file",
+      "required": true,
+      "role": "italian-text-to-speech",
+      "companions": [
+        "audio/models/it_IT-paola-medium.onnx.json"
+      ],
+      "source": {
+        "locator": null,
+        "revision": null,
+        "status": "not-recorded"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": null
+      },
+      "integrity": {
+        "file": "audio/models/it_IT-paola-medium.onnx",
+        "sha256": "6fc918b5a0ea6137382833dddfa567bffbe6a5060c02043c87192ee59c04210c"
+      }
+    },
+    {
+      "id": "piper-en-gb-alba-medium",
+      "path": "audio/models/en_GB-alba-medium.onnx",
+      "kind": "file",
+      "required": true,
+      "role": "english-text-to-speech",
+      "companions": [
+        "audio/models/en_GB-alba-medium.onnx.json"
+      ],
+      "source": {
+        "locator": null,
+        "revision": null,
+        "status": "not-recorded"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": null
+      },
+      "integrity": {
+        "file": "audio/models/en_GB-alba-medium.onnx",
+        "sha256": "401369c4a81d09fdd86c32c5c864440811dbdcc66466cde2d64f7133a66ad03b"
+      }
+    },
+    {
+      "id": "vosk-small-it-0.22",
+      "path": "recognizer/models/vosk-model-small-it-0.22",
+      "kind": "directory",
+      "required": true,
+      "role": "italian-speech-recognition",
+      "companions": [
+        "recognizer/models/vosk-model-small-it-0.22/conf/model.conf",
+        "recognizer/models/vosk-model-small-it-0.22/graph/HCLr.fst"
+      ],
+      "source": {
+        "locator": null,
+        "revision": "0.22",
+        "status": "name-recorded-upstream-location-missing"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": null
+      },
+      "integrity": {
+        "file": "recognizer/models/vosk-model-small-it-0.22/am/final.mdl",
+        "sha256": "4a4cd400c63a6636fc975f0aabc39e52d5f90c01c19415e38fed7b184f1cdbd1"
+      }
+    },
+    {
+      "id": "vosk-small-en-us-0.15",
+      "path": "recognizer/models/vosk-model-small-en-us-0.15",
+      "kind": "directory",
+      "required": true,
+      "role": "english-speech-recognition",
+      "companions": [
+        "recognizer/models/vosk-model-small-en-us-0.15/conf/model.conf",
+        "recognizer/models/vosk-model-small-en-us-0.15/graph/HCLr.fst"
+      ],
+      "source": {
+        "locator": null,
+        "revision": "0.15",
+        "status": "name-recorded-upstream-location-missing"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": "recognizer/models/vosk-model-small-en-us-0.15/README"
+      },
+      "integrity": {
+        "file": "recognizer/models/vosk-model-small-en-us-0.15/am/final.mdl",
+        "sha256": "75370a0137f9daf8f469dedd7daa4513ae7a621f03240c6e512e2b50b656a7b6"
+      }
+    },
+    {
+      "id": "rag-embedding-index",
+      "path": "embeddings.npz",
+      "kind": "file",
+      "required": false,
+      "role": "generated-retrieval-index",
+      "lifecycle": "generated-on-first-use-or-by-scripts/build_index.py",
+      "source": {
+        "locator": "uploads/",
+        "revision": null,
+        "status": "generated-locally"
+      },
+      "license": {
+        "spdx": null,
+        "status": "inherits-source-corpus",
+        "evidence": null
+      },
+      "integrity": null
+    },
+    {
+      "id": "rag-source-corpus",
+      "path": "uploads",
+      "kind": "directory",
+      "required": true,
+      "role": "retrieval-source-documents",
+      "source": {
+        "locator": null,
+        "revision": null,
+        "status": "not-recorded"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": null
+      },
+      "integrity": null
+    },
+    {
+      "id": "audio-cues",
+      "path": "sounds",
+      "kind": "directory",
+      "required": true,
+      "role": "assistant-state-audio-cues",
+      "companions": [
+        "sounds/wake_up.wav",
+        "sounds/stop.wav"
+      ],
+      "source": {
+        "locator": null,
+        "revision": null,
+        "status": "not-recorded"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": null
+      },
+      "integrity": null
+    },
+    {
+      "id": "project-images",
+      "path": "pictures",
+      "kind": "directory",
+      "required": false,
+      "role": "documentation-and-ui-images",
+      "source": {
+        "locator": null,
+        "revision": null,
+        "status": "not-recorded"
+      },
+      "license": {
+        "spdx": null,
+        "status": "not-recorded",
+        "evidence": null
+      },
+      "integrity": null
+    }
+  ]
+}

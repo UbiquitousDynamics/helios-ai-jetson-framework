@@ -1,66 +1,215 @@
+"""Vosk speech-recognition boundary with deterministic audio cleanup."""
+
+from __future__ import annotations
+
 import json
 import logging
 import time
-import pyaudio  # for audio recording
-from vosk import Model, KaldiRecognizer
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
 import config
 
+logger = logging.getLogger(__name__)
+
+
+class SpeechRecognitionError(RuntimeError):
+    """Raised when microphone capture or Vosk recognition fails."""
+
+
+@dataclass(frozen=True)
+class RecognitionResult:
+    """A partial or final recognition event."""
+
+    text: str
+    is_final: bool
+
+
 class SpeechRecognizer:
+    def __init__(
+        self,
+        model_path: str | Path = config.VOSK_MODEL_PATH,
+        *,
+        model: Any | None = None,
+        audio_interface: Any | None = None,
+        recognizer_factory: Callable[[Any, int], Any] | None = None,
+        audio_format: Any | None = None,
+        rate: int = 16_000,
+        chunk: int = 4_000,
+        clock: Callable[[], float] = time.monotonic,
+        owns_audio: bool | None = None,
+    ) -> None:
+        if rate <= 0 or chunk <= 0:
+            raise ValueError("rate and chunk must be greater than zero")
+
+        self.model_path = Path(model_path)
+        self.model = model
+        self.p = audio_interface
+        self._recognizer_factory = recognizer_factory
+        self._audio_format = audio_format
+        self.rate = rate
+        self.chunk = chunk
+        self._clock = clock
+        self._owns_audio = audio_interface is None if owns_audio is None else owns_audio
+        self._closed = False
+
     @staticmethod
     def remove_consecutive_duplicates(text: str) -> str:
-        """
-        Rimuove duplicati consecutivi di parole in una stringa.
-        Esempio: "ciao ciao come stai" -> "ciao come stai"
-        """
         words = text.split()
         if not words:
             return text
         filtered = [words[0]]
-        for w in words[1:]:
-            if w != filtered[-1]:
-                filtered.append(w)
-        return ' '.join(filtered)
-    def __init__(self):
-        # Load the Vosk model for the specified language
-        self.model = Model(config.VOSK_MODEL_PATH)
-        # Initialize PyAudio
-        self.p = pyaudio.PyAudio()
+        for word in words[1:]:
+            if word != filtered[-1]:
+                filtered.append(word)
+        return " ".join(filtered)
 
-    def listen(self, timeout: int = None):
-        # Configure recording parameters
-        rate = 16000
-        chunk = 4000
-        logging.info("Listening...")
-        
-        # Open the audio stream from the microphone
-        stream = self.p.open(format=pyaudio.paInt16, channels=1, rate=rate, input=True, frames_per_buffer=chunk)
-        stream.start_stream()
+    def _ensure_runtime(self) -> None:
+        if self._closed:
+            raise SpeechRecognitionError("Speech recognizer is closed")
 
-        recognizer = KaldiRecognizer(self.model, rate)
-        result_text = ""
-        start_time = time.time()
-        last_partial = None
+        if self.model is None or self._recognizer_factory is None:
+            try:
+                from vosk import KaldiRecognizer, Model
+            except ImportError as exc:  # pragma: no cover - deployment dependency
+                raise SpeechRecognitionError(
+                    "The 'vosk' package is required for speech recognition"
+                ) from exc
+            if self.model is None:
+                try:
+                    self.model = Model(str(self.model_path))
+                except Exception as exc:
+                    raise SpeechRecognitionError(
+                        f"Unable to load Vosk model: {self.model_path}"
+                    ) from exc
+            if self._recognizer_factory is None:
+                self._recognizer_factory = KaldiRecognizer
 
-        while True:
-            data = stream.read(chunk, exception_on_overflow=False)
-            if recognizer.AcceptWaveform(data):
-                res = json.loads(recognizer.Result())
-                text = res.get("text", "")
-                if text:
-                    clean_text = self.remove_consecutive_duplicates(text)
-                    result_text += clean_text
-                    yield clean_text  # yield final recognized text senza duplicati
-            else:
-                partial = json.loads(recognizer.PartialResult()).get("partial", "")
-                if partial and partial != last_partial:
-                    last_partial = partial
-                    clean_partial = self.remove_consecutive_duplicates(partial)
-                    yield clean_partial  # yield partial result senza duplicati
-            if timeout is not None and (time.time() - start_time) > timeout:
-                break
+        if self.p is None:
+            try:
+                import pyaudio
+            except ImportError as exc:  # pragma: no cover - deployment dependency
+                raise SpeechRecognitionError(
+                    "The 'PyAudio' package is required for microphone capture"
+                ) from exc
+            try:
+                self.p = pyaudio.PyAudio()
+            except Exception as exc:
+                raise SpeechRecognitionError("Unable to initialize the audio input device") from exc
+            self._audio_format = pyaudio.paInt16
+            self._owns_audio = True
 
-        stream.stop_stream()
-        stream.close()
-        logging.debug(f"Recognized command: {result_text}")
-        # Optionally yield the final result_text at the end
-        # yield result_text
+        if self._audio_format is None:
+            # PyAudio's paInt16 value. Injected audio adapters can ignore it.
+            self._audio_format = 8
+
+    @staticmethod
+    def _parse_result(payload: str, key: str) -> str:
+        try:
+            parsed = json.loads(payload)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise SpeechRecognitionError("Recognizer returned invalid JSON") from exc
+        return str(parsed.get(key) or "")
+
+    def listen_events(self, timeout: float | None = None) -> Iterator[RecognitionResult]:
+        """Yield distinct partial and final recognition events.
+
+        The microphone stream is always stopped and closed, including when a
+        consumer stops after the first final result.
+        """
+
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
+        self._ensure_runtime()
+        assert self.p is not None
+        assert self._recognizer_factory is not None
+
+        stream: Any | None = None
+        last_partial = ""
+        last_final = ""
+        start_time = self._clock()
+        try:
+            stream = self.p.open(
+                format=self._audio_format,
+                channels=1,
+                rate=self.rate,
+                input=True,
+                frames_per_buffer=self.chunk,
+            )
+            stream.start_stream()
+            recognizer = self._recognizer_factory(self.model, self.rate)
+            logger.info("Listening for speech")
+
+            while timeout is None or self._clock() - start_time < timeout:
+                data = stream.read(self.chunk, exception_on_overflow=False)
+                if recognizer.AcceptWaveform(data):
+                    text = self._parse_result(recognizer.Result(), "text")
+                    clean_text = self.remove_consecutive_duplicates(text).strip()
+                    if clean_text and clean_text != last_final:
+                        last_final = clean_text
+                        yield RecognitionResult(clean_text, is_final=True)
+                else:
+                    partial = self._parse_result(recognizer.PartialResult(), "partial")
+                    clean_partial = self.remove_consecutive_duplicates(partial).strip()
+                    if clean_partial and clean_partial != last_partial:
+                        last_partial = clean_partial
+                        yield RecognitionResult(clean_partial, is_final=False)
+
+            final_result = getattr(recognizer, "FinalResult", None)
+            if callable(final_result):
+                text = self._parse_result(final_result(), "text")
+                clean_text = self.remove_consecutive_duplicates(text).strip()
+                if clean_text and clean_text != last_final:
+                    yield RecognitionResult(clean_text, is_final=True)
+        except SpeechRecognitionError:
+            raise
+        except Exception as exc:
+            raise SpeechRecognitionError("Speech recognition failed") from exc
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                except Exception:
+                    logger.warning("Unable to stop microphone stream", exc_info=True)
+                try:
+                    stream.close()
+                except Exception:
+                    logger.warning("Unable to close microphone stream", exc_info=True)
+
+    def listen_once(self, timeout: float | None = None) -> RecognitionResult | None:
+        """Return on the first final result, or the latest partial at timeout."""
+
+        latest: RecognitionResult | None = None
+        events = self.listen_events(timeout=timeout)
+        try:
+            for result in events:
+                latest = result
+                if result.is_final:
+                    return result
+        finally:
+            events.close()
+        return latest
+
+    def listen(self, timeout: float | None = None) -> Iterator[str]:
+        """Compatibility generator yielding only event text."""
+
+        for result in self.listen_events(timeout=timeout):
+            yield result.text
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if self.p is not None and self._owns_audio:
+            try:
+                self.p.terminate()
+            except Exception as exc:
+                raise SpeechRecognitionError("Unable to terminate the audio interface") from exc
+        self._closed = True
+
+    def __enter__(self) -> SpeechRecognizer:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()

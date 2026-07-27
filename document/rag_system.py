@@ -1,136 +1,651 @@
-import os
-import time
-import logging
-import numpy as np
-import gc
-import torch
-import re
-from sentence_transformers import SentenceTransformer
+"""Deterministic, integrity-checked dense retrieval.
 
-# Configurazione logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('rag_debug.log', mode='w', encoding='utf-8')
-    ]
-)
+The public ``RagSystem`` constructor and ``run`` method intentionally retain
+their original signatures.  The implementation keeps a corpus/index snapshot
+in memory after the first query and stores a manifest inside the NPZ index so
+that rows can never be silently paired with the wrong text.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import re
+import tempfile
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Protocol, Sequence
+
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
-class RagSystem:
-    def __init__(self,
-                 txt_dir: str = "uploads",
-                 emb_file: str = "embeddings.npz",
-                 model_name: str = './models/all-MiniLM-L6-v2',
-                 reindex: bool = False):
-        logger.debug(f"Inizializzazione RagSystem - txt_dir: {txt_dir}, emb_file: {emb_file}, model_name: {model_name}, reindex: {reindex}")
-        start_time = time.time()
+INDEX_SCHEMA_VERSION = 1
+SPLITTER_VERSION = "sentence-per-source-v1"
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
-        self.txt_dir = txt_dir
-        self.emb_file = emb_file
-        self.reindex = reindex
 
-        logger.debug("Configurazione ottimizzazioni per dispositivi low-end")
-        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-        if torch.cuda.is_available():
-            logger.info("CUDA disponibile ma forziamo CPU per stabilita su Jetson Nano")
+class RagError(RuntimeError):
+    """Base class for RAG failures that callers may handle explicitly."""
 
-        # Forza il percorso assoluto per evitare che SentenceTransformer provi a scaricare
-        model_path = os.path.abspath(model_name)
-        logger.debug(f"Inizio caricamento modello locale: {model_path}")
-        model_start = time.time()
 
+class CorpusError(RagError):
+    """Raised when the text corpus cannot be read or has no usable chunks."""
+
+
+class IndexIntegrityError(RagError):
+    """Raised when an index is stale, corrupt, or belongs to another corpus."""
+
+
+class ModelLoadError(RagError):
+    """Raised when the configured local embedding model cannot be loaded."""
+
+
+class EmbeddingEncoder(Protocol):
+    """Small protocol used by SentenceTransformer and model-free test fakes."""
+
+    def encode(self, sentences: Sequence[str], **kwargs: Any) -> Any:
+        """Encode a batch of strings."""
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusChunk:
+    """One deterministic row in the retrieval corpus."""
+
+    index: int
+    source: str
+    ordinal: int
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievedPassage:
+    """A scored retrieval result with its source provenance."""
+
+    index: int
+    score: float
+    text: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndexManifest:
+    """Metadata embedded in the NPZ and validated before any query."""
+
+    schema_version: int
+    corpus_sha256: str
+    embedding_sha256: str
+    row_count: int
+    dimension: int
+    dtype: str
+    model_identity: str
+    splitter_version: str
+    normalized_embeddings: bool
+
+    def to_json(self) -> str:
+        """Return canonical JSON suitable for embedding in an NPZ file."""
+
+        return json.dumps(
+            asdict(self),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def from_json(cls, raw: str) -> "IndexManifest":
         try:
-            self.model = SentenceTransformer(model_path, device='cpu')
-            self.model.eval()
-        except Exception as e:
-            logger.error(f"Errore nel caricamento del modello locale: {e}")
-            raise FileNotFoundError(
-                f"Impossibile caricare il modello da '{model_path}'. Verifica che contenga i file richiesti per l'uso offline."
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise TypeError("manifest root is not an object")
+            return cls(**value)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise IndexIntegrityError(f"Invalid index manifest: {exc}") from exc
+
+
+def _normalise_model_identity(model_name: str) -> str:
+    """Return a stable identity for a local model or remote model identifier.
+
+    Absolute paths are intentionally excluded: an index built from the bundled
+    model must remain valid when the repository is moved to another machine.
+    Configuration and weight contents are hashed once when the retriever is
+    created. This adds bounded startup I/O, but prevents same-sized replacement
+    weights from being paired with an index generated by another model.
+    """
+
+    path = Path(model_name).expanduser()
+    if not path.is_dir():
+        return os.path.normpath(model_name).replace("\\", "/")
+
+    hasher = hashlib.sha256()
+    _add_framed(hasher, path.name)
+    model_files = sorted(
+        (
+            candidate
+            for candidate in path.rglob("*")
+            if candidate.is_file()
+            and candidate.suffix.lower()
+            in {".bin", ".json", ".model", ".onnx", ".safetensors", ".txt"}
+        ),
+        key=lambda candidate: candidate.relative_to(path).as_posix(),
+    )
+    for candidate in model_files:
+        relative_name = candidate.relative_to(path).as_posix()
+        _add_framed(hasher, relative_name)
+        with candidate.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                hasher.update(block)
+    return f"local:{path.name}:{hasher.hexdigest()}"
+
+
+def _add_framed(hasher: Any, value: str) -> None:
+    encoded = value.encode("utf-8")
+    hasher.update(len(encoded).to_bytes(8, byteorder="big"))
+    hasher.update(encoded)
+
+
+def corpus_fingerprint(chunks: Sequence[CorpusChunk]) -> str:
+    """Hash chunk order, source, and content to bind row ``n`` to chunk ``n``."""
+
+    hasher = hashlib.sha256()
+    _add_framed(hasher, SPLITTER_VERSION)
+    for chunk in chunks:
+        _add_framed(hasher, str(chunk.index))
+        _add_framed(hasher, chunk.source)
+        _add_framed(hasher, str(chunk.ordinal))
+        _add_framed(hasher, chunk.text)
+    return hasher.hexdigest()
+
+
+def embedding_fingerprint(embeddings: np.ndarray) -> str:
+    """Hash matrix shape, dtype, and bytes to detect silent index corruption."""
+
+    contiguous = np.ascontiguousarray(embeddings)
+    hasher = hashlib.sha256()
+    _add_framed(hasher, json.dumps(list(contiguous.shape)))
+    _add_framed(hasher, contiguous.dtype.str)
+    hasher.update(contiguous.tobytes(order="C"))
+    return hasher.hexdigest()
+
+
+class RagSystem:
+    """Index and search local text files with a SentenceTransformer encoder.
+
+    ``encoder`` and ``model_identity`` are keyword-only injection points.  They
+    make the retrieval core testable without importing or loading PyTorch.
+    """
+
+    def __init__(
+        self,
+        txt_dir: str = "uploads",
+        emb_file: str = "embeddings.npz",
+        model_name: str = "./models/all-MiniLM-L6-v2",
+        reindex: bool = False,
+        *,
+        encoder: EmbeddingEncoder | None = None,
+        model_identity: str | None = None,
+        batch_size: int = 16,
+        device: str = "cpu",
+    ):
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+
+        self.txt_dir = str(txt_dir)
+        self.emb_file = str(emb_file)
+        self.model_name = str(model_name)
+        self.reindex = bool(reindex)
+        self.batch_size = batch_size
+        self.device = device
+        self.model_identity = model_identity or _normalise_model_identity(self.model_name)
+
+        self.model: EmbeddingEncoder = (
+            encoder if encoder is not None else self._load_default_encoder()
+        )
+        evaluate = getattr(self.model, "eval", None)
+        if callable(evaluate):
+            evaluate()
+
+        self._chunks: tuple[CorpusChunk, ...] | None = None
+        self._corpus_sha256: str | None = None
+        self._embedding_matrix: np.ndarray | None = None
+        self._manifest: IndexManifest | None = None
+        self._ready = False
+
+    @property
+    def manifest(self) -> IndexManifest | None:
+        """The validated or newly written manifest, if the index is ready."""
+
+        return self._manifest
+
+    def _load_default_encoder(self) -> EmbeddingEncoder:
+        model_path = Path(self.model_name).expanduser().resolve()
+        if not model_path.is_dir():
+            raise ModelLoadError(
+                f"Local embedding model directory not found: '{model_path}'. "
+                "Download/provision the model before starting the assistant."
             )
 
-        model_end = time.time()
-        logger.info(f"Modello '{model_path}' caricato in {model_end - model_start:.2f} secondi")
-        logger.debug(f"Inizializzazione completata in {time.time() - start_time:.2f} secondi")
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise ModelLoadError(
+                "sentence-transformers is required to load the embedding model"
+            ) from exc
+
+        try:
+            return SentenceTransformer(str(model_path), device=self.device)
+        except Exception as exc:
+            raise ModelLoadError(
+                f"Unable to load local embedding model from '{model_path}': {exc}"
+            ) from exc
+
+    @staticmethod
+    def _split_source(text: str) -> list[str]:
+        return [part.strip() for part in _SENTENCE_BOUNDARY.split(text) if part.strip()]
+
+    def _scan_corpus(self) -> tuple[CorpusChunk, ...]:
+        directory = Path(self.txt_dir)
+        if not directory.is_dir():
+            raise CorpusError(f"Corpus directory not found: '{directory}'")
+
+        paths = sorted(
+            (
+                path
+                for path in directory.iterdir()
+                if path.is_file() and path.suffix.lower() == ".txt"
+            ),
+            key=lambda path: (path.name.casefold(), path.name),
+        )
+        if not paths:
+            raise CorpusError(f"No .txt files found in corpus directory: '{directory}'")
+
+        chunks: list[CorpusChunk] = []
+        for path in paths:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise CorpusError(f"Unable to read corpus file '{path}': {exc}") from exc
+
+            for ordinal, sentence in enumerate(self._split_source(text)):
+                chunks.append(
+                    CorpusChunk(
+                        index=len(chunks),
+                        source=path.name,
+                        ordinal=ordinal,
+                        text=sentence,
+                    )
+                )
+
+        if not chunks:
+            raise CorpusError(f"Corpus directory contains no usable text: '{directory}'")
+        return tuple(chunks)
+
+    def read_chunks(self) -> tuple[CorpusChunk, ...]:
+        """Return the cached deterministic corpus snapshot."""
+
+        if self._chunks is None:
+            self._chunks = self._scan_corpus()
+            self._corpus_sha256 = corpus_fingerprint(self._chunks)
+            logger.info(
+                "Loaded %d chunks from %s",
+                len(self._chunks),
+                self.txt_dir,
+            )
+        return self._chunks
 
     def _read_data(self) -> list[str]:
-        logger.debug(f"Inizio lettura directory: {self.txt_dir}")
-        start_time = time.time()
+        """Compatibility wrapper returning only chunk text."""
 
-        if not os.path.exists(self.txt_dir) or not os.path.isdir(self.txt_dir):
-            raise FileNotFoundError(f"Directory '{self.txt_dir}' non trovata!")
+        return [chunk.text for chunk in self.read_chunks()]
 
-        txt_files = [f for f in sorted(os.listdir(self.txt_dir)) if f.lower().endswith('.txt')]
-        if not txt_files:
-            raise FileNotFoundError(f"Nessun file .txt trovato in {self.txt_dir}")
+    def clear_cache(self) -> None:
+        """Forget the current snapshot so a changed corpus can be revalidated."""
 
-        all_text = []
-        for fname in txt_files:
-            with open(os.path.join(self.txt_dir, fname), 'r', encoding='utf-8') as f:
-                all_text.append(f.read())
+        self._chunks = None
+        self._corpus_sha256 = None
+        self._embedding_matrix = None
+        self._manifest = None
+        self._ready = False
 
-        combined_text = '\n'.join(all_text)
-        sentences = [s.strip() for s in re.split(r'(?<=[\.!?])\s+', combined_text) if s.strip()]
+    def _encode_batch(self, texts: Sequence[str]) -> np.ndarray:
+        encoded = self.model.encode(
+            list(texts),
+            convert_to_numpy=True,
+            show_progress_bar=False,
+            batch_size=self.batch_size,
+            normalize_embeddings=True,
+        )
+        matrix = np.asarray(encoded)
+        if matrix.ndim == 1 and len(texts) == 1:
+            matrix = matrix.reshape(1, -1)
+        self._validate_matrix(matrix, expected_rows=len(texts))
+        norms = np.linalg.norm(matrix, axis=1)
+        if np.any(norms == 0):
+            raise IndexIntegrityError("Embedding encoder returned a zero-length vector")
+        normalized = matrix / norms[:, np.newaxis]
+        return np.ascontiguousarray(normalized.astype(matrix.dtype, copy=False))
 
-        logger.info(f"Lette {len(sentences)} frasi da {len(txt_files)} file in {time.time() - start_time:.2f} secondi")
-        return sentences
+    @staticmethod
+    def _validate_matrix(
+        embeddings: np.ndarray,
+        *,
+        expected_rows: int | None = None,
+        expected_dimension: int | None = None,
+    ) -> None:
+        if embeddings.ndim != 2:
+            raise IndexIntegrityError(
+                f"Embedding matrix must be two-dimensional; got shape {embeddings.shape}"
+            )
+        if embeddings.shape[0] < 1 or embeddings.shape[1] < 1:
+            raise IndexIntegrityError(
+                f"Embedding matrix cannot be empty; got shape {embeddings.shape}"
+            )
+        if expected_rows is not None and embeddings.shape[0] != expected_rows:
+            raise IndexIntegrityError(
+                f"Embedding encoder returned {embeddings.shape[0]} rows for "
+                f"{expected_rows} input chunks"
+            )
+        if expected_dimension is not None and embeddings.shape[1] != expected_dimension:
+            raise IndexIntegrityError(
+                f"Embedding dimension mismatch: index has {expected_dimension}, "
+                f"encoder returned {embeddings.shape[1]}"
+            )
+        if not np.issubdtype(embeddings.dtype, np.floating):
+            raise IndexIntegrityError(
+                f"Embedding matrix must use a floating dtype; got {embeddings.dtype}"
+            )
+        if not np.isfinite(embeddings).all():
+            raise IndexIntegrityError("Embedding matrix contains NaN or infinite values")
+
+    @staticmethod
+    def _validate_normalized(embeddings: np.ndarray) -> None:
+        norms = np.linalg.norm(embeddings, axis=1)
+        if np.any(norms == 0) or not np.allclose(
+            norms,
+            1.0,
+            rtol=1e-4,
+            atol=1e-6,
+        ):
+            raise IndexIntegrityError(
+                "Index claims normalized embeddings but contains non-unit vectors"
+            )
+
+    def _chunks_for_supplied_data(self, data: Sequence[str]) -> tuple[CorpusChunk, ...]:
+        texts = tuple(str(value) for value in data)
+        if not texts or any(not text.strip() for text in texts):
+            raise CorpusError("Cannot index an empty corpus or an empty chunk")
+
+        chunks = self.read_chunks()
+        if texts != tuple(chunk.text for chunk in chunks):
+            raise CorpusError(
+                "Supplied data does not match the deterministic corpus snapshot. "
+                "Update the files in txt_dir and rebuild the index."
+            )
+        return chunks
+
+    def _build_manifest(
+        self,
+        chunks: Sequence[CorpusChunk],
+        embeddings: np.ndarray,
+    ) -> IndexManifest:
+        return IndexManifest(
+            schema_version=INDEX_SCHEMA_VERSION,
+            corpus_sha256=corpus_fingerprint(chunks),
+            embedding_sha256=embedding_fingerprint(embeddings),
+            row_count=embeddings.shape[0],
+            dimension=embeddings.shape[1],
+            dtype=embeddings.dtype.str,
+            model_identity=self.model_identity,
+            splitter_version=SPLITTER_VERSION,
+            normalized_embeddings=True,
+        )
+
+    def _atomic_write_index(
+        self,
+        embeddings: np.ndarray,
+        manifest: IndexManifest,
+    ) -> None:
+        target = Path(self.emb_file)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        try:
+            with os.fdopen(descriptor, "w+b") as handle:
+                np.savez_compressed(
+                    handle,
+                    embeddings=embeddings,
+                    manifest=np.asarray(manifest.to_json()),
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, target)
+        except Exception:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+            raise
 
     def index_database(self, data: list[str] | None = None) -> np.ndarray:
-        logger.debug("Inizio indicizzazione database")
-        start_time = time.time()
+        """Encode the corpus and atomically replace its integrity-bound index."""
 
-        if data is None:
-            data = self._read_data()
+        chunks = self.read_chunks() if data is None else self._chunks_for_supplied_data(data)
 
-        embeddings_list = []
-        with torch.no_grad():
-            for i in range(0, len(data), 16):
-                batch = data[i:i+16]
-                batch_embeddings = self.model.encode(
-                    batch,
-                    convert_to_numpy=True,
-                    show_progress_bar=False,
-                    batch_size=16,
-                    normalize_embeddings=True
+        batches: list[np.ndarray] = []
+        dimension: int | None = None
+        for start in range(0, len(chunks), self.batch_size):
+            batch = self._encode_batch(
+                [chunk.text for chunk in chunks[start : start + self.batch_size]]
+            )
+            if dimension is None:
+                dimension = batch.shape[1]
+            elif batch.shape[1] != dimension:
+                raise IndexIntegrityError(
+                    "Embedding encoder returned inconsistent dimensions across batches"
                 )
-                embeddings_list.append(batch_embeddings)
-                if i % 64 == 0:
-                    gc.collect()
+            batches.append(batch)
 
-        embeddings = np.vstack(embeddings_list)
-        np.savez_compressed(self.emb_file, embeddings=embeddings)
+        embeddings = np.ascontiguousarray(np.vstack(batches))
+        self._validate_matrix(embeddings, expected_rows=len(chunks))
+        manifest = self._build_manifest(chunks, embeddings)
+        self._atomic_write_index(embeddings, manifest)
 
-        logger.info(f"Indicizzazione completata in {time.time() - start_time:.2f} secondi (shape={embeddings.shape})")
+        self._chunks = tuple(chunks)
+        self._corpus_sha256 = manifest.corpus_sha256
+        self._embedding_matrix = embeddings
+        self._manifest = manifest
+        self._ready = True
+        self.reindex = False
+        logger.info(
+            "Indexed %d chunks into %s with shape %s",
+            len(chunks),
+            self.emb_file,
+            embeddings.shape,
+        )
         return embeddings
 
-    def load_embedding_matrix(self) -> np.ndarray:
-        if not os.path.exists(self.emb_file):
-            raise FileNotFoundError(f"File embeddings non trovato! Esegui prima index_database().")
-        data = np.load(self.emb_file)
-        return data['embeddings']
+    @staticmethod
+    def _decode_manifest(raw_manifest: np.ndarray) -> IndexManifest:
+        if raw_manifest.size != 1:
+            raise IndexIntegrityError("Index manifest must contain exactly one JSON value")
+        return IndexManifest.from_json(str(raw_manifest.reshape(-1)[0]))
 
-    def search(self, query: str, emb_matrix: np.ndarray, top_k: int = 20) -> list[tuple[int, float]]:
-        logger.debug(f"Inizio ricerca per query: '{query}' (top_k={top_k})")
-        with torch.no_grad():
-            q_emb = self.model.encode([query], convert_to_numpy=True, normalize_embeddings=True)[0]
-        sims = np.dot(emb_matrix, q_emb)
-        top_k = min(top_k, len(sims))
-        idxs = np.argpartition(-sims, top_k)[:top_k]
-        results = sorted([(int(i), float(sims[i])) for i in idxs], key=lambda x: x[1], reverse=True)
-        return results
+    def _validate_loaded_index(
+        self,
+        embeddings: np.ndarray,
+        manifest: IndexManifest,
+        chunks: Sequence[CorpusChunk],
+    ) -> None:
+        if manifest.schema_version != INDEX_SCHEMA_VERSION:
+            raise IndexIntegrityError(
+                f"Unsupported index schema {manifest.schema_version}; "
+                f"expected {INDEX_SCHEMA_VERSION}. Rebuild the index."
+            )
+        if manifest.splitter_version != SPLITTER_VERSION:
+            raise IndexIntegrityError(
+                f"Index splitter '{manifest.splitter_version}' does not match "
+                f"'{SPLITTER_VERSION}'. Rebuild the index."
+            )
+        if manifest.model_identity != self.model_identity:
+            raise IndexIntegrityError(
+                f"Index model '{manifest.model_identity}' does not match configured "
+                f"model '{self.model_identity}'. Rebuild the index."
+            )
+        if manifest.normalized_embeddings is not True:
+            raise IndexIntegrityError(
+                "Index embeddings are not marked as normalized. Rebuild the index."
+            )
+
+        self._validate_matrix(embeddings)
+        self._validate_normalized(embeddings)
+        if embeddings.shape[0] != manifest.row_count:
+            raise IndexIntegrityError(
+                f"Index matrix has {embeddings.shape[0]} rows but its manifest "
+                f"declares {manifest.row_count}"
+            )
+        if embeddings.shape[1] != manifest.dimension:
+            raise IndexIntegrityError(
+                f"Index matrix has dimension {embeddings.shape[1]} but its manifest "
+                f"declares {manifest.dimension}"
+            )
+        if embeddings.dtype.str != manifest.dtype:
+            raise IndexIntegrityError(
+                f"Index dtype '{embeddings.dtype.str}' does not match manifest '{manifest.dtype}'"
+            )
+        if manifest.row_count != len(chunks):
+            raise IndexIntegrityError(
+                f"Stale index: {manifest.row_count} embedding rows for "
+                f"{len(chunks)} corpus chunks. Rebuild the index."
+            )
+
+        expected_corpus_hash = corpus_fingerprint(chunks)
+        if manifest.corpus_sha256 != expected_corpus_hash:
+            raise IndexIntegrityError(
+                "Stale index: corpus content/order does not match the index manifest. "
+                "Rebuild the index."
+            )
+        if manifest.embedding_sha256 != embedding_fingerprint(embeddings):
+            raise IndexIntegrityError(
+                "Index matrix checksum does not match the manifest; the file may be corrupt"
+            )
+
+    def load_embedding_matrix(self) -> np.ndarray:
+        """Load and strictly validate an index, caching it for future queries."""
+
+        if self._embedding_matrix is not None and self._manifest is not None:
+            return self._embedding_matrix
+
+        target = Path(self.emb_file)
+        if not target.is_file():
+            raise FileNotFoundError(
+                f"Embedding index not found: '{target}'. Run index_database() first."
+            )
+
+        chunks = self.read_chunks()
+        try:
+            with np.load(target, allow_pickle=False) as archive:
+                if "embeddings" not in archive.files:
+                    raise IndexIntegrityError(
+                        "Index has no 'embeddings' matrix. Rebuild the index."
+                    )
+                if "manifest" not in archive.files:
+                    raise IndexIntegrityError(
+                        "Legacy index has no integrity manifest. Rebuild the index."
+                    )
+                embeddings = np.asarray(archive["embeddings"])
+                manifest = self._decode_manifest(np.asarray(archive["manifest"]))
+        except IndexIntegrityError:
+            raise
+        except (OSError, ValueError, KeyError) as exc:
+            raise IndexIntegrityError(f"Unable to read embedding index '{target}': {exc}") from exc
+
+        self._validate_loaded_index(embeddings, manifest, chunks)
+        self._embedding_matrix = embeddings
+        self._manifest = manifest
+        self._corpus_sha256 = manifest.corpus_sha256
+        self._ready = True
+        logger.info("Loaded validated embedding index %s with shape %s", target, embeddings.shape)
+        return embeddings
+
+    @staticmethod
+    def _validate_top_k(top_k: int, row_count: int) -> int:
+        if not isinstance(top_k, (int, np.integer)) or isinstance(top_k, bool):
+            raise ValueError("top_k must be an integer")
+        value = int(top_k)
+        if value < 1 or value > row_count:
+            raise ValueError(f"top_k must be between 1 and {row_count}; got {value}")
+        return value
+
+    def _ensure_ready(self) -> None:
+        if self._ready:
+            return
+        self.read_chunks()
+        if self.reindex or not Path(self.emb_file).is_file():
+            self.index_database()
+        else:
+            self.load_embedding_matrix()
+
+    def search(
+        self,
+        query: str,
+        emb_matrix: np.ndarray | None = None,
+        top_k: int = 20,
+    ) -> list[tuple[int, float]]:
+        """Return stable ``(row, score)`` pairs for a query.
+
+        Equal scores are deterministically ordered by their corpus row.
+        """
+
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        if emb_matrix is None:
+            self._ensure_ready()
+            assert self._embedding_matrix is not None
+            embeddings = self._embedding_matrix
+        else:
+            embeddings = np.asarray(emb_matrix)
+            self._validate_matrix(embeddings)
+            self._validate_normalized(embeddings)
+
+        requested = self._validate_top_k(top_k, embeddings.shape[0])
+        query_embedding = self._encode_batch([query])[0]
+        if query_embedding.shape[0] != embeddings.shape[1]:
+            raise IndexIntegrityError(
+                f"Query embedding dimension {query_embedding.shape[0]} does not "
+                f"match index dimension {embeddings.shape[1]}"
+            )
+
+        similarities = np.dot(embeddings, query_embedding)
+        if not np.isfinite(similarities).all():
+            raise IndexIntegrityError("Similarity calculation produced non-finite values")
+
+        # lexsort uses the final key as primary: descending score, then row index.
+        ranked = np.lexsort((np.arange(len(similarities)), -similarities))[:requested]
+        return [(int(index), float(similarities[index])) for index in ranked]
+
+    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievedPassage]:
+        """Return structured, source-aware retrieval results."""
+
+        self._ensure_ready()
+        chunks = self.read_chunks()
+        return [
+            RetrievedPassage(
+                index=index,
+                score=score,
+                text=chunks[index].text,
+                source=chunks[index].source,
+            )
+            for index, score in self.search(query, top_k=top_k)
+        ]
 
     def run(self, query: str, top_k: int = 5, visualize: bool = False) -> str:
-        logger.info(f"Inizio esecuzione RAG - Query: '{query}', top_k: {top_k}, visualize: {visualize}")
-        data = self._read_data()
-        if self.reindex or not os.path.exists(self.emb_file):
-            emb = self.index_database(data)
-        else:
-            emb = self.load_embedding_matrix()
-            with torch.no_grad():
-                test_emb = self.model.encode([data[0]], convert_to_numpy=True)[0]
-            if test_emb.shape[0] != emb.shape[1]:
-                logger.warning("Embedding dimension mismatch, rigenero database")
-                emb = self.index_database(data)
-        results = self.search(query, emb, top_k)
-        return "; ".join(data[idx] for idx, _ in results)
+        """Compatibility wrapper returning the historical semicolon-joined text."""
+
+        if visualize:
+            logger.warning("RAG visualization is not supported by this runtime")
+        return "; ".join(result.text for result in self.retrieve(query, top_k=top_k))

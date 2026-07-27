@@ -1,38 +1,36 @@
-from multiprocessing import Manager
-from document.document_loader import DocumentLoader
-from assistant import VoiceAssistant
+"""Executable entry point for the Helios voice assistant."""
+
+from __future__ import annotations
+
 import logging
+from pathlib import Path
+
+import config
+from assistant import VoiceAssistant
 
 
-def load_documents(shared_documents):
-    """
-    Load documents using DocumentLoader and update the shared dictionary.
-    """
-    doc_loader = DocumentLoader()
-    docs = doc_loader.load_documents()
-    shared_documents.update(docs)
+def configure_logging(settings: config.Settings = config.SETTINGS) -> None:
+    handlers: list[logging.Handler]
+    if settings.log_file:
+        Path(settings.log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers = [logging.FileHandler(settings.log_file, encoding="utf-8")]
+    else:
+        handlers = [logging.StreamHandler()]
 
-if __name__ == '__main__':
-    # Configure logging using config.py parameters
-    # Disabilitato logging
-    logging.disable(logging.CRITICAL)
-    # if LOG_FILE:
-    #     logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, filename=LOG_FILE, filemode='a')
-    # else:
-    #     logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
-    # Create a shared dictionary for the documents using a Manager
-    manager = Manager()
-    shared_documents = manager.dict()
-    
-    # Start a separate process for loading documents
-    #doc_process = Process(target=load_documents, args=(shared_documents,))
-    #doc_process.start()
-   # doc_process.join()  # Wait for the document loading process to complete
-    
-   # logging.info("Documents loaded.")
-    # Convert the shared manager dictionary to a normal dictionary
-    #documents = dict(shared_documents)
-    
-    # Initialize and run the voice assistant with the loaded documents
-    assistant = VoiceAssistant()
-    assistant.run()
+    logging.basicConfig(
+        level=settings.log_level,
+        format=settings.log_format,
+        handlers=handlers,
+        force=True,
+    )
+
+
+def main() -> int:
+    configure_logging()
+    with VoiceAssistant() as assistant:
+        assistant.run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

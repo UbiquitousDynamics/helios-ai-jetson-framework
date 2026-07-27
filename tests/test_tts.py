@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import subprocess
+import wave
+from pathlib import Path
+
+import pytest
+
+from audio.sound_player import SoundPlaybackError, SoundPlayer
+from audio.tts import PiperTTS, Pyttsx3TTS
+
+
+class FakeVoice:
+    def synthesize(self, text: str, wav_file: wave.Wave_write) -> None:
+        assert text == "hello"
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16_000)
+        wav_file.writeframes(b"\x01\x00\x02\x00")
+
+
+class CapturingBackend:
+    def __init__(self) -> None:
+        self.calls: list[tuple[bytes, int, int, int]] = []
+
+    def play(
+        self,
+        frames: bytes,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> None:
+        self.calls.append((frames, sample_rate, channels, sample_width))
+
+
+def test_piper_plays_pcm_frames_not_the_wav_header() -> None:
+    backend = CapturingBackend()
+    tts = PiperTTS("unused.onnx", voice=FakeVoice(), audio_backend=backend)
+
+    tts.speak("hello")
+
+    assert backend.calls == [(b"\x01\x00\x02\x00", 16_000, 1, 2)]
+    assert not backend.calls[0][0].startswith(b"RIFF")
+
+
+def test_historical_class_name_is_an_alias() -> None:
+    assert Pyttsx3TTS is PiperTTS
+
+
+def test_sound_player_checks_capability_only_when_used(tmp_path: Path) -> None:
+    checks: list[str] = []
+    player = SoundPlayer(executable_resolver=lambda executable: checks.append(executable) or None)
+    assert checks == []
+
+    sound = tmp_path / "cue.wav"
+    sound.write_bytes(b"not needed by the fake player")
+    with pytest.raises(SoundPlaybackError, match="not available"):
+        player.play_sound(sound)
+    assert checks == ["aplay"]
+
+
+def test_sound_player_bounds_subprocess_runtime(tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    def runner(_command: list[str], **kwargs: object) -> None:
+        calls.append(kwargs)
+        raise subprocess.TimeoutExpired("aplay", kwargs["timeout"])
+
+    sound = tmp_path / "cue.wav"
+    sound.write_bytes(b"fake")
+    player = SoundPlayer(
+        executable_resolver=lambda _executable: "/usr/bin/aplay",
+        runner=runner,
+        timeout=2.5,
+    )
+
+    with pytest.raises(SoundPlaybackError, match="Unable to play"):
+        player.play_sound(sound)
+    assert calls[0]["timeout"] == 2.5

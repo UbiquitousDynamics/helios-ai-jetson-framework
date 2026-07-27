@@ -1,0 +1,8 @@
+# Direct dependencies that resolve consistently on desktop and Jetson.
+# Piper, PyTorch, and ONNX Runtime are selected by the platform entry point.
+numpy>=1.26,<3
+ollama>=0.4.8,<1
+PyAudio>=0.2.14,<1
+sentence-transformers>=3,<6
+sounddevice>=0.5,<1
+vosk>=0.3.45,<1
