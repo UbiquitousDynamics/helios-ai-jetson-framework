@@ -69,6 +69,15 @@ def test_piper_supports_modern_synthesize_wav_api() -> None:
     assert backend.calls == [(b"\x03\x00\x04\x00", 22_050, 1, 2)]
 
 
+def test_piper_skips_punctuation_only_fragment() -> None:
+    backend = CapturingBackend()
+    tts = PiperTTS("unused.onnx", voice=FakeVoice(), audio_backend=backend)
+
+    tts.speak(":")
+
+    assert backend.calls == []
+
+
 def test_piper_preserves_failure_that_occurs_before_wav_header() -> None:
     tts = PiperTTS("unused.onnx", voice=FailingVoice())
 

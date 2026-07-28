@@ -161,6 +161,9 @@ class PiperTTS:
             raise AudioPlaybackError("Unable to play synthesized audio") from exc
 
     def speak(self, text: str) -> None:
+        if text and text.strip() and not any(character.isalnum() for character in text):
+            logger.debug("Skipping punctuation-only speech fragment")
+            return
         logger.debug("Synthesizing %s character(s) of speech", len(text))
         output = self.synthesize_wave(text)
         self._play_wave(output)

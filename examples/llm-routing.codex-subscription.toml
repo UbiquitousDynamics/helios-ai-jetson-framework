@@ -27,6 +27,15 @@ first_token_seconds = 120.0
 read_seconds = 60.0
 total_seconds = 240.0
 
+# Codex normally needs a few seconds before the first spoken sentence. The
+# generic 1.5-second edge-model objective would incorrectly open its circuit
+# after three successful turns and force the local fallback for 60 seconds.
+[health]
+failures_to_open = 3
+cooldown_seconds = 60.0
+maximum_cooldown_seconds = 900.0
+maximum_talk_first_audio_ms = 30000
+
 [observability]
 metrics_enabled = true
 metrics_path = "../logs/llm-metrics.jsonl"

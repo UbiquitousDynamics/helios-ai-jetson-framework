@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -29,6 +30,8 @@ from api.providers.contracts import (
     TextDelta,
 )
 from api.routing import ProviderRegistry, ProviderTarget, RoutePlanner
+
+logger = logging.getLogger(__name__)
 
 _SPEECH_MARKUP = re.compile(r"[*$#@]")
 _SENTENCE_BOUNDARY = re.compile(r"[.!?;:,](?:\s|$)")
@@ -227,6 +230,13 @@ class StreamingResponseCoordinator:
                             and result.first_audio_seconds is not None
                             and result.first_audio_seconds > maximum_first_audio_seconds
                         ):
+                            logger.warning(
+                                "Route %s completed but exceeded the first-audio health "
+                                "objective (%.0f ms > %.0f ms)",
+                                target.name,
+                                result.first_audio_seconds * 1_000,
+                                maximum_first_audio_seconds * 1_000,
+                            )
                             self.health.record_failure(
                                 target.health_key,
                                 ErrorCategory.FIRST_TOKEN_TIMEOUT,
@@ -390,7 +400,7 @@ class StreamingResponseCoordinator:
             sentence = _SPEECH_MARKUP.sub("", "".join(sentence_parts)).strip()
             sentence_parts.clear()
             boundary_seen = False
-            if not sentence:
+            if not sentence or not any(character.isalnum() for character in sentence):
                 return
             state.speech_committed = True
             if state.first_audio_at is None:
@@ -405,6 +415,16 @@ class StreamingResponseCoordinator:
             events = provider.stream(request, cancellation=cancellation)
             iterator = iter(events)
             for event in iterator:
+                if completed is not None:
+                    raise ProviderError(
+                        ErrorCategory.MALFORMED_RESPONSE,
+                        "Provider emitted data after completion metadata",
+                        provider=execution.route.provider,
+                        model=execution.route.model,
+                        retryable_same_provider=False,
+                        transmitted=True,
+                        request_id=completed.request_id,
+                    )
                 if isinstance(event, TextDelta):
                     if not event.text:
                         continue
@@ -433,7 +453,10 @@ class StreamingResponseCoordinator:
                     )
                 elif isinstance(event, Completed):
                     completed = event.metadata
-                    break
+                    # Exhaust the provider generator naturally. Closing it at
+                    # this point injects GeneratorExit into HTTP-backed streams
+                    # even though the completion itself was successful.
+                    continue
                 else:
                     raise ProviderError(
                         ErrorCategory.MALFORMED_RESPONSE,

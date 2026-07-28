@@ -47,6 +47,21 @@ from api.streaming import (
 
 logger = logging.getLogger(__name__)
 
+_HYBRID_SYSTEM_INSTRUCTIONS = {
+    "it": (
+        "Sei Emilia, il veicolo solare dotato di intelligenza artificiale. "
+        "Rispondi sempre in italiano, direttamente e con precisione. "
+        "Non usare Markdown nella conversazione vocale. "
+        "Quando puoi fare una scelta ragionevole, falla invece di chiedere chiarimenti."
+    ),
+    "en": (
+        "You are Emilia, the solar vehicle with artificial intelligence. "
+        "Always answer in English, directly and precisely. "
+        "Do not use Markdown in voice conversation. "
+        "When you can make a reasonable choice, make it instead of asking for clarification."
+    ),
+}
+
 
 class TextToSpeech(Protocol):
     def speak(self, text: str) -> Any: ...
@@ -519,6 +534,25 @@ class APIClient:
         request_options: Mapping[str, Any] | None,
     ) -> ChatRequest:
         messages: list[ChatMessage] = []
+        explicit_hybrid_config = self.llm_settings.routing_file is not None
+        if explicit_hybrid_config:
+            instruction = _HYBRID_SYSTEM_INSTRUCTIONS.get(
+                self.language,
+                _HYBRID_SYSTEM_INSTRUCTIONS["en"],
+            )
+            if mode == "talk":
+                instruction += (
+                    " In modalità talk usa al massimo 20 parole."
+                    if self.language == "it"
+                    else " In talk mode use at most 20 words."
+                )
+            messages.append(
+                ChatMessage(
+                    Role.SYSTEM,
+                    instruction,
+                    origin=ContentOrigin.STATIC_INSTRUCTION,
+                )
+            )
         if context:
             messages.append(
                 ChatMessage(
@@ -537,7 +571,6 @@ class APIClient:
             )
         )
         selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
-        explicit_hybrid_config = self.llm_settings.routing_file is not None
         return ChatRequest(
             model=self.models[mode],
             messages=tuple(messages),
@@ -608,7 +641,25 @@ class APIClient:
             ) from None
 
         by_name = {execution.route.name: execution for execution in executions}
-        return tuple(by_name[route.name] for route in routes)
+        planned = tuple(by_name[route.name] for route in routes)
+        planned_names = {execution.route.name for execution in planned}
+        for execution in executions:
+            if execution.route.name in planned_names:
+                continue
+            snapshot = self.health.snapshot(execution.route.health_key)
+            if not snapshot.available:
+                logger.warning(
+                    "Route %s excluded by provider health "
+                    "(status=%s, retry_after_seconds=%s)",
+                    execution.route.name,
+                    snapshot.status.value,
+                    (
+                        round(snapshot.retry_after_seconds, 1)
+                        if snapshot.retry_after_seconds is not None
+                        else None
+                    ),
+                )
+        return planned
 
     def warm_up(self, mode: str = "talk") -> None:
         """Explicitly load the local Ollama model; remote warm-up is forbidden."""
@@ -720,6 +771,15 @@ class APIClient:
                 ),
                 cancellation=active_cancellation,
                 route_reason=self.llm_settings.routing_policy,
+            )
+            logger.info(
+                "Completed %s request using route %s "
+                "(provider=%s, model=%s, attempts=%s)",
+                mode,
+                result.target.name,
+                result.target.provider,
+                result.target.model,
+                result.attempts,
             )
             return result.text
         except SpeechReplayUnsafeError:

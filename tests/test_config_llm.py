@@ -207,6 +207,14 @@ def test_committed_routing_examples_are_valid(name: str) -> None:
     assert settings.routing_file is not None
 
 
+def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.health.maximum_talk_first_audio_ms == 30_000
+
+
 @pytest.mark.parametrize(
     "body",
     [

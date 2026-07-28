@@ -250,6 +250,23 @@ def test_minimum_pre_speech_buffer_delays_the_first_sentence() -> None:
     assert spoken == ["Hi. More words."]
 
 
+def test_punctuation_only_stream_fragment_is_not_sent_to_tts() -> None:
+    provider = FakeProvider(
+        "first",
+        [[TextDelta("Ready."), TextDelta(":"), completion("first")]],
+    )
+    spoken: list[str] = []
+
+    result = coordinator(provider).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        speak=spoken.append,
+    )
+
+    assert result.text == "Ready.:"
+    assert spoken == ["Ready."]
+
+
 def test_refusal_is_terminal_and_does_not_fallback() -> None:
     refusal = Refused(
         category="safety",
@@ -400,6 +417,24 @@ def test_coordinator_closes_stream_iterator_after_terminal_event() -> None:
 
     assert coordinator(provider).run(request(), (ExecutionTarget(target("first")),)).text == "Done."
     assert stream.closed
+
+
+def test_coordinator_exhausts_provider_generator_after_completion() -> None:
+    state = {"exhausted": False, "generator_exit": False}
+
+    def events() -> Iterable[object]:
+        try:
+            yield TextDelta("Done.")
+            yield completion("first")
+        except GeneratorExit:
+            state["generator_exit"] = True
+            raise
+        state["exhausted"] = True
+
+    provider = FakeProvider("first", [events()])
+
+    assert coordinator(provider).run(request(), (ExecutionTarget(target("first")),)).text == "Done."
+    assert state == {"exhausted": True, "generator_exit": False}
 
 
 def priced_model() -> ModelPrice:

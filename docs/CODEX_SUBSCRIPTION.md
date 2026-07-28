@@ -92,6 +92,30 @@ reasoning effort for `talk` and a higher value for `think`.
 Do not add `api_key_env` to the `codex_app_server` provider. Configuration
 validation intentionally rejects it.
 
+## Understand which model answered
+
+At request start, `Executing talk request using route codex-talk,local-talk`
+shows the eligible routes in fallback order, not the route that eventually
+answered. The completion line is authoritative:
+
+```text
+Completed talk request using route codex-talk (provider=openai-codex, ...)
+Completed talk request using route local-talk (provider=ollama, ...)
+```
+
+The committed Codex profile gives remote speech 30 seconds to produce its first
+spoken sentence before counting the successful turn against provider health.
+The generic 1.5-second edge-model objective is too short for Codex and would
+open its circuit after three otherwise successful turns. If a circuit does
+open because of real failures, Helios logs its status and remaining cooldown;
+restarting Helios also clears in-memory health state.
+
+Both hybrid routes receive the same Emilia identity, response language,
+direct-answer rule and 20-word `talk` limit. They are still different models,
+so `remote_first` cannot guarantee identical wording or facts when fallback
+occurs. Use `remote_only` or `local_only` when every answer must come from one
+engine; keep `remote_first` when availability is more important.
+
 ## Verify before starting the voice assistant
 
 Run the network-free tests:

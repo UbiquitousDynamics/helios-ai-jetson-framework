@@ -15,11 +15,13 @@ from api.providers.contracts import (
     ChatRequest,
     Completed,
     CompletionMetadata,
+    ContentOrigin,
     ErrorCategory,
     FinishReason,
     ProviderCapabilities,
     ProviderError,
     ProviderIdentity,
+    Role,
     TextDelta,
 )
 from api.routing import Connectivity
@@ -174,7 +176,12 @@ def test_remote_route_receives_only_canonical_authorized_messages(
     request = remote.calls[0]
     assert request.remote_authorized
     assert request.model == "remote-model"
-    assert request.messages[0].content == "Emilia, answer"
+    assert request.messages[0].role is Role.SYSTEM
+    assert request.messages[0].origin is ContentOrigin.STATIC_INSTRUCTION
+    assert "You are Emilia" in request.messages[0].content
+    assert "at most 20 words" in request.messages[0].content
+    assert request.messages[-1].role is Role.USER
+    assert request.messages[-1].content == "Emilia, answer"
 
 
 def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
@@ -236,7 +243,7 @@ def test_remote_redacted_requires_an_explicit_redaction_attestation(
         )
         == "Redacted remote."
     )
-    assert remote.calls[0].messages[0].redacted is True
+    assert remote.calls[0].messages[-1].redacted is True
 
 
 def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> None:
@@ -255,6 +262,11 @@ def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> No
     assert len(remote.calls) == 1
     assert len(local.calls) == 1
     assert tts.spoken == ["Local."]
+    local_messages = local.calls[0]["messages"]
+    assert isinstance(local_messages, list)
+    assert local_messages[0]["role"] == "system"
+    assert "You are Emilia" in local_messages[0]["content"]
+    assert local_messages[-1] == {"role": "user", "content": "Emilia, answer"}
 
 
 def test_remote_failure_after_speech_never_calls_ollama(tmp_path: Path) -> None:
