@@ -350,11 +350,7 @@ class APIClient:
 
     def _ollama_classification(self) -> tuple[bool, bool]:
         provider = next(
-            (
-                candidate
-                for candidate in self.llm_settings.providers
-                if candidate.name == "ollama"
-            ),
+            (candidate for candidate in self.llm_settings.providers if candidate.name == "ollama"),
             None,
         )
         if provider is None:

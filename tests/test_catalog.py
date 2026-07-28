@@ -93,9 +93,7 @@ def test_load_rejects_duplicate_json_keys(tmp_path):
 def test_free_tier_label_does_not_override_verified_token_prices():
     payload = catalog_payload()
     payload["models"][0]["free_tier"] = True
-    price = ModelCatalog.from_mapping(payload, today=date(2026, 8, 1)).get(
-        "vendor/model"
-    )
+    price = ModelCatalog.from_mapping(payload, today=date(2026, 8, 1)).get("vendor/model")
 
     assert price.free_tier
     assert price.estimate(input_tokens=1000, output_tokens=100) > 0

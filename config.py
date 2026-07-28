@@ -288,13 +288,11 @@ class LLMSettings:
         unknown_denied = set(self.denylist) - known_route_names
         if unknown_allowed:
             raise ConfigurationError(
-                "provider allowlist contains unknown entries: "
-                + ", ".join(sorted(unknown_allowed))
+                "provider allowlist contains unknown entries: " + ", ".join(sorted(unknown_allowed))
             )
         if unknown_denied:
             raise ConfigurationError(
-                "provider denylist contains unknown entries: "
-                + ", ".join(sorted(unknown_denied))
+                "provider denylist contains unknown entries: " + ", ".join(sorted(unknown_denied))
             )
         for mode_name, mode in (("talk", self.talk), ("think", self.think)):
             missing = [candidate for candidate in mode.candidates if candidate not in targets]

@@ -384,8 +384,7 @@ class RoutePlanner:
         # Chat Completions framing is intentionally an upper bound for the
         # byte-fallback tokenizers supported by the initial adapters.
         return 8 + sum(
-            16 + cls._estimate_text_tokens(message.content)
-            for message in request.messages
+            16 + cls._estimate_text_tokens(message.content) for message in request.messages
         )
 
     @staticmethod

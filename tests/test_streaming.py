@@ -398,12 +398,7 @@ def test_coordinator_closes_stream_iterator_after_terminal_event() -> None:
     stream = ClosableIterator()
     provider = FakeProvider("first", [stream])
 
-    assert (
-        coordinator(provider)
-        .run(request(), (ExecutionTarget(target("first")),))
-        .text
-        == "Done."
-    )
+    assert coordinator(provider).run(request(), (ExecutionTarget(target("first")),)).text == "Done."
     assert stream.closed
 
 

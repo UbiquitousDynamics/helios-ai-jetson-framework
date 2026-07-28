@@ -193,9 +193,7 @@ class _TimedHttpxResponse:
         if not self._token_seen and self._first_remaining <= 0:
             raise _HttpxFirstTokenTimeout()
 
-        stage_timeout = (
-            self._read_seconds if self._token_seen else self._first_remaining
-        )
+        stage_timeout = self._read_seconds if self._token_seen else self._first_remaining
         if self._total_remaining <= stage_timeout:
             return self._total_remaining, _HttpxTotalTimeout
         if self._token_seen:
@@ -853,8 +851,7 @@ class OpenAIChatSSEAdapter:
             )
         if privacy is PrivacyLevel.REMOTE_REDACTED:
             unredacted = any(
-                origin is not ContentOrigin.STATIC_INSTRUCTION
-                and message.redacted is not True
+                origin is not ContentOrigin.STATIC_INSTRUCTION and message.redacted is not True
                 for message, origin in zip(request.messages, origins)
             )
             if unredacted:

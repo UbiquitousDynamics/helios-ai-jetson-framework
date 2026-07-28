@@ -213,8 +213,7 @@ class StreamingResponseCoordinator:
                     if self.health is not None:
                         rate_limits = result.metadata.rate_limits
                         if rate_limits is not None and (
-                            rate_limits.remaining_requests == 0
-                            or rate_limits.remaining_tokens == 0
+                            rate_limits.remaining_requests == 0 or rate_limits.remaining_tokens == 0
                         ):
                             self.health.record_failure(
                                 target.health_key,
