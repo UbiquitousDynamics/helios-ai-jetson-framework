@@ -28,6 +28,7 @@ class FakeAPI:
     def __init__(self) -> None:
         self.messages: list[str] = []
         self.closed = False
+        self.cancelled = False
 
     def talk(self, message: str, context: str | None = None) -> str:
         assert context is None
@@ -36,6 +37,9 @@ class FakeAPI:
 
     def close(self) -> None:
         self.closed = True
+
+    def cancel_current(self) -> None:
+        self.cancelled = True
 
 
 class FakeRecognizer:
@@ -121,7 +125,7 @@ def test_partial_recognition_is_not_executed() -> None:
 
 def test_rag_state_transition_has_no_startup_warmup_query() -> None:
     rag = FakeRag()
-    assistant, tts, _api, sounds, _recognizer = make_assistant(
+    assistant, tts, api, sounds, _recognizer = make_assistant(
         [
             RecognitionResult("regolamento", is_final=True),
             RecognitionResult("quanta acqua posso usare", is_final=True),
@@ -133,10 +137,12 @@ def test_rag_state_transition_has_no_startup_warmup_query() -> None:
     assert assistant.run_once()
     assert assistant.state is AssistantState.RAG
     assert rag.queries == []
+    assert api.messages == []
 
     assert assistant.run_once()
     assert assistant.state is AssistantState.COMMAND
     assert rag.queries == [("quanta acqua posso usare", assistant.settings.top_k)]
+    assert api.messages == []
     assert tts.spoken == ["Ecco cosa ho trovato: La risposta verificata"]
     assert sounds.files == [
         str(assistant.settings.wake_sound),
@@ -153,6 +159,15 @@ def test_close_releases_services_once() -> None:
     assert tts.closed
     assert api.closed
     assert recognizer.closed
+
+
+def test_stop_cancels_the_active_model_stream() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assistant.stop()
+
+    assert not assistant._running
+    assert api.cancelled
 
 
 def test_settings_validate_language_and_root_derived_paths(tmp_path: Path) -> None:

@@ -1,0 +1,53 @@
+"""Provider adapters and normalized language-model contracts."""
+
+from api.providers.contracts import (
+    CancellationToken,
+    ChatMessage,
+    ChatProvider,
+    ChatRequest,
+    Completed,
+    CompletionMetadata,
+    ContentOrigin,
+    ErrorCategory,
+    FinishReason,
+    PrivacyLevel,
+    ProviderCapabilities,
+    ProviderError,
+    ProviderIdentity,
+    RateLimitSnapshot,
+    ReasoningDelta,
+    Refused,
+    Role,
+    StreamEvent,
+    TextDelta,
+    Timeouts,
+    Usage,
+)
+from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
+from api.providers.ollama import OllamaAdapter
+
+__all__ = [
+    "CancellationToken",
+    "ChatMessage",
+    "ChatProvider",
+    "ChatRequest",
+    "Completed",
+    "CompletionMetadata",
+    "ContentOrigin",
+    "ErrorCategory",
+    "FinishReason",
+    "OllamaAdapter",
+    "PrivacyLevel",
+    "ProviderCapabilities",
+    "ProviderError",
+    "ProviderIdentity",
+    "RateLimitSnapshot",
+    "ReasoningDelta",
+    "Refused",
+    "Role",
+    "StreamEvent",
+    "TextDelta",
+    "Timeouts",
+    "Usage",
+    "OpenAIChatSSEAdapter",
+]

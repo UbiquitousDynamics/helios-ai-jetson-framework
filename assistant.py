@@ -70,6 +70,8 @@ class VoiceAssistant:
                 model_talk=self.profile.talk_model,
                 model_think=settings.think_model,
                 tts=self.tts,
+                language=settings.language,
+                llm_settings=settings.llm,
             )
         else:
             self.api_client = api_client
@@ -297,6 +299,9 @@ class VoiceAssistant:
 
     def stop(self) -> None:
         self._running = False
+        cancel = getattr(self.api_client, "cancel_current", None)
+        if callable(cancel):
+            cancel()
 
     def close(self) -> None:
         if self._closed:

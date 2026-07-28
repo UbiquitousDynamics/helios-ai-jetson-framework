@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from document.rag_system import CorpusError, IndexIntegrityError, RagSystem
+from document.rag_system import CorpusError, IndexIntegrityError, ModelLoadError, RagSystem
 
 
 class FakeEncoder:
@@ -55,6 +55,31 @@ def rewrite_index(path: Path, embeddings: np.ndarray, manifest: dict[str, object
             embeddings=embeddings,
             manifest=np.asarray(json.dumps(manifest, sort_keys=True, separators=(",", ":"))),
         )
+
+
+def test_native_sentence_transformer_import_error_keeps_root_cause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = tmp_path / "model"
+    model.mkdir()
+    rag = object.__new__(RagSystem)
+    rag.model_name = str(model)
+    rag.device = "cpu"
+
+    import builtins
+
+    original_import = builtins.__import__
+
+    def failing_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "sentence_transformers":
+            raise ImportError("libgomp.so.1: cannot allocate memory in static TLS block")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+
+    with pytest.raises(ModelLoadError, match="static TLS block"):
+        rag._load_default_encoder()
 
 
 def test_retrieve_caches_corpus_and_index_and_returns_provenance(tmp_path: Path) -> None:

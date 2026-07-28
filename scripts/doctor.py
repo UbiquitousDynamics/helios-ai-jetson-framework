@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -27,6 +28,16 @@ PLATFORM_IMPORTS = {
     "onnxruntime": "ONNX Runtime",
     "torch": "PyTorch",
 }
+NATIVE_IMPORT_SEQUENCE = (
+    "piper",
+    "onnxruntime",
+    "pyaudio",
+    "sounddevice",
+    "vosk",
+    "torch",
+    "sklearn",
+    "sentence_transformers",
+)
 
 
 @dataclass(frozen=True)
@@ -238,6 +249,81 @@ def check_runtime(imports: dict[str, str] | None = None) -> list[Check]:
     return checks
 
 
+def check_native_runtime(
+    *,
+    python: str = sys.executable,
+    runner: Any = subprocess.run,
+    timeout: float = 90.0,
+) -> list[Check]:
+    """Import the native runtime chain in an isolated process.
+
+    ``find_spec`` confirms installation but cannot expose loader failures such
+    as Jetson's static-TLS exhaustion. The subprocess also keeps a failed native
+    import from contaminating the doctor process.
+    """
+
+    statement = "; ".join(f"import {module}" for module in NATIVE_IMPORT_SEQUENCE)
+    try:
+        completed = runner(
+            [python, "-c", statement],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return [
+            Check(
+                "error",
+                "runtime.native_import_timeout",
+                f"Native runtime imports exceeded {timeout:g} seconds.",
+            )
+        ]
+    except OSError as exc:
+        return [
+            Check(
+                "error",
+                "runtime.native_import_start",
+                f"Cannot start the native runtime import probe: {exc}",
+            )
+        ]
+
+    if completed.returncode == 0:
+        return [
+            Check(
+                "ok",
+                "runtime.native_imports",
+                "Native Piper, audio, Torch, scikit-learn, and "
+                "SentenceTransformer imports succeed in runtime order.",
+            )
+        ]
+
+    error_text = "\n".join(
+        part.strip() for part in (completed.stderr, completed.stdout) if part.strip()
+    )
+    if "cannot allocate memory in static TLS block" in error_text:
+        return [
+            Check(
+                "error",
+                "runtime.static_tls",
+                "Native imports failed because libgomp exhausted the static TLS "
+                "block. On Jetson, launch with 'python3 scripts/run_jetson.py'.",
+            )
+        ]
+
+    last_line = next(
+        (line.strip() for line in reversed(error_text.splitlines()) if line.strip()),
+        f"process exited with status {completed.returncode}",
+    )
+    return [
+        Check(
+            "error",
+            "runtime.native_import",
+            f"Native runtime import probe failed: {last_line}",
+        )
+    ]
+
+
 def exit_code(checks: Iterable[Check]) -> int:
     return 1 if any(check.level == "error" for check in checks) else 0
 
@@ -278,7 +364,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.runtime_only:
         checks.extend(check_assets(root, manifest_path, args.check_hashes))
     if not args.assets_only:
-        checks.extend(check_runtime())
+        runtime_checks = check_runtime()
+        checks.extend(runtime_checks)
+        if not any(check.level == "error" for check in runtime_checks):
+            checks.extend(check_native_runtime())
 
     if args.json:
         print(json.dumps([asdict(check) for check in checks], indent=2))

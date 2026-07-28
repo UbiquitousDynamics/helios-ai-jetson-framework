@@ -1,0 +1,430 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import replace
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+import config
+from api.api_client import APIClient, APIClientError
+from api.catalog import ModelCatalog
+from api.providers.contracts import (
+    ChatProvider,
+    ChatRequest,
+    Completed,
+    CompletionMetadata,
+    ErrorCategory,
+    FinishReason,
+    ProviderCapabilities,
+    ProviderError,
+    ProviderIdentity,
+    TextDelta,
+)
+from api.routing import Connectivity
+from api.streaming import CancellationController
+
+
+class FakeTTS:
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+
+class FakeOllamaClient:
+    def __init__(self, text: str = "Local.") -> None:
+        self.text = text
+        self.calls: list[dict[str, object]] = []
+
+    def chat(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        return iter([{"message": {"content": self.text}, "done": True}])
+
+
+class FakeRemoteProvider:
+    def __init__(self, streams: list[object]) -> None:
+        self.streams = iter(streams)
+        self.calls: list[ChatRequest] = []
+        self.closed = False
+
+    @property
+    def identity(self) -> ProviderIdentity:
+        return ProviderIdentity(
+            "remote",
+            "https://provider.invalid/v1",
+            remote=True,
+        )
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities()
+
+    def stream(
+        self,
+        request: ChatRequest,
+        *,
+        cancellation: object | None = None,
+    ) -> Iterable[object]:
+        assert cancellation is not None
+        self.calls.append(request)
+        stream = next(self.streams)
+        if isinstance(stream, Exception):
+            raise stream
+        return stream  # type: ignore[return-value]
+
+    def warm_up(self, model: str) -> None:
+        raise AssertionError(f"remote warm-up is forbidden: {model}")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def completed(provider: str, model: str) -> Completed:
+    return Completed(
+        CompletionMetadata(
+            provider=provider,
+            requested_model=model,
+            finish_reason=FinishReason.STOP,
+        )
+    )
+
+
+def hybrid_settings(
+    tmp_path: Path,
+    *,
+    allow_transcripts: bool = True,
+    budget_enabled: bool = False,
+) -> config.LLMSettings:
+    return config.LLMSettings(
+        routing_file=tmp_path / "routing.toml",
+        routing_policy="remote_first",
+        remote_enabled=True,
+        privacy=config.LLMPrivacySettings(
+            default="remote_allowed",
+            allow_remote_transcripts=allow_transcripts,
+        ),
+        budget=config.LLMBudgetSettings(enabled=budget_enabled),
+        talk=config.LLMModeSettings(
+            candidates=("remote-talk", "local-talk"),
+            max_output_tokens=64,
+        ),
+        providers=(
+            config.LLMProviderSettings(
+                name="remote",
+                adapter="openai_chat_sse",
+                endpoint="https://provider.invalid/v1",
+                locality="remote",
+                api_key_env="REMOTE_API_KEY",
+            ),
+        ),
+        targets=(
+            config.LLMTargetSettings(
+                name="remote-talk",
+                provider="remote",
+                model="remote-model",
+            ),
+            config.LLMTargetSettings(
+                name="local-talk",
+                provider="ollama",
+                model="local-model",
+            ),
+        ),
+    )
+
+
+def make_client(
+    tmp_path: Path,
+    remote: ChatProvider,
+    *,
+    allow_transcripts: bool = True,
+    budget_enabled: bool = False,
+) -> tuple[APIClient, FakeOllamaClient, FakeTTS]:
+    local = FakeOllamaClient()
+    tts = FakeTTS()
+    client = APIClient(
+        client=local,
+        tts=tts,
+        llm_settings=hybrid_settings(
+            tmp_path,
+            allow_transcripts=allow_transcripts,
+            budget_enabled=budget_enabled,
+        ),
+        language="en",
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+    return client, local, tts
+
+
+def test_remote_route_receives_only_canonical_authorized_messages(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, tts = make_client(tmp_path, remote)
+
+    assert client.talk("Emilia, answer") == "Remote."
+
+    assert local.calls == []
+    assert tts.spoken == ["Remote."]
+    assert len(remote.calls) == 1
+    request = remote.calls[0]
+    assert request.remote_authorized
+    assert request.model == "remote-model"
+    assert request.messages[0].content == "Emilia, answer"
+
+
+def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, tts = make_client(
+        tmp_path,
+        remote,
+        allow_transcripts=False,
+    )
+
+    assert client.talk("Emilia, stay private") == "Local."
+
+    assert remote.calls == []
+    assert len(local.calls) == 1
+    assert tts.spoken == ["Local."]
+
+
+def test_unknown_context_provenance_never_leaves_the_device(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, _tts = make_client(tmp_path, remote)
+
+    assert client.talk("Emilia, use this", context="retrieved local passage") == "Local."
+
+    assert remote.calls == []
+    assert len(local.calls) == 1
+
+
+def test_remote_redacted_requires_an_explicit_redaction_attestation(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider(
+        [[TextDelta("Redacted remote."), completed("remote", "remote-model")]]
+    )
+    llm = replace(
+        hybrid_settings(tmp_path),
+        privacy=config.LLMPrivacySettings(
+            default="remote_redacted",
+            allow_remote_transcripts=True,
+        ),
+    )
+    local = FakeOllamaClient()
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=llm,
+        language="en",
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("Emilia, private value") == "Local."
+    assert remote.calls == []
+
+    assert (
+        client.talk(
+            "Emilia, [redacted]",
+            message_redacted=True,
+        )
+        == "Redacted remote."
+    )
+    assert remote.calls[0].messages[0].redacted is True
+
+
+def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> None:
+    error = ProviderError(
+        ErrorCategory.CONNECT_TIMEOUT,
+        "remote timeout",
+        provider="remote",
+        model="remote-model",
+        transmitted=False,
+    )
+    remote = FakeRemoteProvider([error])
+    client, local, tts = make_client(tmp_path, remote)
+
+    assert client.talk("Emilia, answer") == "Local."
+
+    assert len(remote.calls) == 1
+    assert len(local.calls) == 1
+    assert tts.spoken == ["Local."]
+
+
+def test_remote_failure_after_speech_never_calls_ollama(tmp_path: Path) -> None:
+    def interrupted() -> Iterable[object]:
+        yield TextDelta("Remote first.")
+        raise ProviderError(
+            ErrorCategory.READ_TIMEOUT,
+            "stream interrupted",
+            provider="remote",
+            model="remote-model",
+            retryable_same_provider=True,
+            transmitted=True,
+        )
+
+    remote = FakeRemoteProvider([interrupted()])
+    client, local, tts = make_client(tmp_path, remote)
+
+    with pytest.raises(APIClientError, match="after speech output began"):
+        client.talk("Emilia, answer")
+
+    assert tts.spoken == ["Remote first."]
+    assert local.calls == []
+
+
+def test_missing_budget_catalog_blocks_remote_and_uses_local(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, _tts = make_client(
+        tmp_path,
+        remote,
+        budget_enabled=True,
+    )
+
+    assert client.talk("Emilia, answer") == "Local."
+
+    assert remote.calls == []
+    assert len(local.calls) == 1
+
+
+def test_non_loopback_ollama_is_not_implicitly_treated_as_local() -> None:
+    local = FakeOllamaClient()
+    client = APIClient(
+        api_url="http://ollama.lan:11434",
+        client=local,
+        tts=FakeTTS(),
+        retry_wait=0,
+    )
+
+    with pytest.raises(APIClientError, match="privacy_blocked"):
+        client.talk("Emilia, keep this private")
+
+    assert local.calls == []
+
+
+def test_non_loopback_ollama_cannot_bypass_policy_during_warm_up() -> None:
+    local = FakeOllamaClient()
+    client = APIClient(
+        api_url="http://ollama.lan:11434",
+        client=local,
+        tts=FakeTTS(),
+        retry_wait=0,
+    )
+
+    with pytest.raises(APIClientError, match="cannot be warmed up"):
+        client.warm_up()
+
+    assert local.calls == []
+
+
+def test_pre_cancelled_request_never_reaches_provider() -> None:
+    local = FakeOllamaClient()
+    cancellation = CancellationController()
+    cancellation.cancel()
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        retry_wait=0,
+    )
+
+    with pytest.raises(APIClientError, match="cancelled"):
+        client.talk("Emilia, stop", cancellation=cancellation)
+
+    assert local.calls == []
+
+
+def test_matching_ollama_endpoint_can_be_explicitly_trusted(
+    tmp_path: Path,
+) -> None:
+    llm = config.LLMSettings(
+        routing_file=tmp_path / "routing.toml",
+        routing_policy="local_only",
+        providers=(
+            config.LLMProviderSettings(
+                name="ollama",
+                adapter="ollama",
+                endpoint="http://ollama.lan:11434",
+                locality="trusted_lan",
+            ),
+        ),
+        talk=config.LLMModeSettings(candidates=("local-talk",)),
+        targets=(
+            config.LLMTargetSettings(
+                name="local-talk",
+                provider="ollama",
+                model="local-model",
+            ),
+        ),
+    )
+    local = FakeOllamaClient()
+    client = APIClient(
+        api_url="http://ollama.lan:11434",
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=llm,
+        retry_wait=0,
+    )
+
+    assert client.talk("Emilia, answer") == "Local."
+    assert len(local.calls) == 1
+
+    client.warm_up()
+    assert local.calls[-1] == {
+        "model": "local-model",
+        "messages": [{"role": "user", "content": ""}],
+        "stream": False,
+    }
+
+
+def test_catalog_limits_cap_more_permissive_toml_limits(tmp_path: Path) -> None:
+    llm = hybrid_settings(tmp_path)
+    remote_target = replace(
+        llm.targets[0],
+        context_window=9999,
+        max_output_tokens=999,
+    )
+    llm = replace(llm, targets=(remote_target, llm.targets[1]))
+    catalog = ModelCatalog.from_mapping(
+        {
+            "schema_version": 1,
+            "catalog_revision": "test",
+            "verified_on": "2026-07-27",
+            "expires_on": "2026-08-27",
+            "models": [
+                {
+                    "id": "groq/example",
+                    "provider": "remote",
+                    "model": "remote-model",
+                    "input_per_million_usd": "1",
+                    "output_per_million_usd": "1",
+                    "context_window": 100,
+                    "max_output_tokens": 32,
+                    "free_tier": False,
+                }
+            ],
+        },
+        today=date(2026, 7, 27),
+    )
+    llm = replace(
+        llm,
+        targets=(replace(remote_target, catalog_id="groq/example"), llm.targets[1]),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": FakeRemoteProvider([])},
+        model_catalog=catalog,
+        connectivity=Connectivity.ONLINE,
+    )
+
+    remote_execution = client._execution_targets["talk"][0]
+    assert remote_execution.route.context_window == 100
+    assert remote_execution.route.max_output_tokens == 32
+    assert remote_execution.max_output_tokens == 32

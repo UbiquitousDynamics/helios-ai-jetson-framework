@@ -1,0 +1,3 @@
+# Optional dependency for OpenAI-compatible remote streaming endpoints.
+# The default desktop and Jetson installs remain local-only.
+httpx>=0.27,<1

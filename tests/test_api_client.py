@@ -101,6 +101,22 @@ def test_stream_failures_are_retried_and_then_succeed() -> None:
     assert len(fake.calls) == 2
 
 
+def test_configured_retry_wait_above_five_seconds_does_not_disable_retry() -> None:
+    fake = FakeClient([chunk("Ready.", done=True)])
+    fake.failures_remaining = 1
+    sleeps: list[float] = []
+    client = APIClient(
+        client=fake,
+        tts=FakeTTS(),
+        retry_attempts=2,
+        retry_wait=6,
+        sleep=sleeps.append,
+    )
+
+    assert client.talk("hello") == "Ready."
+    assert sleeps == [6]
+
+
 def test_exhausted_retries_raise_a_typed_error() -> None:
     fake = FakeClient()
     fake.failures_remaining = 3

@@ -1,18 +1,51 @@
-"""Ollama chat client with optional sentence-by-sentence speech output."""
+"""Backward-compatible public LLM client over the hybrid provider subsystem."""
 
 from __future__ import annotations
 
+import json
 import logging
-import re
+import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Mapping
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 import config
+from api.budget import BudgetError, BudgetLedger, BudgetLimits
+from api.catalog import CatalogError, ModelCatalog, ModelPrice
+from api.health import HealthTracker
+from api.metrics import SafeMetricsRecorder
+from api.privacy import PrivacyGuard, PrivacyPolicy
+from api.providers.contracts import (
+    ChatMessage,
+    ChatProvider,
+    ChatRequest,
+    CancellationToken,
+    ContentOrigin,
+    ErrorCategory,
+    PrivacyLevel,
+    ProviderError,
+    Role,
+    Timeouts,
+)
+from api.providers.ollama import OllamaAdapter
+from api.routing import (
+    Connectivity,
+    NoRouteError,
+    ProviderRegistry,
+    ProviderTarget,
+    RoutePlanner,
+    RoutingPolicy,
+)
+from api.streaming import (
+    CancellationController,
+    ExecutionTarget,
+    SpeechReplayUnsafeError,
+    StreamingResponseCoordinator,
+)
 
 logger = logging.getLogger(__name__)
-_SPEECH_MARKUP = re.compile(r"[*$#@]")
-_SENTENCE_BOUNDARY = re.compile(r"[.!?;:,](?:\s|$)")
 
 
 class TextToSpeech(Protocol):
@@ -20,66 +53,80 @@ class TextToSpeech(Protocol):
 
 
 class APIClientError(RuntimeError):
-    """Raised after communication with Ollama has failed."""
+    """A sanitized model-routing failure recoverable by ``VoiceAssistant``."""
 
 
-class _DoNotRetry(Exception):
-    """Internal wrapper that preserves an exception across the retry boundary."""
+def _content_safe_jsonl_sink(
+    path: Path,
+    *,
+    retention_days: int,
+) -> Callable[[Mapping[str, Any]], None]:
+    """Return a lazy, daily-pruned sink for the content-free metric schema."""
 
-    def __init__(self, error: Exception) -> None:
-        super().__init__(str(error))
-        self.error = error
+    last_pruned_date = None
 
+    def parse_timestamp(value: Any) -> datetime:
+        if not isinstance(value, str):
+            raise ValueError("metric timestamp is missing")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("metric timestamp is invalid") from None
+        if parsed.tzinfo is None:
+            raise ValueError("metric timestamp must be timezone-aware")
+        return parsed.astimezone(timezone.utc)
 
-def _is_transient_transport_error(error: Exception) -> bool:
-    """Return whether retrying an Ollama operation is plausibly safe."""
+    def prune(now: datetime) -> None:
+        if not path.exists():
+            return
+        cutoff = now - timedelta(days=retention_days)
+        retained: list[str] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.endswith("\n"):
+                    raise ValueError("metric file has a truncated record")
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    raise ValueError("metric file has a malformed record") from None
+                if not isinstance(payload, Mapping):
+                    raise ValueError("metric file record must be an object")
+                if parse_timestamp(payload.get("timestamp")) >= cutoff:
+                    retained.append(line)
+        temporary = path.with_name(path.name + ".retention.tmp")
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.writelines(retained)
+            handle.flush()
+        temporary.replace(path)
 
-    if isinstance(error, (ConnectionError, TimeoutError, OSError)):
-        return True
+    def write(payload: Mapping[str, Any]) -> None:
+        nonlocal last_pruned_date
+        timestamp = parse_timestamp(payload.get("timestamp"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if last_pruned_date != timestamp.date():
+            prune(timestamp)
+            last_pruned_date = timestamp.date()
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(
+                json.dumps(
+                    dict(payload),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+            handle.write("\n")
 
-    status_code = getattr(error, "status_code", None)
-    if isinstance(status_code, int):
-        return status_code in {408, 425, 429} or status_code >= 500
-
-    error_type = type(error)
-    return error_type.__module__.split(".", maxsplit=1)[0] in {"httpx", "httpcore"} and (
-        "connect" in error_type.__name__.lower()
-        or "network" in error_type.__name__.lower()
-        or "timeout" in error_type.__name__.lower()
-        or "readerror" in error_type.__name__.lower()
-        or "writeerror" in error_type.__name__.lower()
-    )
-
-
-def _default_client_factory(host: str) -> Any:
-    try:
-        from ollama import Client
-    except ImportError as exc:  # pragma: no cover - depends on deployment extras
-        raise APIClientError("The 'ollama' package is required to use the language model") from exc
-    return Client(host=host)
-
-
-def _chunk_value(chunk: Any, key: str, default: Any = None) -> Any:
-    if isinstance(chunk, dict):
-        return chunk.get(key, default)
-    return getattr(chunk, key, default)
-
-
-def _chunk_text(chunk: Any) -> str:
-    message = _chunk_value(chunk, "message")
-    if message is None:
-        return ""
-    if isinstance(message, dict):
-        return str(message.get("content") or "")
-    return str(getattr(message, "content", "") or "")
+    return write
 
 
 class APIClient:
-    """Small boundary around the official Ollama SDK.
+    """Provider-neutral implementation of the original ``talk``/``think`` API.
 
-    Hardware-heavy TTS and the Ollama SDK are loaded lazily.  Passing the
-    assistant's TTS instance ensures a single Piper model is shared across
-    direct responses and model responses.
+    With no hybrid routing file, behavior stays Ollama-only and keeps the exact
+    legacy SDK payload, retry count, streaming sentence boundaries, and lazy
+    construction. Remote providers require validated configuration, explicit
+    privacy permission, and (by default) a fresh priced catalog plus ledger.
     """
 
     def __init__(
@@ -95,6 +142,16 @@ class APIClient:
         retry_attempts: int = 3,
         retry_wait: float = 5.0,
         sleep: Callable[[float], None] = time.sleep,
+        language: str = config.LANGUAGE,
+        llm_settings: config.LLMSettings | None = None,
+        provider_registry: ProviderRegistry | None = None,
+        providers: Mapping[str, ChatProvider] | None = None,
+        privacy_guard: PrivacyGuard | None = None,
+        health_tracker: HealthTracker | None = None,
+        model_catalog: ModelCatalog | None = None,
+        budget_ledger: BudgetLedger | None = None,
+        metrics: SafeMetricsRecorder | None = None,
+        connectivity: Connectivity | str | Callable[[], Connectivity | str] = Connectivity.UNKNOWN,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
@@ -103,30 +160,88 @@ class APIClient:
 
         self.host = config.normalize_ollama_host(api_url)
         self.models = {"talk": model_talk, "think": model_think}
-        self._client = client
-        self._client_factory = client_factory or _default_client_factory
-        self._tts = tts
-        self._owns_tts = False
+        self.language = language.strip().lower()
+        self.llm_settings = config.LLM_SETTINGS if llm_settings is None else llm_settings
         self.retry_attempts = retry_attempts
         self.retry_wait = retry_wait
         self._sleep = sleep
+        self._tts = tts
+        self._owns_tts = False
+        self._closed = False
+        self._cancellation_lock = threading.Lock()
+        self._active_cancellations: list[CancellationToken] = []
+        self._connectivity_source = connectivity
+
+        self._ollama = OllamaAdapter(
+            self.host,
+            client=client,
+            client_factory=client_factory,
+        )
+        self._registry = provider_registry or ProviderRegistry()
+        self._owns_registry = provider_registry is None
+        self._registered_providers: set[str] = set()
+        self._register_provider(
+            "ollama",
+            self._ollama,
+            owned=self._owns_registry,
+        )
+        for provider_name, provider in (providers or {}).items():
+            if provider_name == "ollama":
+                continue
+            self._register_provider(provider_name, provider, owned=False)
+        self._register_configured_providers()
+
+        health = health_tracker or HealthTracker(
+            failures_to_open=self.llm_settings.health.failures_to_open,
+            cooldown_seconds=self.llm_settings.health.cooldown_seconds,
+            maximum_cooldown_seconds=(self.llm_settings.health.maximum_cooldown_seconds),
+        )
+        self.health = health
+        self.privacy = privacy_guard or PrivacyGuard(
+            PrivacyPolicy(
+                remote_enabled=(
+                    self.llm_settings.remote_enabled and not self.llm_settings.emergency_local_only
+                ),
+                allow_remote_transcripts=(self.llm_settings.privacy.allow_remote_transcripts),
+                allow_remote_context=self.llm_settings.privacy.allow_remote_context,
+                allow_remote_rag_context=(self.llm_settings.privacy.allow_remote_rag_context),
+            )
+        )
+        self.catalog = model_catalog or self._load_catalog()
+        self.budget = budget_ledger or self._load_budget()
+        self.metrics = metrics or self._build_metrics()
+        self._coordinator = StreamingResponseCoordinator(
+            self._registry,
+            privacy=self.privacy,
+            health=self.health,
+            budget=self.budget,
+            metrics=self.metrics,
+            require_priced_remote=self.llm_settings.budget.enabled,
+            retry_wait=retry_wait,
+            maximum_retry_delay=max(5.0, retry_wait),
+            sleep=sleep,
+        )
+        self._execution_targets = {
+            "talk": self._targets_for_mode("talk"),
+            "think": self._targets_for_mode("think"),
+        }
 
         if warm_up:
             self.warm_up()
 
     @property
     def client(self) -> Any:
-        if self._client is None:
-            self._client = self._client_factory(self.host)
-        return self._client
+        """Expose the raw Ollama client for backward compatibility."""
+
+        return self._ollama.client
 
     @client.setter
     def client(self, value: Any) -> None:
-        self._client = value
+        self._ollama.client = value
 
     @property
     def configured_tts(self) -> TextToSpeech | None:
-        """Return an injected TTS instance without triggering lazy creation."""
+        """Return injected TTS without triggering the lazy Piper model."""
 
         return self._tts
 
@@ -144,17 +259,338 @@ class APIClient:
         self._tts = value
         self._owns_tts = False
 
+    @property
+    def connectivity(self) -> Connectivity:
+        source = self._connectivity_source
+        value = source() if callable(source) else source
+        return Connectivity(value)
+
+    @connectivity.setter
+    def connectivity(self, value: Connectivity | str) -> None:
+        self._connectivity_source = Connectivity(value)
+
+    def _register_provider(
+        self,
+        name: str,
+        provider: ChatProvider,
+        *,
+        owned: bool,
+    ) -> None:
+        self._registry.register_instance(name, provider, owned=owned)
+        self._registered_providers.add(name)
+
+    def _register_configured_providers(self) -> None:
+        for provider in self.llm_settings.providers:
+            if not provider.enabled or provider.name in self._registered_providers:
+                continue
+            if provider.adapter != "openai_chat_sse" or provider.api_key_env is None:
+                logger.error(
+                    "Provider %s uses an unsupported or incomplete adapter configuration",
+                    provider.name,
+                )
+                continue
+
+            def factory(
+                settings: config.LLMProviderSettings = provider,
+            ) -> ChatProvider:
+                from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
+
+                assert settings.api_key_env is not None
+                return OpenAIChatSSEAdapter(
+                    provider=settings.name,
+                    endpoint=settings.endpoint,
+                    api_key_env=settings.api_key_env,
+                )
+
+            self._registry.register(provider.name, factory, owned=True)
+            self._registered_providers.add(provider.name)
+
+    def _load_catalog(self) -> ModelCatalog | None:
+        path = self.llm_settings.budget.catalog_path
+        if path is None:
+            return None
+        try:
+            catalog = ModelCatalog.load(path)
+            catalog.require_fresh()
+            return catalog
+        except CatalogError:
+            logger.error("Remote model catalog is unavailable or stale")
+            return None
+
+    def _load_budget(self) -> BudgetLedger | None:
+        settings = self.llm_settings.budget
+        if not settings.enabled or settings.ledger_path is None:
+            return None
+        limits = BudgetLimits(
+            per_request_usd=settings.per_request_usd,
+            daily_usd=settings.daily_usd,
+            monthly_usd=settings.monthly_usd,
+            zero_cost_only=settings.zero_cost_only,
+        )
+        try:
+            return BudgetLedger(settings.ledger_path, limits)
+        except (BudgetError, OSError, ValueError):
+            logger.error("Remote budget ledger is unavailable; remote routing will fail closed")
+            return None
+
+    def _build_metrics(self) -> SafeMetricsRecorder:
+        settings = self.llm_settings.observability
+        sink = (
+            _content_safe_jsonl_sink(
+                settings.metrics_path,
+                retention_days=settings.metrics_retention_days,
+            )
+            if settings.metrics_path is not None
+            else None
+        )
+        return SafeMetricsRecorder(
+            enabled=settings.metrics_enabled,
+            sink=sink,
+        )
+
+    def _ollama_classification(self) -> tuple[bool, bool]:
+        provider = next(
+            (candidate for candidate in self.llm_settings.providers if candidate.name == "ollama"),
+            None,
+        )
+        if provider is None:
+            return self._ollama.identity.remote, True
+        matches = (
+            provider.adapter == "ollama"
+            and config.normalize_ollama_host(provider.endpoint) == self.host
+        )
+        if not matches:
+            return self._ollama.identity.remote, False
+        return provider.locality == "remote", provider.enabled
+
+    def _targets_for_mode(self, mode: str) -> tuple[ExecutionTarget, ...]:
+        mode_settings = self._mode_settings(mode)
+        configured_targets = {target.name: target for target in self.llm_settings.targets}
+        provider_settings = {provider.name: provider for provider in self.llm_settings.providers}
+        if not mode_settings.candidates:
+            ollama_remote, ollama_enabled = self._ollama_classification()
+            return (
+                ExecutionTarget(
+                    ProviderTarget(
+                        name=f"ollama-{mode}",
+                        provider="ollama",
+                        model=self.models[mode],
+                        remote=ollama_remote,
+                        modes=frozenset({mode}),
+                        languages=frozenset({self.language}),
+                        priority=0,
+                        enabled=ollama_enabled,
+                    ),
+                    retry_attempts=self.retry_attempts,
+                ),
+            )
+
+        executions: list[ExecutionTarget] = []
+        for priority, name in enumerate(mode_settings.candidates):
+            target = configured_targets[name]
+            provider = provider_settings.get(target.provider)
+            is_ollama = target.provider == "ollama"
+            if is_ollama:
+                remote, enabled = self._ollama_classification()
+            else:
+                remote = provider is not None and provider.locality == "remote"
+                enabled = (
+                    provider is not None
+                    and provider.enabled
+                    and provider.name in self._registered_providers
+                )
+            model = target.model_for_language(self.language)
+            price = self._price_for_target(target, provider, model) if remote else None
+            maximum_output = self._minimum_defined(
+                target.max_output_tokens,
+                mode_settings.max_output_tokens,
+                price.max_output_tokens if price is not None else None,
+            )
+            context_window = self._minimum_defined(
+                target.context_window,
+                price.context_window if price is not None else None,
+            )
+            executions.append(
+                ExecutionTarget(
+                    route=ProviderTarget(
+                        name=target.name,
+                        provider=target.provider,
+                        model=model,
+                        remote=remote,
+                        modes=frozenset({mode}),
+                        languages=frozenset(target.languages),
+                        context_window=context_window,
+                        max_output_tokens=maximum_output,
+                        priority=priority,
+                        enabled=enabled,
+                    ),
+                    retry_attempts=target.retry_attempts,
+                    max_output_tokens=maximum_output,
+                    options=dict(target.options),
+                    price=price,
+                )
+            )
+        return tuple(executions)
+
+    @staticmethod
+    def _minimum_defined(*values: int | None) -> int | None:
+        defined = tuple(value for value in values if value is not None)
+        return min(defined) if defined else None
+
+    def _price_for_target(
+        self,
+        target: config.LLMTargetSettings,
+        provider: config.LLMProviderSettings | None,
+        model: str,
+    ) -> ModelPrice | None:
+        if self.catalog is None or target.catalog_id is None or provider is None:
+            return None
+        try:
+            price = self.catalog.get(target.catalog_id)
+        except CatalogError:
+            return None
+        if price.provider != provider.name or price.model != model:
+            logger.error("Catalog identity does not match target %s", target.name)
+            return None
+        return price
+
+    def _mode_settings(self, mode: str) -> config.LLMModeSettings:
+        if mode == "talk":
+            return self.llm_settings.talk
+        if mode == "think":
+            return self.llm_settings.think
+        raise ValueError(f"Unknown model mode: {mode!r}")
+
+    def _timeouts(self) -> Timeouts:
+        values = self.llm_settings.timeouts
+        return Timeouts(
+            connect_seconds=values.connect_seconds,
+            first_token_seconds=values.first_token_seconds,
+            read_seconds=values.read_seconds,
+            total_seconds=values.total_seconds,
+        )
+
+    def _request(
+        self,
+        *,
+        mode: str,
+        message: str,
+        context: str | None,
+        context_origin: ContentOrigin,
+        message_redacted: bool,
+        context_redacted: bool,
+        privacy: PrivacyLevel | str | None,
+        request_options: Mapping[str, Any] | None,
+    ) -> ChatRequest:
+        messages: list[ChatMessage] = []
+        if context:
+            messages.append(
+                ChatMessage(
+                    Role.SYSTEM,
+                    context,
+                    origin=context_origin,
+                    redacted=context_redacted,
+                )
+            )
+        messages.append(
+            ChatMessage(
+                Role.USER,
+                message,
+                origin=ContentOrigin.RAW_TRANSCRIPT,
+                redacted=message_redacted,
+            )
+        )
+        selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
+        explicit_hybrid_config = self.llm_settings.routing_file is not None
+        return ChatRequest(
+            model=self.models[mode],
+            messages=tuple(messages),
+            mode=mode,
+            language=self.language,
+            privacy=selected_privacy,
+            max_output_tokens=(
+                self._mode_settings(mode).max_output_tokens if explicit_hybrid_config else None
+            ),
+            timeouts=self._timeouts(),
+            options=dict(request_options or {}),
+        )
+
+    def _plan(
+        self,
+        request: ChatRequest,
+        *,
+        connectivity: Connectivity | str | None,
+    ) -> tuple[ExecutionTarget, ...]:
+        executions = self._execution_targets[request.mode]
+        request_for_planning = request
+        privacy_error: ProviderError | None = None
+        if any(execution.route.remote for execution in executions):
+            try:
+                request_for_planning = self.privacy.authorize_remote(request)
+            except ProviderError as error:
+                privacy_error = error
+
+        selected_connectivity = (
+            self.connectivity if connectivity is None else Connectivity(connectivity)
+        )
+        policy = RoutingPolicy(self.llm_settings.routing_policy)
+        if (
+            selected_connectivity is Connectivity.UNKNOWN
+            and self.llm_settings.unknown_connectivity == "prefer_local"
+            and policy is RoutingPolicy.REMOTE_FIRST
+        ):
+            policy = RoutingPolicy.LOCAL_FIRST
+
+        mode_settings = self._mode_settings(request.mode)
+        planner = RoutePlanner(
+            (execution.route for execution in executions),
+            policy=policy,
+            allowlist=self.llm_settings.allowlist,
+            denylist=self.llm_settings.denylist,
+            health=self.health,
+            auto_complexity_threshold=mode_settings.complexity_threshold,
+            allow_remote_when_connectivity_unknown=(
+                self.llm_settings.unknown_connectivity == "allow_remote"
+            ),
+        )
+        try:
+            routes = planner.plan(
+                request_for_planning,
+                connectivity=selected_connectivity,
+            )
+        except NoRouteError:
+            if privacy_error is not None:
+                raise privacy_error from None
+            raise ProviderError(
+                category=ErrorCategory.PROVIDER_UNAVAILABLE,
+                safe_message="No eligible language-model route is available",
+                provider="router",
+                model=request.model,
+                transmitted=False,
+            ) from None
+
+        by_name = {execution.route.name: execution for execution in executions}
+        return tuple(by_name[route.name] for route in routes)
+
     def warm_up(self, mode: str = "talk") -> None:
-        """Explicitly load a model; constructors remain free of network I/O."""
+        """Explicitly load the local Ollama model; remote warm-up is forbidden."""
 
         if mode not in self.models:
             raise ValueError(f"Unknown model mode: {mode!r}")
-        self._call_with_retry(
-            lambda: self.client.chat(
-                model=self.models[mode],
-                messages=[{"role": "user", "content": ""}],
-                stream=False,
+        local_target = next(
+            (
+                execution
+                for execution in self._execution_targets[mode]
+                if execution.route.provider == "ollama"
+                and not execution.route.remote
+                and execution.route.enabled
             ),
+            None,
+        )
+        if local_target is None:
+            raise APIClientError("Remote or disabled Ollama targets cannot be warmed up")
+        self._call_with_retry(
+            lambda: self._ollama.warm_up(local_target.route.model),
             operation_name=f"warm up the {mode} model",
         )
 
@@ -164,103 +600,32 @@ class APIClient:
         *,
         operation_name: str = "contact Ollama",
     ) -> Any:
-        last_error: Exception | None = None
+        last_error: ProviderError | None = None
         for attempt in range(1, self.retry_attempts + 1):
             try:
                 return operation()
-            except _DoNotRetry as wrapped:
-                if wrapped.__cause__ is wrapped.error:
-                    raise wrapped.error from None
-                raise wrapped.error from wrapped.__cause__
-            except APIClientError:
-                raise
-            except Exception as exc:
-                if not _is_transient_transport_error(exc):
-                    raise APIClientError(f"Unable to {operation_name}: {exc}") from exc
-                last_error = exc
+            except ProviderError as error:
+                last_error = error
+                if not error.retryable_same_provider:
+                    raise APIClientError(f"Unable to {operation_name}") from None
                 if attempt >= self.retry_attempts:
                     break
                 logger.warning(
-                    "Unable to %s (attempt %s/%s): %s",
+                    "Unable to %s (attempt %s/%s; category=%s)",
                     operation_name,
                     attempt,
                     self.retry_attempts,
-                    exc,
+                    error.category.value,
                 )
                 if self.retry_wait:
                     self._sleep(self.retry_wait)
+            except Exception:
+                raise APIClientError(f"Unable to {operation_name}") from None
 
         assert last_error is not None
         raise APIClientError(
             f"Unable to {operation_name} after {self.retry_attempts} attempt(s)"
-        ) from last_error
-
-    @staticmethod
-    def _messages(message: str, context: str | None) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = []
-        if context:
-            messages.append({"role": "system", "content": context})
-        messages.append({"role": "user", "content": message})
-        return messages
-
-    def _stream_once(
-        self,
-        *,
-        model: str,
-        messages: list[dict[str, str]],
-        speak: bool,
-    ) -> str:
-        chunks: Iterable[Any] = self.client.chat(
-            model=model,
-            messages=messages,
-            stream=True,
-        )
-        response_parts: list[str] = []
-        sentence_parts: list[str] = []
-        speech_started = False
-
-        def flush_speech() -> None:
-            nonlocal speech_started
-            if not sentence_parts:
-                return
-            sentence = _SPEECH_MARKUP.sub("", "".join(sentence_parts)).strip()
-            sentence_parts.clear()
-            if sentence:
-                try:
-                    self.tts.speak(sentence)
-                except Exception as exc:
-                    raise _DoNotRetry(exc) from exc
-                speech_started = True
-
-        try:
-            for chunk in chunks:
-                text = _chunk_text(chunk)
-                done = bool(_chunk_value(chunk, "done", False))
-                done_reason = _chunk_value(chunk, "done_reason")
-
-                if text:
-                    response_parts.append(text)
-                    if speak:
-                        sentence_parts.append(text)
-                        if _SENTENCE_BOUNDARY.search(text):
-                            flush_speech()
-
-                if speak and (done or done_reason):
-                    flush_speech()
-        except _DoNotRetry:
-            raise
-        except Exception as exc:
-            if speech_started:
-                error = APIClientError(
-                    "Ollama stream was interrupted after speech output began; "
-                    "the request was not retried"
-                )
-                raise _DoNotRetry(error) from exc
-            raise
-
-        if speak:
-            flush_speech()
-        return "".join(response_parts)
+        ) from None
 
     def _stream(
         self,
@@ -269,33 +634,121 @@ class APIClient:
         message: str,
         context: str | None,
         speak: bool,
+        privacy: PrivacyLevel | str | None = None,
+        context_origin: ContentOrigin = ContentOrigin.UNKNOWN,
+        message_redacted: bool = False,
+        context_redacted: bool = False,
+        connectivity: Connectivity | str | None = None,
+        request_options: Mapping[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> str:
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
         if mode not in self.models:
             raise ValueError(f"Unknown model mode: {mode!r}")
 
-        logger.info("Sending a request to Ollama model %s", self.models[mode])
-        return self._call_with_retry(
-            lambda: self._stream_once(
-                model=self.models[mode],
-                messages=self._messages(message, context),
-                speak=speak,
-            ),
-            operation_name=f"stream a response from {self.models[mode]}",
-        )
+        active_cancellation = cancellation or CancellationController()
+        with self._cancellation_lock:
+            if self._closed:
+                raise APIClientError("Language-model client is closed")
+            self._active_cancellations.append(active_cancellation)
 
-    def talk(self, message: str, context: str | None = None) -> str:
-        """Stream a conversational response and speak it as sentences arrive."""
+        try:
+            request = self._request(
+                mode=mode,
+                message=message,
+                context=context,
+                context_origin=context_origin,
+                message_redacted=message_redacted,
+                context_redacted=context_redacted,
+                privacy=privacy,
+                request_options=request_options,
+            )
+            executions = self._plan(request, connectivity=connectivity)
+            logger.info(
+                "Executing %s request using route %s",
+                mode,
+                ",".join(execution.route.name for execution in executions),
+            )
+            result = self._coordinator.run(
+                request,
+                executions,
+                speak=self.tts.speak if speak else None,
+                first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
+                maximum_first_audio_seconds=(
+                    self.llm_settings.health.maximum_talk_first_audio_ms / 1_000
+                    if mode == "talk" and speak
+                    else None
+                ),
+                cancellation=active_cancellation,
+                route_reason=self.llm_settings.routing_policy,
+            )
+            return result.text
+        except SpeechReplayUnsafeError:
+            raise APIClientError(
+                "Model stream was interrupted after speech output began; "
+                "the request was not retried"
+            ) from None
+        except ProviderError as error:
+            attempts = getattr(error, "attempts", 1)
+            if attempts > 1:
+                raise APIClientError(
+                    f"Unable to stream a model response after {attempts} attempt(s)"
+                ) from None
+            raise APIClientError(
+                f"Unable to stream a model response ({error.category.value})"
+            ) from None
+        finally:
+            with self._cancellation_lock:
+                self._active_cancellations = [
+                    token
+                    for token in self._active_cancellations
+                    if token is not active_cancellation
+                ]
+
+    def talk(
+        self,
+        message: str,
+        context: str | None = None,
+        *,
+        privacy: PrivacyLevel | str | None = None,
+        context_origin: ContentOrigin = ContentOrigin.UNKNOWN,
+        message_redacted: bool = False,
+        context_redacted: bool = False,
+        connectivity: Connectivity | str | None = None,
+        request_options: Mapping[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> str:
+        """Stream a conversational response and speak sentences as they arrive."""
 
         return self._stream(
             mode="talk",
             message=message,
             context=context,
             speak=True,
+            privacy=privacy,
+            context_origin=context_origin,
+            message_redacted=message_redacted,
+            context_redacted=context_redacted,
+            connectivity=connectivity,
+            request_options=request_options,
+            cancellation=cancellation,
         )
 
-    def think(self, message: str, context: str | None = None, tts: bool = False) -> str:
+    def think(
+        self,
+        message: str,
+        context: str | None = None,
+        tts: bool = False,
+        *,
+        privacy: PrivacyLevel | str | None = None,
+        context_origin: ContentOrigin = ContentOrigin.UNKNOWN,
+        message_redacted: bool = False,
+        context_redacted: bool = False,
+        connectivity: Connectivity | str | None = None,
+        request_options: Mapping[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> str:
         """Stream a reasoning response and optionally speak it."""
 
         return self._stream(
@@ -303,13 +756,45 @@ class APIClient:
             message=message,
             context=context,
             speak=tts,
+            privacy=privacy,
+            context_origin=context_origin,
+            message_redacted=message_redacted,
+            context_redacted=context_redacted,
+            connectivity=connectivity,
+            request_options=request_options,
+            cancellation=cancellation,
         )
 
+    def cancel_current(self) -> None:
+        """Request cancellation of all model streams currently owned by this client."""
+
+        with self._cancellation_lock:
+            active = tuple(self._active_cancellations)
+        for token in active:
+            cancel = getattr(token, "cancel", None)
+            if callable(cancel):
+                cancel()
+
     def close(self) -> None:
+        with self._cancellation_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self.cancel_current()
+        try:
+            if self._owns_registry:
+                self._registry.close()
+            else:
+                self._ollama.close()
+        except Exception:
+            logger.warning("Unable to close a language-model provider")
         if self._owns_tts and self._tts is not None:
             close = getattr(self._tts, "close", None)
             if callable(close):
-                close()
+                try:
+                    close()
+                except Exception:
+                    logger.warning("Unable to close language-model speech output")
 
     def __enter__(self) -> APIClient:
         return self

@@ -1,0 +1,76 @@
+schema_version = 1
+
+[router]
+policy = "remote_first"
+remote_enabled = true
+allowlist = ["openai", "ollama"]
+denylist = []
+unknown_connectivity = "allow_remote"
+
+[privacy]
+default = "remote_allowed"
+allow_remote_transcripts = true
+allow_remote_context = false
+allow_remote_rag_context = false
+redaction_failure = "local_only"
+
+[budget]
+enabled = true
+catalog_path = "model-catalog.example.json"
+ledger_path = "../logs/llm-budget.jsonl"
+per_request_usd = "0.05"
+daily_usd = "0.50"
+monthly_usd = "5.00"
+zero_cost_only = false
+missing_usage = "settle_reserved"
+
+[observability]
+metrics_enabled = true
+metrics_path = "../logs/llm-metrics.jsonl"
+log_content = false
+log_headers = false
+metrics_retention_days = 14
+
+[modes.talk]
+candidates = ["openai-talk", "local-talk"]
+max_output_tokens = 64
+first_speech_min_chars = 24
+
+[modes.think]
+candidates = ["openai-think", "local-think"]
+max_output_tokens = 256
+first_speech_min_chars = 0
+
+[providers.openai]
+adapter = "openai_chat_sse"
+endpoint = "https://api.openai.com/v1"
+locality = "remote"
+api_key_env = "OPENAI_API_KEY"
+enabled = true
+internal_retries = 0
+
+[targets.openai-talk]
+provider = "openai"
+model = "REPLACE_WITH_VERIFIED_OPENAI_MODEL"
+catalog_id = "openai/replace-me"
+languages = ["it", "en"]
+retry_attempts = 1
+
+[targets.openai-think]
+provider = "openai"
+model = "REPLACE_WITH_VERIFIED_OPENAI_MODEL"
+catalog_id = "openai/replace-me"
+languages = ["it", "en"]
+retry_attempts = 1
+
+[targets.local-talk]
+provider = "ollama"
+model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
+languages = ["it", "en"]
+retry_attempts = 3
+
+[targets.local-think]
+provider = "ollama"
+model = "qwen3:0.6b"
+languages = ["it", "en"]
+retry_attempts = 3

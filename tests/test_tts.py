@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from audio.sound_player import SoundPlaybackError, SoundPlayer
-from audio.tts import PiperTTS, Pyttsx3TTS
+from audio.tts import AudioSynthesisError, PiperTTS, Pyttsx3TTS
 
 
 class FakeVoice:
@@ -17,6 +17,23 @@ class FakeVoice:
         wav_file.setsampwidth(2)
         wav_file.setframerate(16_000)
         wav_file.writeframes(b"\x01\x00\x02\x00")
+
+
+class FakeModernVoice:
+    def synthesize(self, *_args: object) -> None:
+        raise AssertionError("Piper 1.3+ synthesize() must be consumed as an iterator")
+
+    def synthesize_wav(self, text: str, wav_file: wave.Wave_write) -> None:
+        assert text == "hello"
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(22_050)
+        wav_file.writeframes(b"\x03\x00\x04\x00")
+
+
+class FailingVoice:
+    def synthesize(self, _text: str, _wav_file: wave.Wave_write) -> None:
+        raise RuntimeError("native synthesis failure")
 
 
 class CapturingBackend:
@@ -41,6 +58,25 @@ def test_piper_plays_pcm_frames_not_the_wav_header() -> None:
 
     assert backend.calls == [(b"\x01\x00\x02\x00", 16_000, 1, 2)]
     assert not backend.calls[0][0].startswith(b"RIFF")
+
+
+def test_piper_supports_modern_synthesize_wav_api() -> None:
+    backend = CapturingBackend()
+    tts = PiperTTS("unused.onnx", voice=FakeModernVoice(), audio_backend=backend)
+
+    tts.speak("hello")
+
+    assert backend.calls == [(b"\x03\x00\x04\x00", 22_050, 1, 2)]
+
+
+def test_piper_preserves_failure_that_occurs_before_wav_header() -> None:
+    tts = PiperTTS("unused.onnx", voice=FailingVoice())
+
+    with pytest.raises(AudioSynthesisError) as captured:
+        tts.synthesize_wave("hello")
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+    assert str(captured.value.__cause__) == "native synthesis failure"
 
 
 def test_historical_class_name_is_an_alias() -> None:

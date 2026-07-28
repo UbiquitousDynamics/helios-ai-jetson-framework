@@ -8,6 +8,7 @@ requires-python = ">=3.10"
 shared-requirements = "requirements-runtime.txt"
 desktop-requirements = "requirements.txt"
 jetson-requirements = "requirements-jetson.txt"
+remote-requirements = "requirements-remote.txt"
 development-requirements = "requirements-dev.txt"
 asset-manifest = "assets-manifest.json"
 
@@ -19,6 +20,7 @@ testpaths = ["tests"]
 markers = [
     "hardware: requires local audio hardware or bundled inference models",
     "integration: requires a running external service such as Ollama",
+    "remote_live: requires explicit remote enablement and provider credentials",
 ]
 
 [tool.ruff]
