@@ -19,6 +19,14 @@ redaction_failure = "local_only"
 [budget]
 enabled = false
 
+# Native app-server startup and the first ChatGPT turn are slower than a warm
+# HTTP connection, especially on Jetson. Later turns reuse the same process.
+[timeouts]
+connect_seconds = 60.0
+first_token_seconds = 120.0
+read_seconds = 60.0
+total_seconds = 240.0
+
 [observability]
 metrics_enabled = true
 metrics_path = "../logs/llm-metrics.jsonl"
