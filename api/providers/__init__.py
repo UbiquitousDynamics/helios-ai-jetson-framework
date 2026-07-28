@@ -25,9 +25,11 @@ from api.providers.contracts import (
 )
 from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
 from api.providers.ollama import OllamaAdapter
+from api.providers.codex_app_server import CodexAppServerAdapter
 
 __all__ = [
     "CancellationToken",
+    "CodexAppServerAdapter",
     "ChatMessage",
     "ChatProvider",
     "ChatRequest",

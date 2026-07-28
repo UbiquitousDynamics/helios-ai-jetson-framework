@@ -283,24 +283,38 @@ class APIClient:
         for provider in self.llm_settings.providers:
             if not provider.enabled or provider.name in self._registered_providers:
                 continue
-            if provider.adapter != "openai_chat_sse" or provider.api_key_env is None:
+            if provider.adapter == "openai_chat_sse" and provider.api_key_env is not None:
+
+                def factory(
+                    settings: config.LLMProviderSettings = provider,
+                ) -> ChatProvider:
+                    from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
+
+                    assert settings.api_key_env is not None
+                    return OpenAIChatSSEAdapter(
+                        provider=settings.name,
+                        endpoint=settings.endpoint,
+                        api_key_env=settings.api_key_env,
+                    )
+
+            elif provider.adapter == "codex_app_server":
+
+                def factory(
+                    settings: config.LLMProviderSettings = provider,
+                ) -> ChatProvider:
+                    from api.providers.codex_app_server import CodexAppServerAdapter
+
+                    return CodexAppServerAdapter(
+                        provider=settings.name,
+                        endpoint=settings.endpoint,
+                    )
+
+            else:
                 logger.error(
                     "Provider %s uses an unsupported or incomplete adapter configuration",
                     provider.name,
                 )
                 continue
-
-            def factory(
-                settings: config.LLMProviderSettings = provider,
-            ) -> ChatProvider:
-                from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
-
-                assert settings.api_key_env is not None
-                return OpenAIChatSSEAdapter(
-                    provider=settings.name,
-                    endpoint=settings.endpoint,
-                    api_key_env=settings.api_key_env,
-                )
 
             self._registry.register(provider.name, factory, owned=True)
             self._registered_providers.add(provider.name)

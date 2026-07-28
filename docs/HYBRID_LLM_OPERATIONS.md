@@ -328,15 +328,25 @@ behaviorally identical.
 
 ## Live certification
 
+The native Codex app-server/ChatGPT-subscription route is documented separately
+in `docs/CODEX_SUBSCRIPTION.md`. It deliberately forbids `api_key_env`, verifies
+an account of type `chatgpt`, and disables API-cost accounting because a
+subscription is not API-key billing.
+
 The normal suite is network-free and ignores API keys. A deployment-owned
 remote-only configuration can be certified with one explicitly authorized
 request:
 
 ```bash
+python -m pip install -r requirements-dev.txt
 export HELIOS_LLM_LIVE=1
 export HELIOS_LLM_LIVE_CONFIG=/etc/helios/llm-routing-live.toml
 python -m pytest tests/test_live_llm.py -m remote_live -q
 ```
+
+`pytest` is intentionally not part of `requirements-jetson.txt`, which is the
+runtime-only installation contract. Install `requirements-dev.txt` whenever
+tests are to run on the target.
 
 The live file must use `remote_only`, keep a local Ollama target available for
 the emergency switch, use current catalog data, a writable ledger, and a strict

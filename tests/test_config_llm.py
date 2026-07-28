@@ -198,6 +198,7 @@ options = { api_key = "must-not-be-here" }
         "llm-routing.free-tier-first.toml",
         "llm-routing.paid-first.toml",
         "llm-routing.local-first-escalation.toml",
+        "llm-routing.codex-subscription.toml",
     ],
 )
 def test_committed_routing_examples_are_valid(name: str) -> None:
@@ -260,3 +261,31 @@ def test_denylist_typos_and_inconsistent_adapter_locality_are_rejected() -> None
             endpoint="http://127.0.0.1:8000/v1",
             locality="device",
         )
+
+
+def test_codex_provider_requires_stdio_and_forbids_api_key_configuration() -> None:
+    provider = config.LLMProviderSettings(
+        name="openai-codex",
+        adapter="codex_app_server",
+        endpoint="stdio://codex",
+        locality="remote",
+    )
+
+    assert provider.api_key_env is None
+
+    with pytest.raises(config.ConfigurationError, match="local ChatGPT sign-in"):
+        config.LLMProviderSettings(
+            name="openai-codex",
+            adapter="codex_app_server",
+            endpoint="stdio://codex",
+            locality="remote",
+            api_key_env="OPENAI_API_KEY",
+        )
+    for invalid_endpoint in ("stdio://other", "stdio://codex/", "stdio://codex:123"):
+        with pytest.raises(config.ConfigurationError, match="exactly"):
+            config.LLMProviderSettings(
+                name="openai-codex",
+                adapter="codex_app_server",
+                endpoint=invalid_endpoint,
+                locality="remote",
+            )

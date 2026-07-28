@@ -364,11 +364,12 @@ process from blocking shutdown indefinitely.
 |-- requirements.txt                Portable desktop dependency entry point
 |-- requirements-runtime.txt        Platform-neutral direct dependencies
 |-- requirements-jetson.txt         Jetson-specific installation contract
+|-- requirements-remote.txt         Optional remote SSE and Codex dependencies
 |-- requirements-dev.txt            Model-free test and quality dependencies
 |-- assets-manifest.json            Machine-readable asset inventory and hashes
 |-- THIRD_PARTY_NOTICES.md          Provenance and redistribution gaps
 |-- api/
-|   |-- api_client.py               Lazy Ollama streaming client
+|   |-- api_client.py               Lazy local/remote language-model client
 |   |-- Modelfile-IT                Italian Emilia Ollama definition
 |   `-- Modelfile-EN                English Emilia Ollama definition
 |-- audio/
@@ -451,7 +452,7 @@ classes and protocols.
 | `requirements-runtime.txt` | Dependencies that resolve consistently across desktop and Jetson |
 | `requirements.txt` | Desktop install, adding generic Torch, ONNX Runtime, and Piper |
 | `requirements-jetson.txt` | Shared dependencies after platform backends are provisioned |
-| `requirements-remote.txt` | Optional HTTP transport for remote SSE providers |
+| `requirements-remote.txt` | Optional HTTP/SSE and native Codex app-server clients |
 | `requirements-dev.txt` | Model-free test and lint dependencies, including the fake-transport HTTP surface |
 
 Jetson inference packages are deliberately not pinned to guessed public wheel
@@ -633,6 +634,15 @@ python -m pip install -r requirements-jetson.txt
 python -c "import piper, torch, onnxruntime; print('Jetson backends import successfully')"
 ```
 
+`requirements-jetson.txt` contains runtime dependencies only. To run the
+model-free test and quality suite on the Jetson, install the separate developer
+dependencies:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
 Use the repository launcher for validation and normal operation:
 
 ```bash
@@ -740,6 +750,11 @@ provider data. See
 [`docs/HYBRID_LLM_OPERATIONS.md`](docs/HYBRID_LLM_OPERATIONS.md) for the full
 configuration, credential, privacy, budget, live-test, benchmark, rollout, and
 human-review checklist.
+
+For OpenClaw-style ChatGPT subscription routing through the native Codex
+app-server, see
+[`docs/CODEX_SUBSCRIPTION.md`](docs/CODEX_SUBSCRIPTION.md). It requires no API
+key and keeps Ollama as the configured fallback.
 
 ### Active settings
 

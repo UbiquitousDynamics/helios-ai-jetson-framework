@@ -1,0 +1,70 @@
+schema_version = 1
+
+[router]
+policy = "remote_first"
+remote_enabled = true
+allowlist = ["openai-codex", "ollama"]
+denylist = []
+unknown_connectivity = "allow_remote"
+
+[privacy]
+default = "remote_allowed"
+allow_remote_transcripts = true
+allow_remote_context = false
+allow_remote_rag_context = false
+redaction_failure = "local_only"
+
+# ChatGPT subscription usage does not expose API prices. Disable the API-cost
+# ledger; the account's Codex usage limits still apply and trigger local fallback.
+[budget]
+enabled = false
+
+[observability]
+metrics_enabled = true
+metrics_path = "../logs/llm-metrics.jsonl"
+log_content = false
+log_headers = false
+metrics_retention_days = 14
+
+[modes.talk]
+candidates = ["codex-talk", "local-talk"]
+max_output_tokens = 80
+first_speech_min_chars = 24
+
+[modes.think]
+candidates = ["codex-think", "local-think"]
+max_output_tokens = 256
+first_speech_min_chars = 0
+
+[providers.openai-codex]
+adapter = "codex_app_server"
+endpoint = "stdio://codex"
+locality = "remote"
+enabled = true
+internal_retries = 0
+
+[targets.codex-talk]
+provider = "openai-codex"
+model = "gpt-5.6-sol"
+languages = ["it", "en"]
+retry_attempts = 1
+options = { reasoning_effort = "low" }
+
+[targets.codex-think]
+provider = "openai-codex"
+model = "gpt-5.6-sol"
+languages = ["it", "en"]
+retry_attempts = 1
+options = { reasoning_effort = "medium" }
+
+[targets.local-talk]
+provider = "ollama"
+model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
+languages = ["it", "en"]
+retry_attempts = 3
+
+[targets.local-think]
+provider = "ollama"
+model = "qwen3:0.6b"
+languages = ["it", "en"]
+retry_attempts = 3

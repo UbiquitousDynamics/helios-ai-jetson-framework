@@ -160,20 +160,24 @@ class LLMProviderSettings:
     def __post_init__(self) -> None:
         if not self.name or not self.adapter or not self.endpoint:
             raise ConfigurationError("provider name, adapter, and endpoint are required")
-        if self.adapter not in {"ollama", "openai_chat_sse"}:
+        if self.adapter not in {"ollama", "openai_chat_sse", "codex_app_server"}:
             raise ConfigurationError(f"Unsupported provider adapter: {self.adapter!r}")
         if self.adapter == "ollama" and self.name != "ollama":
             raise ConfigurationError("the Ollama adapter must use provider name 'ollama'")
         if self.name == "ollama" and self.adapter != "ollama":
             raise ConfigurationError("provider name 'ollama' is reserved for the Ollama adapter")
-        if self.adapter == "openai_chat_sse" and self.locality != "remote":
-            raise ConfigurationError("OpenAI-compatible SSE providers must be remote")
+        if self.adapter in {"openai_chat_sse", "codex_app_server"} and self.locality != "remote":
+            raise ConfigurationError("OpenAI and Codex providers must be remote")
         if self.locality not in {"device", "trusted_lan", "remote"}:
             raise ConfigurationError(f"Unsupported provider locality: {self.locality!r}")
         if self.api_key_env is not None and not _ENV_NAME.fullmatch(self.api_key_env):
             raise ConfigurationError(f"Invalid API-key environment name: {self.api_key_env!r}")
         if self.adapter == "ollama" and self.api_key_env is not None:
             raise ConfigurationError("Ollama providers do not accept an API-key setting")
+        if self.adapter == "codex_app_server" and self.api_key_env is not None:
+            raise ConfigurationError(
+                "Codex app-server uses the local ChatGPT sign-in, not an API-key setting"
+            )
         if (
             self.locality == "remote"
             and self.adapter == "openai_chat_sse"
@@ -190,6 +194,12 @@ class LLMProviderSettings:
             raise ConfigurationError(
                 "provider endpoints cannot contain credentials, query, or fragment"
             )
+        if self.adapter == "codex_app_server":
+            if self.endpoint != "stdio://codex":
+                raise ConfigurationError(
+                    "Codex app-server endpoint must be exactly 'stdio://codex'"
+                )
+            return
         if (
             self.adapter == "ollama"
             and self.locality == "device"
