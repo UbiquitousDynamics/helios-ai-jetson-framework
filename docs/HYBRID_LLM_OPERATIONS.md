@@ -23,8 +23,8 @@ The hybrid subsystem includes:
   and `auto` routing;
 - per-mode candidate chains, language/model selection, allowlists, denylists,
   context limits, feature checks, connectivity state, and provider health;
-- a provenance-based privacy guard with a second authorization check inside
-  the remote adapter;
+- a provenance-based privacy guard with authorization rechecked at remote
+  dispatch and again inside the OpenAI-compatible SSE adapter;
 - retry and fallback only before speech may have reached the listener;
 - optional pre-speech buffering through `first_speech_min_chars`;
 - provider/model cooldowns for transient, rate-limit, authentication, and
@@ -47,15 +47,15 @@ Remote transmission requires every gate below to pass:
 
 1. A valid routing TOML was loaded.
 2. `router.remote_enabled` is true.
-3. `HELIOS_LLM_REMOTE_ENABLED` has not disabled it.
+3. `HELIOS_LLM_REMOTE_ENABLED` is independently set to `true`.
 4. `HELIOS_LLM_EMERGENCY_LOCAL_ONLY` is false.
 5. The selected policy and candidate chain permit a remote target.
 6. The provider and target are enabled and allowed.
 7. Connectivity policy permits the attempt.
 8. The request privacy level is not `local_only`.
 9. Every message has an allowed provenance.
-10. The coordinator grants `remote_authorized`.
-11. The remote adapter rechecks `remote_authorized` immediately before POST.
+10. The coordinator grants and rechecks `remote_authorized` at dispatch.
+11. The OpenAI-compatible SSE adapter checks it again immediately before POST.
 12. Budget/catalog checks pass when budget enforcement is enabled.
 13. The named credential environment variable exists.
 
@@ -75,10 +75,14 @@ content local. `remote_redacted` is enforced, but Helios does not contain a
 general-purpose redactor: callers must provide already-redacted messages and
 mark them as such.
 
-API keys are looked up lazily by environment-variable name. Secret values are
-not accepted in TOML, stored in `Settings`, emitted in metrics, or included in
-sanitized provider errors. Remote endpoints must use HTTPS and cannot contain
-credentials, query strings, or fragments.
+API keys are looked up lazily by environment-variable name. Credential-like
+option names and credentials embedded in endpoints are rejected, and the
+supported API-key field accepts only an environment-variable name. The parser
+cannot prove that an arbitrary string such as a model name, path, or stop
+sequence is not a secret, so the operational rule remains: never place secret
+values anywhere in routing TOML. Secrets are not emitted in metrics or included
+in sanitized provider errors. Remote endpoints must use HTTPS and cannot
+contain credentials, query strings, or fragments.
 
 ## Routing behavior
 
@@ -117,6 +121,11 @@ The policies then order eligible targets:
 The mode’s `complexity_threshold` selects remote-first when the score reaches
 the threshold. Candidate order remains deterministic. Health and budget can
 remove a candidate but do not use an opaque learned ranking.
+
+Health records latency EWMA for observation and circuit decisions, but current
+routing does not reorder candidates from that EWMA. Battery state, Jetson power
+mode, thermal headroom, and metered-link state are not runtime inputs yet; an
+integrator must supply those policies before they can influence routing.
 
 Helios does not probe the internet during construction. Runtime connectivity is
 `unknown` until an integrator supplies `Connectivity.ONLINE` or `OFFLINE`.
@@ -163,6 +172,12 @@ is returned unchanged and is never relabeled as a provider error.
 sentence. Keep it at `0` for legacy latency. Values around 20–40 characters are
 a reasonable benchmark range, not a production recommendation.
 
+`APIClient.cancel_current()` cancels active streams, and
+`VoiceAssistant.stop()` invokes it. Cancellation is checked before dispatch and
+between received chunks. A thread already blocked in an HTTP or Ollama read can
+only return when that transport produces data, closes, or reaches its configured
+read/total timeout; cancellation is cooperative, not an unbounded hard kill.
+
 ## Configuration
 
 Install the optional HTTP dependency only on images that may use remote
@@ -193,6 +208,9 @@ $env:HELIOS_LLM_CONFIG = "C:\ProgramData\Helios\llm-routing.toml"
 $env:HELIOS_LLM_REMOTE_ENABLED = "true"
 ```
 
+Both switches are required. Setting only `router.remote_enabled = true` or only
+`HELIOS_LLM_REMOTE_ENABLED=true` cannot enable remote transmission.
+
 The routing file stores only the environment-variable name:
 
 ```toml
@@ -207,6 +225,24 @@ internal_retries = 0
 Inject the actual key with the vehicle’s secret manager, systemd credential,
 container secret, CI secret, or a deployment-owned protected environment file.
 Do not add it to `.env.example`, TOML, service arguments, shell history, or Git.
+
+The legacy Ollama host is trusted as device-local only when it is loopback. A
+non-loopback Ollama URL is treated as remote and fails closed unless it is
+classified explicitly with an endpoint that exactly matches the runtime
+Ollama host:
+
+```toml
+[providers.ollama]
+adapter = "ollama"
+endpoint = "http://ollama.lan:11434"
+locality = "trusted_lan"
+enabled = true
+internal_retries = 0
+```
+
+Declaring `trusted_lan` is a deployment security decision: the operator must
+provide network isolation, authentication controls where available, and an
+egress/privacy review. Use `locality = "device"` only with a loopback endpoint.
 
 Supported environment overrides are:
 
@@ -225,9 +261,15 @@ Supported environment overrides are:
 | `HELIOS_LLM_ZERO_COST_ONLY` | Reject every nonzero reservation |
 | `HELIOS_LLM_METRICS_ENABLED` | Content-free metrics switch |
 | `HELIOS_LLM_LOG_CONTENT` | Reserved; content is still not logged |
+| `HELIOS_LLM_LOG_HEADERS` | Reserved; headers are still not logged |
 
 Environment variables can disable remote operation without a file. They cannot
 construct a remote route by themselves.
+
+`observability.metrics_retention_days` is implemented as daily pruning of the
+content-free JSONL metrics file. The `log_content` and `log_headers` settings are
+reserved and must remain false. Missing provider usage always settles the full
+budget reservation; no alternate `missing_usage` behavior is implemented.
 
 ## Catalog and budget sign-off
 
@@ -254,10 +296,21 @@ missing entry blocks the remote attempt. Reservations use the conservative
 estimated input and maximum output before network dispatch. Returned usage
 reconciles the charge; missing usage settles the full reservation.
 
+Budget limits are currently global across all remote routes. Per-provider and
+per-model sub-budgets are not implemented. The catalog’s `free_tier` flag is
+informational and never overrides the exact decimal prices or `zero_cost_only`
+reservation check.
+
 For a real free-tier account, do not enter zero prices merely because the first
 quota band is free unless operations can also detect quota exhaustion and
 prevent paid overage. A zero-cost policy is only as reliable as the account
 controls and catalog values behind it.
+
+The append-only ledger uses a continuity sidecar to detect ordinary truncation,
+replacement, and clock rollback. Coordinated deletion of the ledger, sidecar,
+and lock file cannot be detected without an external trusted anchor. Production
+deployments that require that guarantee must anchor ledger state in a protected
+service, TPM-backed store, remote audit system, or equivalent control.
 
 Useful primary documentation starting points, which still require verification
 on the deployment date, are:
@@ -285,9 +338,11 @@ export HELIOS_LLM_LIVE_CONFIG=/etc/helios/llm-routing-live.toml
 python -m pytest tests/test_live_llm.py -m remote_live -q
 ```
 
-The live file must use `remote_only`, current catalog data, a writable ledger,
-and a strict spending cap. The test skips when opt-in, configuration, or
-credentials are missing. It does not print the prompt, response, or key.
+The live file must use `remote_only`, keep a local Ollama target available for
+the emergency switch, use current catalog data, a writable ledger, and a strict
+spending cap. `remote_only` filters the local candidate during the test. The
+test skips when opt-in, configuration, or credentials are missing. It does not
+print the prompt, response, or key.
 
 Before production, inject failures with fake transports and on a staging
 network:
@@ -351,8 +406,8 @@ signed off before remote enablement:
 - a definition of sensitive speech and whether any transcript may leave the
   vehicle;
 - selection of a trusted connectivity signal and battery/resource policy;
-- filesystem ownership, ledger backup, clock synchronization, metrics rotation,
-  and incident response;
+- filesystem ownership, ledger backup, external continuity anchoring where
+  required, clock synchronization, metrics archival, and incident response;
 - target-device latency, power, thermal, bandwidth, and audio acceptance
   thresholds;
 - Italian/English answer-quality review by domain owners;
@@ -381,5 +436,8 @@ export HELIOS_LLM_EMERGENCY_LOCAL_ONLY=true
 ```
 
 Restart the process so all remote provider instances and transports close. No
-configuration file or code rollback is required. Removing
-`HELIOS_LLM_CONFIG` also restores the original Ollama-only behavior.
+configuration file or code rollback is required. Even a configured remote-only
+mode receives an emergency local Ollama route, and emergency mode ignores
+normal route allow/deny filters. This requires an available loopback or
+explicitly trusted-LAN Ollama host. Removing `HELIOS_LLM_CONFIG` also restores
+the original Ollama-only behavior.

@@ -339,6 +339,32 @@ def test_pre_cancelled_request_never_reaches_provider() -> None:
     assert local.calls == []
 
 
+def test_emergency_switch_restores_local_route_for_remote_only_mode(
+    tmp_path: Path,
+) -> None:
+    base = hybrid_settings(tmp_path)
+    llm = replace(
+        base,
+        emergency_local_only=True,
+        allowlist=("remote",),
+        talk=replace(base.talk, candidates=("remote-talk",)),
+    )
+    local = FakeOllamaClient()
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("Emilia, rollback") == "Local."
+    assert len(local.calls) == 1
+    assert remote.calls == []
+
+
 def test_matching_ollama_endpoint_can_be_explicitly_trusted(
     tmp_path: Path,
 ) -> None:

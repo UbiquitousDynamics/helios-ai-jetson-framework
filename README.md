@@ -203,6 +203,7 @@ classDiagram
         +warm_up(mode)
         +talk(message, context) str
         +think(message, context, tts) str
+        +cancel_current()
         +close()
     }
 

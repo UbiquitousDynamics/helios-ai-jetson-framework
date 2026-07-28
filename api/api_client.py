@@ -430,6 +430,28 @@ class APIClient:
                     price=price,
                 )
             )
+        if self.llm_settings.emergency_local_only and not any(
+            execution.route.provider == "ollama"
+            and not execution.route.remote
+            and execution.route.enabled
+            for execution in executions
+        ):
+            ollama_remote, ollama_enabled = self._ollama_classification()
+            if ollama_enabled and not ollama_remote:
+                executions.append(
+                    ExecutionTarget(
+                        ProviderTarget(
+                            name=f"ollama-emergency-{mode}",
+                            provider="ollama",
+                            model=self.models[mode],
+                            remote=False,
+                            modes=frozenset({mode}),
+                            languages=frozenset({self.language}),
+                            priority=len(executions),
+                        ),
+                        retry_attempts=self.retry_attempts,
+                    )
+                )
         return tuple(executions)
 
     @staticmethod
@@ -545,8 +567,10 @@ class APIClient:
         planner = RoutePlanner(
             (execution.route for execution in executions),
             policy=policy,
-            allowlist=self.llm_settings.allowlist,
-            denylist=self.llm_settings.denylist,
+            allowlist=(
+                () if self.llm_settings.emergency_local_only else self.llm_settings.allowlist
+            ),
+            denylist=(() if self.llm_settings.emergency_local_only else self.llm_settings.denylist),
             health=self.health,
             auto_complexity_threshold=mode_settings.complexity_threshold,
             allow_remote_when_connectivity_unknown=(

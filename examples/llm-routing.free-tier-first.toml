@@ -1,5 +1,9 @@
 schema_version = 1
 
+# Certification template only. The catalog free_tier flag is informational:
+# keep this configuration blocked until account-side hard no-overage controls
+# and a current, independently reviewed catalog are in place.
+
 [router]
 policy = "remote_first"
 remote_enabled = true

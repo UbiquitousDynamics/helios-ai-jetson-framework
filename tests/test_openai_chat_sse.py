@@ -1,5 +1,7 @@
 import json
+import queue
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -18,8 +20,12 @@ from api.providers.contracts import (
     Refused,
     Role,
     TextDelta,
+    Timeouts,
 )
-from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
+from api.providers.openai_chat_sse import (
+    OpenAIChatSSEAdapter,
+    _TimedHttpxResponse,
+)
 
 
 class FakeResponse:
@@ -35,6 +41,7 @@ class FakeResponse:
         self.status_code = status_code
         self.headers = dict(headers or {"content-type": "text/event-stream"})
         self.error_payload = error_payload
+        self.first_token_marks = 0
 
     def iter_lines(self) -> Iterable[str | bytes]:
         for line in self.lines:
@@ -46,6 +53,9 @@ class FakeResponse:
         if self.error_payload is None:
             raise ValueError("no JSON error body")
         return self.error_payload
+
+    def mark_first_token(self) -> None:
+        self.first_token_marks += 1
 
 
 class FakeResponseContext:
@@ -175,6 +185,70 @@ def _successful_lines(text: str = "Ciao.") -> list[str]:
         "data: [DONE]",
         "",
     ]
+
+
+class ManualClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+def test_consumer_pause_is_not_counted_as_provider_total_time(monkeypatch):
+    clock = ManualClock()
+    response = FakeResponse(_successful_lines())
+    adapter, _transport = _adapter(monkeypatch, response, clock=clock)
+    request = replace(
+        _request(),
+        timeouts=Timeouts(
+            connect_seconds=1,
+            first_token_seconds=1,
+            read_seconds=1,
+            total_seconds=1,
+        ),
+    )
+    stream = adapter.stream(request)
+
+    assert next(stream) == TextDelta("Ciao.")
+    clock.value += 30  # synchronous Piper/TTS or another slow consumer
+    remaining = list(stream)
+
+    assert any(isinstance(event, Completed) for event in remaining)
+    assert response.first_token_marks >= 1
+
+
+def test_timed_httpx_response_switches_from_first_token_to_read_timeout():
+    observed_timeouts: list[float] = []
+
+    def wait_for_item(
+        mailbox: queue.Queue[Any],
+        timeout: float,
+    ) -> Any:
+        observed_timeouts.append(timeout)
+        return mailbox.get(timeout=1)
+
+    response = FakeResponse(["first", "second"])
+    timed = _TimedHttpxResponse(
+        response,
+        timeouts=Timeouts(
+            connect_seconds=1,
+            first_token_seconds=2,
+            read_seconds=7,
+            total_seconds=20,
+        ),
+        opening_elapsed=0,
+        clock=lambda: 0.0,
+        wait_for_item=wait_for_item,
+    )
+    lines = iter(timed.iter_lines())
+
+    assert next(lines) == "first"
+    timed.mark_first_token()
+    assert next(lines) == "second"
+    timed.close()
+
+    assert observed_timeouts[:2] == [2, 7]
 
 
 @pytest.mark.parametrize(

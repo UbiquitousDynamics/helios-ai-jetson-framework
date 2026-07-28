@@ -1293,6 +1293,15 @@ class OpenAIChatSSEAdapter:
             rate_limits=None,
         )
 
+        def emit(events: Iterable[StreamEvent]) -> Iterator[StreamEvent]:
+            """Exclude synchronous consumer/TTS work while this generator is paused."""
+
+            nonlocal started
+            for event in events:
+                suspended_at = self._clock()
+                yield event
+                started += max(0.0, self._clock() - suspended_at)
+
         # Defence in depth: routing authorization is checked once during
         # preflight and again at the irreversible transport boundary.
         self._authorize_remote(request)
@@ -1372,10 +1381,13 @@ class OpenAIChatSSEAdapter:
                         )
                         data_lines.clear()
                         data_size = 0
-                        for event in events:
-                            yield event
+                        if state.saw_token:
+                            mark_first_token = getattr(response, "mark_first_token", None)
+                            if callable(mark_first_token):
+                                mark_first_token()
+                        yield from emit(events)
                         if done:
-                            yield self._terminal(request, state)
+                            yield from emit((self._terminal(request, state),))
                             terminal_emitted = True
                             break
                         continue
@@ -1404,13 +1416,16 @@ class OpenAIChatSSEAdapter:
                         request=request,
                         state=state,
                     )
-                    for event in events:
-                        yield event
+                    if state.saw_token:
+                        mark_first_token = getattr(response, "mark_first_token", None)
+                        if callable(mark_first_token):
+                            mark_first_token()
+                    yield from emit(events)
                     if done:
-                        yield self._terminal(request, state)
+                        yield from emit((self._terminal(request, state),))
                         return
                 if state.finish_reason is not FinishReason.UNKNOWN:
-                    yield self._terminal(request, state)
+                    yield from emit((self._terminal(request, state),))
                     return
                 raise self._error(
                     ErrorCategory.MALFORMED_RESPONSE,
