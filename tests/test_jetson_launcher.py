@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,23 @@ def test_launcher_honors_explicit_interpreter(tmp_path: Path) -> None:
     make_interpreter(tmp_path)
 
     assert select_interpreter(tmp_path, {"HELIOS_PYTHON": str(explicit)}) == explicit.resolve()
+
+
+def test_launcher_keeps_virtualenv_interpreter_symlink(tmp_path: Path) -> None:
+    base_interpreter = tmp_path / "base/bin/python3.10"
+    base_interpreter.parent.mkdir(parents=True)
+    base_interpreter.write_bytes(b"")
+    venv_interpreter = tmp_path / "venv/bin/python3"
+    venv_interpreter.parent.mkdir(parents=True)
+    try:
+        os.symlink(base_interpreter, venv_interpreter)
+    except OSError as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+
+    selected = select_interpreter(tmp_path, {})
+
+    assert selected == venv_interpreter.absolute()
+    assert selected != base_interpreter.resolve()
 
 
 def test_launcher_rejects_missing_explicit_interpreter(tmp_path: Path) -> None:

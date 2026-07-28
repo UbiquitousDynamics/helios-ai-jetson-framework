@@ -36,13 +36,16 @@ def select_interpreter(root: Path, environ: Mapping[str, str]) -> Path:
     if explicit:
         requested = Path(explicit).expanduser()
         if requested.is_file():
-            return requested.resolve()
+            # Keep the virtualenv entry-point path. Resolving its symlink to the
+            # base interpreter (for example /usr/local/bin/python3.10) makes
+            # CPython lose the adjacent pyvenv.cfg and therefore the venv.
+            return requested.absolute()
         raise RuntimeError(f"HELIOS_PYTHON does not point to a file: {requested}")
 
     candidates = interpreter_candidates(root, environ)
     for candidate in candidates:
         if candidate.is_file():
-            return candidate.resolve()
+            return candidate.absolute()
     rendered = ", ".join(str(candidate) for candidate in candidates)
     raise RuntimeError(
         "No Helios virtualenv interpreter was found. Create 'venv' or '.venv', "

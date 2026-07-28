@@ -646,7 +646,9 @@ prefers the OpenMP runtime bundled with scikit-learn, preserves any existing
 copy is unavailable. This setup occurs before the runtime interpreter starts,
 which is required to avoid Jetson static-TLS loader failures. Set
 `HELIOS_PYTHON` to an explicit virtualenv interpreter when neither conventional
-directory name is used.
+directory name is used. The launcher intentionally preserves the
+`venv/bin/python3` symlink path: resolving it to the base interpreter would
+bypass the virtual environment.
 
 Revalidate these versions whenever JetPack changes. The repository does not
 embed a third-party wheel URL because those URLs and ABI combinations are tied
