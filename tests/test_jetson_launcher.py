@@ -79,8 +79,11 @@ def test_launcher_prefers_scikit_learn_openmp_runtime(tmp_path: Path) -> None:
     assert find_openmp_runtime(interpreter) == sklearn_copy.resolve()
 
 
-def test_launcher_prepends_openmp_runtime_once(tmp_path: Path) -> None:
-    library = tmp_path / "libgomp.so.1"
+def test_launcher_prepends_openmp_runtime_once() -> None:
+    # LD_PRELOAD is configured only on AArch64/Linux. A Windows tmp_path
+    # contains a drive-letter colon, which is also the Linux list separator and
+    # cannot represent a real LD_PRELOAD entry.
+    library = Path("/opt/helios/libgomp.so.1")
 
     assert prepend_preload("/existing.so", library) == f"{library}:/existing.so"
     assert prepend_preload(f"{library}:/existing.so", library) == f"{library}:/existing.so"
