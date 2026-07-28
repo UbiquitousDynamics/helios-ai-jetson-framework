@@ -105,7 +105,15 @@ class PiperTTS:
         output = io.BytesIO()
         try:
             with wave.open(output, "wb") as wav_file:
-                self.voice.synthesize(text, wav_file)
+                # Piper 1.3 changed ``synthesize`` into a lazy AudioChunk
+                # iterator and added ``synthesize_wav`` for Wave_write
+                # destinations.  Piper 1.2 only exposes the original
+                # ``synthesize(text, wav_file)`` API.
+                synthesize_wav = getattr(self.voice, "synthesize_wav", None)
+                if callable(synthesize_wav):
+                    synthesize_wav(text, wav_file)
+                else:
+                    self.voice.synthesize(text, wav_file)
         except TTSError:
             raise
         except Exception as exc:

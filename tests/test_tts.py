@@ -19,6 +19,18 @@ class FakeVoice:
         wav_file.writeframes(b"\x01\x00\x02\x00")
 
 
+class FakeModernVoice:
+    def synthesize(self, *_args: object) -> None:
+        raise AssertionError("Piper 1.3+ synthesize() must be consumed as an iterator")
+
+    def synthesize_wav(self, text: str, wav_file: wave.Wave_write) -> None:
+        assert text == "hello"
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(22_050)
+        wav_file.writeframes(b"\x03\x00\x04\x00")
+
+
 class CapturingBackend:
     def __init__(self) -> None:
         self.calls: list[tuple[bytes, int, int, int]] = []
@@ -41,6 +53,15 @@ def test_piper_plays_pcm_frames_not_the_wav_header() -> None:
 
     assert backend.calls == [(b"\x01\x00\x02\x00", 16_000, 1, 2)]
     assert not backend.calls[0][0].startswith(b"RIFF")
+
+
+def test_piper_supports_modern_synthesize_wav_api() -> None:
+    backend = CapturingBackend()
+    tts = PiperTTS("unused.onnx", voice=FakeModernVoice(), audio_backend=backend)
+
+    tts.speak("hello")
+
+    assert backend.calls == [(b"\x03\x00\x04\x00", 22_050, 1, 2)]
 
 
 def test_historical_class_name_is_an_alias() -> None:

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -98,12 +100,264 @@ class _Transport(Protocol):
     def close(self) -> None: ...
 
 
+class _HttpxFirstTokenTimeout(TimeoutError):
+    """The first complete output event did not arrive in time."""
+
+
+class _HttpxReadTimeout(TimeoutError):
+    """The stream was idle after output had started."""
+
+
+class _HttpxTotalTimeout(TimeoutError):
+    """Active transport time exhausted the request budget."""
+
+
+def _wait_for_item(mailbox: queue.Queue[Any], timeout: float) -> Any:
+    return mailbox.get(timeout=timeout)
+
+
+class _TimedHttpxResponse:
+    """Serialize response reads while applying stage-specific idle deadlines."""
+
+    def __init__(
+        self,
+        response: Any,
+        *,
+        timeouts: Timeouts,
+        opening_elapsed: float,
+        clock: Callable[[], float],
+        wait_for_item: Callable[[queue.Queue[Any], float], Any],
+    ) -> None:
+        self._response = response
+        self.status_code = response.status_code
+        self.headers = response.headers
+        self._clock = clock
+        self._wait_for_item = wait_for_item
+        self._first_remaining = timeouts.first_token_seconds - opening_elapsed
+        self._read_seconds = timeouts.read_seconds
+        self._total_remaining = timeouts.total_seconds - opening_elapsed
+        self._token_seen = False
+        self._closed = False
+        self._stop = threading.Event()
+        self._reader: threading.Thread | None = None
+        self._permits: queue.Queue[object] = queue.Queue(maxsize=1)
+        self._results: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def __getattr__(self, name: str) -> Any:
+        # Error responses still need bounded access to json()/iter_bytes().
+        return getattr(self._response, name)
+
+    def mark_first_token(self) -> None:
+        self._token_seen = True
+
+    def opening_timeout(self) -> Exception | None:
+        if self._total_remaining <= 0:
+            return _HttpxTotalTimeout()
+        if self._first_remaining <= 0:
+            return _HttpxFirstTokenTimeout()
+        return None
+
+    def _start_reader(self) -> None:
+        if self._reader is not None:
+            return
+
+        def read_lines() -> None:
+            try:
+                iterator = iter(self._response.iter_lines())
+                while not self._stop.is_set():
+                    self._permits.get()
+                    if self._stop.is_set():
+                        return
+                    try:
+                        line = next(iterator)
+                    except StopIteration:
+                        self._results.put(("eof", None))
+                        return
+                    except Exception as exc:
+                        self._results.put(("error", exc))
+                        return
+                    self._results.put(("line", line))
+            except Exception as exc:
+                self._results.put(("error", exc))
+
+        self._reader = threading.Thread(
+            target=read_lines,
+            name="helios-http-stream-reader",
+            daemon=True,
+        )
+        self._reader.start()
+
+    def _next_timeout(self) -> tuple[float, type[TimeoutError]]:
+        if self._total_remaining <= 0:
+            raise _HttpxTotalTimeout()
+        if not self._token_seen and self._first_remaining <= 0:
+            raise _HttpxFirstTokenTimeout()
+
+        stage_timeout = (
+            self._read_seconds if self._token_seen else self._first_remaining
+        )
+        if self._total_remaining <= stage_timeout:
+            return self._total_remaining, _HttpxTotalTimeout
+        if self._token_seen:
+            return stage_timeout, _HttpxReadTimeout
+        return stage_timeout, _HttpxFirstTokenTimeout
+
+    def _consume_active_wait(self, elapsed: float) -> None:
+        elapsed = max(0.0, elapsed)
+        self._total_remaining -= elapsed
+        if not self._token_seen:
+            self._first_remaining -= elapsed
+
+    def iter_lines(self) -> Iterator[str | bytes]:
+        if self._closed:
+            raise RuntimeError("response is closed")
+        self._start_reader()
+        while True:
+            timeout, timeout_type = self._next_timeout()
+            began = self._clock()
+            self._permits.put(object())
+            try:
+                kind, value = self._wait_for_item(self._results, timeout)
+            except queue.Empty:
+                elapsed = max(self._clock() - began, timeout)
+                self._consume_active_wait(elapsed)
+                self.close()
+                raise timeout_type() from None
+            self._consume_active_wait(self._clock() - began)
+            if self._total_remaining < 0:
+                self.close()
+                raise _HttpxTotalTimeout() from None
+            if not self._token_seen and self._first_remaining < 0:
+                self.close()
+                raise _HttpxFirstTokenTimeout() from None
+            if kind == "line":
+                yield value
+            elif kind == "eof":
+                return
+            else:
+                raise value
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop.set()
+        try:
+            self._permits.put_nowait(object())
+        except queue.Full:
+            pass
+        close = getattr(self._response, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        if self._reader is not None and self._reader is not threading.current_thread():
+            self._reader.join(timeout=0.1)
+
+
+class _TimedHttpxResponseContext:
+    """Apply the first-token/total deadline while awaiting response headers."""
+
+    def __init__(
+        self,
+        response_context: Any,
+        *,
+        timeouts: Timeouts,
+        clock: Callable[[], float],
+        wait_for_item: Callable[[queue.Queue[Any], float], Any],
+    ) -> None:
+        self._response_context = response_context
+        self._timeouts = timeouts
+        self._clock = clock
+        self._wait_for_item = wait_for_item
+        self._response: _TimedHttpxResponse | None = None
+
+    def _close_late_response(self, mailbox: queue.Queue[tuple[str, Any]]) -> None:
+        def close_when_available() -> None:
+            kind, value = mailbox.get()
+            if kind != "response":
+                return
+            close = getattr(value, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            try:
+                self._response_context.__exit__(None, None, None)
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=close_when_available,
+            name="helios-http-late-response-cleanup",
+            daemon=True,
+        ).start()
+
+    def __enter__(self) -> _TimedHttpxResponse:
+        mailbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def open_response() -> None:
+            try:
+                mailbox.put(("response", self._response_context.__enter__()))
+            except Exception as exc:
+                mailbox.put(("error", exc))
+
+        threading.Thread(
+            target=open_response,
+            name="helios-http-response-open",
+            daemon=True,
+        ).start()
+        timeout = min(
+            self._timeouts.first_token_seconds,
+            self._timeouts.total_seconds,
+        )
+        began = self._clock()
+        try:
+            kind, value = self._wait_for_item(mailbox, timeout)
+        except queue.Empty:
+            self._close_late_response(mailbox)
+            if self._timeouts.total_seconds <= self._timeouts.first_token_seconds:
+                raise _HttpxTotalTimeout() from None
+            raise _HttpxFirstTokenTimeout() from None
+        opening_elapsed = max(0.0, self._clock() - began)
+        if kind == "error":
+            raise value
+        self._response = _TimedHttpxResponse(
+            value,
+            timeouts=self._timeouts,
+            opening_elapsed=opening_elapsed,
+            clock=self._clock,
+            wait_for_item=self._wait_for_item,
+        )
+        timeout_error = self._response.opening_timeout()
+        if timeout_error is not None:
+            self._response.close()
+            self._response_context.__exit__(None, None, None)
+            raise timeout_error
+        return self._response
+
+    def __exit__(self, *args: object) -> object:
+        if self._response is not None:
+            self._response.close()
+        return self._response_context.__exit__(*args)
+
+
 class _HttpxTransport:
     """Small wrapper keeping httpx types out of the public adapter contract."""
 
-    def __init__(self, httpx_module: Any) -> None:
+    def __init__(
+        self,
+        httpx_module: Any,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        wait_for_item: Callable[[queue.Queue[Any], float], Any] = _wait_for_item,
+    ) -> None:
         self._httpx = httpx_module
         self._client = httpx_module.Client(follow_redirects=False)
+        self._clock = clock
+        self._wait_for_item = wait_for_item
 
     def stream(
         self,
@@ -114,28 +368,28 @@ class _HttpxTransport:
         json: Mapping[str, Any],
         timeouts: Timeouts,
     ) -> _ResponseContext:
-        # httpx exposes one read timeout for the whole stream.  Using the
-        # smaller first-token/read value ensures that both configured upper
-        # bounds are respected; subsequent failures are classified according
-        # to whether a provider event has already arrived.
-        read_timeout = min(
-            timeouts.first_token_seconds,
-            timeouts.read_seconds,
-            timeouts.total_seconds,
-        )
+        # The outer response wrapper enforces distinct first-token, idle-read,
+        # and active-total budgets.  This bounded socket timeout is only a
+        # safety net and must not pre-empt either stream phase.
+        read_timeout = max(timeouts.first_token_seconds, timeouts.read_seconds)
         timeout = self._httpx.Timeout(
             timeouts.total_seconds,
             connect=timeouts.connect_seconds,
             read=read_timeout,
-            write=timeouts.read_seconds,
+            write=min(timeouts.read_seconds, timeouts.total_seconds),
             pool=timeouts.connect_seconds,
         )
-        return self._client.stream(
-            method,
-            url,
-            headers=dict(headers),
-            json=dict(json),
-            timeout=timeout,
+        return _TimedHttpxResponseContext(
+            self._client.stream(
+                method,
+                url,
+                headers=dict(headers),
+                json=dict(json),
+                timeout=timeout,
+            ),
+            timeouts=timeouts,
+            clock=self._clock,
+            wait_for_item=self._wait_for_item,
         )
 
     def close(self) -> None:
