@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from audio.sound_player import SoundPlaybackError, SoundPlayer
-from audio.tts import PiperTTS, Pyttsx3TTS
+from audio.tts import AudioSynthesisError, PiperTTS, Pyttsx3TTS
 
 
 class FakeVoice:
@@ -29,6 +29,11 @@ class FakeModernVoice:
         wav_file.setsampwidth(2)
         wav_file.setframerate(22_050)
         wav_file.writeframes(b"\x03\x00\x04\x00")
+
+
+class FailingVoice:
+    def synthesize(self, _text: str, _wav_file: wave.Wave_write) -> None:
+        raise RuntimeError("native synthesis failure")
 
 
 class CapturingBackend:
@@ -62,6 +67,16 @@ def test_piper_supports_modern_synthesize_wav_api() -> None:
     tts.speak("hello")
 
     assert backend.calls == [(b"\x03\x00\x04\x00", 22_050, 1, 2)]
+
+
+def test_piper_preserves_failure_that_occurs_before_wav_header() -> None:
+    tts = PiperTTS("unused.onnx", voice=FailingVoice())
+
+    with pytest.raises(AudioSynthesisError) as captured:
+        tts.synthesize_wave("hello")
+
+    assert isinstance(captured.value.__cause__, RuntimeError)
+    assert str(captured.value.__cause__) == "native synthesis failure"
 
 
 def test_historical_class_name_is_an_alias() -> None:

@@ -229,9 +229,20 @@ class RagSystem:
 
         try:
             from sentence_transformers import SentenceTransformer
+        except ModuleNotFoundError as exc:
+            if exc.name == "sentence_transformers":
+                raise ModelLoadError(
+                    "sentence-transformers is required to load the embedding model"
+                ) from exc
+            raise ModelLoadError(
+                "Unable to import sentence-transformers because dependency "
+                f"{exc.name!r} is missing: {exc}"
+            ) from exc
         except ImportError as exc:
             raise ModelLoadError(
-                "sentence-transformers is required to load the embedding model"
+                "Unable to import sentence-transformers or one of its native "
+                f"dependencies: {exc}. Run the runtime doctor; on Jetson use "
+                "'python3 scripts/run_jetson.py --doctor --runtime-only'."
             ) from exc
 
         try:

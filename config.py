@@ -29,6 +29,15 @@ class ConfigurationError(ValueError):
 _ROUTING_POLICIES = {"local_only", "remote_only", "local_first", "remote_first", "auto"}
 _PRIVACY_LEVELS = {"local_only", "remote_allowed", "remote_redacted"}
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_LOG_LEVELS = {
+    "NOTSET": logging.NOTSET,
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 
 @dataclass(frozen=True)
@@ -458,6 +467,22 @@ def _bool_from_env(value: str, name: str) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ConfigurationError(f"{name} must be a boolean value")
+
+
+def _log_level_from_env(value: str, name: str = "HELIOS_LOG_LEVEL") -> int:
+    normalized = value.strip().upper()
+    try:
+        return _LOG_LEVELS[normalized]
+    except KeyError:
+        supported = ", ".join(_LOG_LEVELS)
+        raise ConfigurationError(f"{name} must be one of: {supported}") from None
+
+
+def _log_file_from_env(value: str | None, default: str | None = "app.log") -> str | None:
+    if value is None:
+        return default
+    normalized = value.strip()
+    return None if normalized in {"", "-"} else normalized
 
 
 def _path_from_config(value: Any, *, base: Path, name: str) -> Path | None:
@@ -1110,6 +1135,8 @@ class Settings:
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
+            log_level=_log_level_from_env(env.get("HELIOS_LOG_LEVEL", "INFO")),
+            log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
         )

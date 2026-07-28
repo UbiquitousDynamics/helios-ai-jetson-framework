@@ -9,6 +9,8 @@
 #   python -c "import torch, onnxruntime; print(torch.__version__, onnxruntime.__version__)"
 #   python -m pip install piper-phonemize-fix==1.2.1
 #   python -m pip install --no-deps piper-tts==1.2.0
+#   python3 scripts/run_jetson.py --doctor --runtime-only
+#   python3 scripts/run_jetson.py
 #
 # Revalidate those versions for every JetPack upgrade. No third-party wheel URL
 # is embedded here because NVIDIA/ONNX URLs and ABI combinations are tied to the

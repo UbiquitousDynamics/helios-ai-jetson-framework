@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,32 @@ def test_environment_can_disable_but_not_create_remote_routing(tmp_path: Path) -
 
     assert not settings.llm.remote_enabled
     assert settings.llm.routing_policy == "local_only"
+
+
+def test_environment_controls_log_level_and_destination(tmp_path: Path) -> None:
+    terminal = config.Settings.from_env(
+        tmp_path,
+        environ={
+            "HELIOS_LOG_LEVEL": "debug",
+            "HELIOS_LOG_FILE": "-",
+        },
+    )
+    file_logging = config.Settings.from_env(
+        tmp_path,
+        environ={"HELIOS_LOG_FILE": "logs/helios.log"},
+    )
+
+    assert terminal.log_level == logging.DEBUG
+    assert terminal.log_file is None
+    assert file_logging.log_file == tmp_path / "logs/helios.log"
+
+
+def test_invalid_environment_log_level_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(config.ConfigurationError, match="HELIOS_LOG_LEVEL"):
+        config.Settings.from_env(
+            tmp_path,
+            environ={"HELIOS_LOG_LEVEL": "verbose"},
+        )
 
 
 def test_remote_file_still_requires_the_independent_environment_gate(

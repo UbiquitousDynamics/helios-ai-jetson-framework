@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
-from scripts.doctor import check_assets, check_python, exit_code
+from scripts.doctor import check_assets, check_native_runtime, check_python, exit_code
 
 
 def write_manifest(root: Path, artifacts: list[object]) -> Path:
@@ -18,6 +19,31 @@ def test_supported_python_is_accepted() -> None:
 
     assert exit_code(checks) == 0
     assert checks[0].code == "python.supported"
+
+
+def test_native_runtime_probe_reports_success() -> None:
+    def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    checks = check_native_runtime(runner=runner)
+
+    assert checks[0].code == "runtime.native_imports"
+    assert checks[0].level == "ok"
+
+
+def test_native_runtime_probe_identifies_static_tls_failure() -> None:
+    def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            [],
+            1,
+            stdout="",
+            stderr="libgomp.so.1: cannot allocate memory in static TLS block",
+        )
+
+    checks = check_native_runtime(runner=runner)
+
+    assert checks[0].code == "runtime.static_tls"
+    assert "run_jetson.py" in checks[0].message
 
 
 def test_required_asset_and_hash_are_validated(tmp_path: Path) -> None:

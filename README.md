@@ -632,6 +632,22 @@ python -m pip install -r requirements-jetson.txt
 python -c "import piper, torch, onnxruntime; print('Jetson backends import successfully')"
 ```
 
+Use the repository launcher for validation and normal operation:
+
+```bash
+python3 scripts/run_jetson.py --doctor --runtime-only
+python3 scripts/run_jetson.py
+```
+
+The launcher deliberately starts `venv/bin/python3` or `.venv/bin/python3`
+instead of relying on whichever `python3` is currently on `PATH`. On AArch64 it
+prefers the OpenMP runtime bundled with scikit-learn, preserves any existing
+`LD_PRELOAD` entries, and falls back to the system `libgomp` only when a private
+copy is unavailable. This setup occurs before the runtime interpreter starts,
+which is required to avoid Jetson static-TLS loader failures. Set
+`HELIOS_PYTHON` to an explicit virtualenv interpreter when neither conventional
+directory name is used.
+
 Revalidate these versions whenever JetPack changes. The repository does not
 embed a third-party wheel URL because those URLs and ABI combinations are tied
 to the target image.
@@ -680,6 +696,8 @@ The two original deployment overrides remain supported:
 ```bash
 export HELIOS_LANGUAGE=it
 export HELIOS_OLLAMA_HOST=http://localhost:11434
+export HELIOS_LOG_LEVEL=INFO
+export HELIOS_LOG_FILE=app.log
 ```
 
 PowerShell:
@@ -687,6 +705,8 @@ PowerShell:
 ```powershell
 $env:HELIOS_LANGUAGE = "it"
 $env:HELIOS_OLLAMA_HOST = "http://localhost:11434"
+$env:HELIOS_LOG_LEVEL = "INFO"
+$env:HELIOS_LOG_FILE = "app.log"
 ```
 
 Supported language values are `it` and `en`. Unsupported values raise
@@ -694,6 +714,14 @@ Supported language values are `it` and `en`. Unsupported values raise
 
 Legacy values such as `http://localhost:11434/api/generate` are accepted for the
 Ollama host and normalized to the SDK base host.
+
+`HELIOS_LOG_LEVEL` accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`.
+`HELIOS_LOG_FILE` is resolved from the repository root. Set it to `-` or an
+empty value to send logs to stderr instead of a file:
+
+```bash
+HELIOS_LOG_LEVEL=DEBUG HELIOS_LOG_FILE=- python3 scripts/run_jetson.py
+```
 
 Optional hybrid routing uses a versioned TOML file:
 
@@ -718,8 +746,8 @@ human-review checklist.
 | `language` | `"it"` | Selects Vosk, Piper, prompts, trigger, and chat model |
 | `name` | `"emilia"` | Compatibility assistant identity |
 | `listen_timeout` | `6.5` seconds | Maximum duration of one recognition call |
-| `log_level` | `INFO` | Root logging level |
-| `log_file_name` | `app.log` | Append-only log under the project root |
+| `log_level` | `INFO` | Root logging level; overridden by `HELIOS_LOG_LEVEL` |
+| `log_file_name` | `app.log` | Append-only log; overridden by `HELIOS_LOG_FILE` |
 | `ollama_host` | `http://localhost:11434` | Host passed to the Ollama SDK |
 | `think_model` | `qwen3:0.6b` | Model used by `APIClient.think()` |
 | `top_k` | `4` | Number of RAG passages returned and spoken |
@@ -739,10 +767,18 @@ does not redirect model, corpus, sound, index, or log files.
 
 ## Running and using the assistant
 
-From the repository root, with Ollama and the Python environment ready:
+From the repository root, with Ollama and the Python environment ready, desktop
+deployments can run:
 
 ```bash
 python main.py
+```
+
+Jetson deployments should use the bootstrap entry point so the correct
+interpreter and native OpenMP runtime are selected before Python starts:
+
+```bash
+python3 scripts/run_jetson.py
 ```
 
 Expected behavior:
@@ -915,6 +951,18 @@ Validate installed runtime imports as well:
 python scripts/doctor.py
 ```
 
+On Jetson, run the same check through the launcher:
+
+```bash
+python3 scripts/run_jetson.py --doctor --runtime-only
+```
+
+In addition to checking that packages are installed, the runtime doctor imports
+the native Piper, audio, Torch, scikit-learn, and SentenceTransformer chain in
+an isolated subprocess. It therefore detects loader failures that a package
+presence check cannot see, including `cannot allocate memory in static TLS
+block`.
+
 Missing generated `embeddings.npz` is an expected warning before the first
 build. Missing provenance or license metadata is also reported as a warning;
 hash mismatches and absent required assets are errors.
@@ -932,8 +980,33 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) before redistribution.
 - no module configures and truncates its own log at import time;
 - logging is not globally disabled.
 
+To enable debug output on the terminal for one launch:
+
+```bash
+HELIOS_LOG_LEVEL=DEBUG HELIOS_LOG_FILE=- python3 scripts/run_jetson.py
+```
+
+With the default file destination, follow only new records:
+
+```bash
+tail -n 0 -f app.log
+```
+
 Recoverable API, recognition, TTS, sound, and assistant errors are logged. The
 assistant resets to `COMMAND` and continues when recovery is safe.
+
+The TTS adapter supports both the Piper 1.2
+`synthesize(text, wav_file)` API and the Piper 1.3+
+`synthesize_wav(text, wav_file)` API. Errors raised before a WAV header exists
+remain visible instead of being replaced by `wave.Error: # channels not
+specified`.
+
+On Jetson, a scikit-learn wheel may contain a private, renamed `libgomp`.
+Preloading only `/usr/lib/aarch64-linux-gnu/libgomp.so.1` does not necessarily
+select that copy. `scripts/run_jetson.py` discovers the wheel library
+dynamically, so its hash-bearing filename must not be copied into `.bashrc` or a
+service definition. Native-library provisioning remains tied to the installed
+JetPack/L4T release and is intentionally not performed by the application.
 
 RAG corruption and stale-index errors are intentionally explicit. They include
 a rebuild instruction instead of silently returning a potentially unrelated

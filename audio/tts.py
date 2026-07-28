@@ -85,9 +85,17 @@ class PiperTTS:
         if self._voice is None:
             try:
                 from piper.voice import PiperVoice
+            except ModuleNotFoundError as exc:  # pragma: no cover - deployment dependency
+                if exc.name == "piper":
+                    raise AudioSynthesisError(
+                        "The 'piper-tts' package is required for speech synthesis"
+                    ) from exc
+                raise AudioSynthesisError(
+                    f"Unable to import Piper because dependency {exc.name!r} is missing: {exc}"
+                ) from exc
             except ImportError as exc:  # pragma: no cover - deployment dependency
                 raise AudioSynthesisError(
-                    "The 'piper-tts' package is required for speech synthesis"
+                    f"Unable to import Piper or one of its native dependencies: {exc}"
                 ) from exc
             try:
                 self._voice = PiperVoice.load(str(self.voice_model))
@@ -104,16 +112,29 @@ class PiperTTS:
 
         output = io.BytesIO()
         try:
-            with wave.open(output, "wb") as wav_file:
+            voice = self.voice
+            wav_file = wave.open(output, "wb")
+            try:
                 # Piper 1.3 changed ``synthesize`` into a lazy AudioChunk
                 # iterator and added ``synthesize_wav`` for Wave_write
                 # destinations.  Piper 1.2 only exposes the original
                 # ``synthesize(text, wav_file)`` API.
-                synthesize_wav = getattr(self.voice, "synthesize_wav", None)
+                synthesize_wav = getattr(voice, "synthesize_wav", None)
                 if callable(synthesize_wav):
                     synthesize_wav(text, wav_file)
                 else:
-                    self.voice.synthesize(text, wav_file)
+                    voice.synthesize(text, wav_file)
+            except BaseException:
+                # Wave_write.close() raises its own "channels not specified"
+                # error when synthesis failed before writing a header. Preserve
+                # the original Piper/import failure instead.
+                try:
+                    wav_file.close()
+                except Exception:
+                    pass
+                raise
+            else:
+                wav_file.close()
         except TTSError:
             raise
         except Exception as exc:
