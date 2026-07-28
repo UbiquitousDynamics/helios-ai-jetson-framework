@@ -19,14 +19,17 @@ from api.metrics import MetricEvent, SafeMetricsRecorder
 from api.privacy import PrivacyGuard
 from api.providers.contracts import (
     CancellationToken,
+    ChatMessage,
     ChatRequest,
     Completed,
     CompletionMetadata,
+    ContentOrigin,
     ErrorCategory,
     FinishReason,
     ProviderError,
     ReasoningDelta,
     Refused,
+    Role,
     TextDelta,
 )
 from api.routing import ProviderRegistry, ProviderTarget, RoutePlanner
@@ -50,6 +53,7 @@ class ExecutionTarget:
     route: ProviderTarget
     retry_attempts: int = 1
     max_output_tokens: int | None = None
+    max_output_words: int | None = None
     options: Mapping[str, Any] = field(default_factory=dict)
     price: ModelPrice | None = None
 
@@ -58,6 +62,12 @@ class ExecutionTarget:
             raise ValueError("retry_attempts must be at least one")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be at least one")
+        if self.max_output_words is not None and (
+            isinstance(self.max_output_words, bool)
+            or not isinstance(self.max_output_words, int)
+            or self.max_output_words < 1
+        ):
+            raise ValueError("max_output_words must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,9 +584,38 @@ class StreamingResponseCoordinator:
             max_output = request.max_output_tokens
         if execution.route.max_output_tokens is not None and max_output is not None:
             max_output = min(max_output, execution.route.max_output_tokens)
+        messages = request.messages
+        if execution.max_output_words is not None:
+            suffix = (
+                f" Limita la risposta a un massimo di {execution.max_output_words} parole."
+                if request.language == "it"
+                else f" Limit the answer to at most {execution.max_output_words} words."
+            )
+            updated_messages = list(messages)
+            for index, message in enumerate(updated_messages):
+                if (
+                    message.role is Role.SYSTEM
+                    and message.origin is ContentOrigin.STATIC_INSTRUCTION
+                ):
+                    updated_messages[index] = replace(
+                        message,
+                        content=message.content + suffix,
+                    )
+                    break
+            else:
+                updated_messages.insert(
+                    0,
+                    ChatMessage(
+                        Role.SYSTEM,
+                        suffix.strip(),
+                        origin=ContentOrigin.STATIC_INSTRUCTION,
+                    ),
+                )
+            messages = tuple(updated_messages)
         return replace(
             request,
             model=execution.route.model,
+            messages=messages,
             max_output_tokens=max_output,
             options={
                 **dict(execution.options),

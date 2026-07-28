@@ -39,6 +39,10 @@ The hybrid subsystem includes:
 
 `APIClient.talk()` and `APIClient.think()` remain the public compatibility
 boundary. Existing callers do not need to know about provider response objects.
+The voice loop selects `think` when the post-wake-word command begins with
+`pensa`/`ragiona` in Italian or `think`/`reason` in English. Target-specific
+`max_output_words` instructions can keep local speech short without applying
+the same word limit to a remote target.
 The active extractive RAG path is still local and does not call an LLM.
 
 ## Security and privacy invariants

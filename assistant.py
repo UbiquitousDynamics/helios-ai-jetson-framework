@@ -113,6 +113,43 @@ class VoiceAssistant:
             for wake_word in self.profile.wake_word_aliases
         )
 
+    @staticmethod
+    def _remove_first_phrase(text: str, phrases: tuple[str, ...]) -> str:
+        for phrase in phrases:
+            match = re.search(
+                rf"(?<!\w){re.escape(phrase)}(?!\w)",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                continue
+            left = re.sub(r"[\s,;:!?.-]+$", "", text[: match.start()])
+            right = re.sub(r"^[\s,;:!?.-]+", "", text[match.end() :])
+            return " ".join(part for part in (left, right) if part).strip()
+        return text.strip()
+
+    def _without_wake_word(self, command: str) -> str:
+        ordered_aliases = (
+            self.profile.wake_word,
+            *(
+                alias
+                for alias in self.profile.wake_word_aliases
+                if alias != self.profile.wake_word
+            ),
+        )
+        return self._remove_first_phrase(command, ordered_aliases)
+
+    def _think_prompt(self, command: str) -> str | None:
+        for word in self.profile.think_words:
+            match = re.match(
+                rf"^\s*{re.escape(word)}(?!\w)",
+                command,
+                flags=re.IGNORECASE,
+            )
+            if match is not None:
+                return re.sub(r"^[\s,;:!?.-]+", "", command[match.end() :]).strip()
+        return None
+
     def _contains_rag_word(self, command: str) -> bool:
         return self._contains_phrase(command, self.profile.rag_word)
 
@@ -124,14 +161,26 @@ class VoiceAssistant:
             logger.info("Ignoring command without a configured wake word")
             return None
 
-        normalized = command.lower()
+        model_prompt = self._without_wake_word(command)
+        if not model_prompt:
+            logger.info("Ignoring wake word without a command")
+            return None
+
+        normalized = model_prompt.lower()
         for question in self.profile.presentation_questions:
             if question in normalized:
                 response = self._choice(self.profile.presentation_answers)
                 self.tts.speak(response)
                 return response
 
-        return self.api_client.talk(command, context=None)
+        think_prompt = self._think_prompt(model_prompt)
+        if think_prompt is not None:
+            if not think_prompt:
+                logger.info("Ignoring think trigger without a question")
+                return None
+            return self.api_client.think(think_prompt, context=None, tts=True)
+
+        return self.api_client.talk(model_prompt, context=None)
 
     @staticmethod
     def _rag_result_text(result: Any) -> str:

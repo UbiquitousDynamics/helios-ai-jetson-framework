@@ -455,6 +455,7 @@ class APIClient:
                     ),
                     retry_attempts=target.retry_attempts,
                     max_output_tokens=maximum_output,
+                    max_output_words=target.max_output_words,
                     options=dict(target.options),
                     price=price,
                 )
@@ -540,12 +541,6 @@ class APIClient:
                 self.language,
                 _HYBRID_SYSTEM_INSTRUCTIONS["en"],
             )
-            if mode == "talk":
-                instruction += (
-                    " In modalità talk usa al massimo 20 parole."
-                    if self.language == "it"
-                    else " In talk mode use at most 20 words."
-                )
             messages.append(
                 ChatMessage(
                     Role.SYSTEM,
@@ -755,7 +750,7 @@ class APIClient:
             )
             executions = self._plan(request, connectivity=connectivity)
             logger.info(
-                "Executing %s request using route %s",
+                "Planning %s request with eligible routes in fallback order: %s",
                 mode,
                 ",".join(execution.route.name for execution in executions),
             )

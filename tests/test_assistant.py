@@ -27,6 +27,7 @@ class FakeTTS:
 class FakeAPI:
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.think_messages: list[str] = []
         self.closed = False
         self.cancelled = False
 
@@ -34,6 +35,17 @@ class FakeAPI:
         assert context is None
         self.messages.append(message)
         return "model response"
+
+    def think(
+        self,
+        message: str,
+        context: str | None = None,
+        tts: bool = False,
+    ) -> str:
+        assert context is None
+        assert tts is True
+        self.think_messages.append(message)
+        return "reasoned response"
 
     def close(self) -> None:
         self.closed = True
@@ -112,6 +124,37 @@ def test_command_requires_a_whole_wake_word() -> None:
     assert not assistant.contains_wake_word("La parola emiliana non è un richiamo")
     assert assistant.process_command("nessun richiamo") is None
     assert api.messages == []
+
+
+def test_wake_word_is_removed_but_a_semantic_second_occurrence_is_preserved() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assert assistant.process_command("Emilia, dimmi chi è Emilia?") == "model response"
+
+    assert api.messages == ["dimmi chi è Emilia?"]
+
+
+@pytest.mark.parametrize("trigger", ["pensa", "ragiona"])
+def test_think_prefix_selects_think_mode_and_is_not_sent_to_the_model(trigger: str) -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assert (
+        assistant.process_command(f"Emilia, {trigger}: confronta due strategie")
+        == "reasoned response"
+    )
+
+    assert api.messages == []
+    assert api.think_messages == ["confronta due strategie"]
+
+
+def test_empty_wake_and_think_commands_are_ignored() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assert assistant.process_command("Emilia") is None
+    assert assistant.process_command("Emilia, pensa") is None
+
+    assert api.messages == []
+    assert api.think_messages == []
 
 
 def test_partial_recognition_is_not_executed() -> None:

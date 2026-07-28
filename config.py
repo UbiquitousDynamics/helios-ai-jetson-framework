@@ -220,6 +220,7 @@ class LLMTargetSettings:
     languages: tuple[str, ...] = ("it", "en")
     context_window: int | None = None
     max_output_tokens: int | None = None
+    max_output_words: int | None = None
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
 
@@ -232,6 +233,12 @@ class LLMTargetSettings:
             raise ConfigurationError("target context_window must be positive")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ConfigurationError("target max_output_tokens must be positive")
+        if self.max_output_words is not None and (
+            isinstance(self.max_output_words, bool)
+            or not isinstance(self.max_output_words, int)
+            or self.max_output_words < 1
+        ):
+            raise ConfigurationError("target max_output_words must be a positive integer")
         if self.retry_attempts < 1:
             raise ConfigurationError("target retry_attempts must be at least one")
         if len({code for code, _model in self.model_by_language}) != len(self.model_by_language):
@@ -324,6 +331,7 @@ class LanguageProfile:
     voice: str
     wake_word: str
     wake_word_aliases: tuple[str, ...]
+    think_words: tuple[str, ...]
     rag_word: str
     presentation_questions: tuple[str, str, str]
     presentation_answers: tuple[str, str, str]
@@ -342,6 +350,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             voice="mb-us1",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
+            think_words=("think", "reason"),
             rag_word="regulation",
             presentation_questions=(
                 "what's your name",
@@ -371,6 +380,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             voice="mb-it4",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
+            think_words=("pensa", "ragiona"),
             rag_word="regolamento",
             presentation_questions=("come ti chiami", "chi sei", "presentati a"),
             presentation_answers=(
@@ -867,6 +877,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "languages",
                 "context_window",
                 "max_output_tokens",
+                "max_output_words",
                 "retry_attempts",
                 "options",
             },
@@ -926,6 +937,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                         f"targets.{name}.max_output_tokens",
                     )
                     if "max_output_tokens" in target
+                    else None
+                ),
+                max_output_words=(
+                    _toml_int(
+                        target["max_output_words"],
+                        f"targets.{name}.max_output_words",
+                    )
+                    if "max_output_words" in target
                     else None
                 ),
                 retry_attempts=_toml_int(

@@ -483,13 +483,16 @@ and library logging is not globally disabled.
 Its most important methods are:
 
 - `run_once()` — consume and route at most one finalized utterance;
-- `process_command()` — answer presentation questions locally or call Ollama;
+- `process_command()` — remove the wake word, select talk/think, and dispatch
+  the model request;
 - `process_rag_command()` — execute retrieval and speak the localized result;
 - `run()` — speak the greeting and maintain the recoverable main loop;
 - `close()` — release owned resources exactly once.
 
 Wake words are matched as complete words, avoiding accidental activation by
-larger words such as `emiliana`.
+larger words such as `emiliana`. The activation occurrence is removed before
+inference. Italian commands prefixed with `pensa` or `ragiona` use `think`;
+English commands use `think` or `reason`.
 
 ### `SpeechRecognizer`
 
@@ -816,8 +819,20 @@ Say:
 Emilia, spiegami come funziona la tua intelligenza artificiale
 ```
 
-The complete recognized phrase is passed to Ollama. The wake word is retained in
-the prompt.
+The assistant removes the activation occurrence of the wake word and sends
+`spiegami come funziona la tua intelligenza artificiale` to the selected
+`talk` route.
+
+### Example: reasoned answer
+
+Say:
+
+```text
+Emilia, pensa: confronta due strategie energetiche
+```
+
+The assistant removes `Emilia` and `pensa`, selects the configured `think`
+route, and speaks the streamed answer.
 
 ### Example: predefined introduction
 
@@ -1174,8 +1189,6 @@ target-device measurements.
 - Existing large binary history has not been migrated to Git LFS.
 - Some voice, Vosk, corpus, sound, and image provenance/license metadata remains
   incomplete.
-- `think()` exists as an API capability but is not used by the active assistant
-  state machine.
 - The only remote vertical slice is strict OpenAI-compatible Chat Completions
   SSE. Providers with different semantics require a separately tested adapter.
 - Provider accounts, current catalogs, legal/privacy approval, connectivity and

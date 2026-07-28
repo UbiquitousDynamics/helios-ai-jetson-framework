@@ -215,6 +215,19 @@ def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> N
     assert settings.health.maximum_talk_first_audio_ms == 30_000
 
 
+def test_codex_subscription_has_target_specific_talk_limits() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+    targets = {target.name: target for target in settings.targets}
+
+    assert targets["codex-talk"].max_output_words == 50
+    assert targets["codex-talk"].max_output_tokens == 128
+    assert targets["local-talk"].max_output_words == 20
+    assert targets["local-talk"].max_output_tokens == 40
+    assert targets["codex-think"].max_output_words is None
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -222,6 +235,10 @@ def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> N
         'schema_version = 1\n[router]\nremote_enabled = "false"\n',
         'schema_version = 1\n[budget]\nenabled = "false"\n',
         "schema_version = 1\n[modes.talk]\nmax_output_tokens = true\n",
+        (
+            "schema_version = 1\n[targets.local]\nprovider = \"ollama\"\n"
+            "model = \"test\"\nmax_output_words = true\n"
+        ),
         "schema_version = 1\n[timeouts]\nconnect_seconds = 1" + ("0" * 400) + "\n",
     ],
 )

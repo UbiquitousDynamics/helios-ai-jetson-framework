@@ -127,11 +127,13 @@ def hybrid_settings(
                 name="remote-talk",
                 provider="remote",
                 model="remote-model",
+                max_output_words=50,
             ),
             config.LLMTargetSettings(
                 name="local-talk",
                 provider="ollama",
                 model="local-model",
+                max_output_words=20,
             ),
         ),
     )
@@ -179,7 +181,8 @@ def test_remote_route_receives_only_canonical_authorized_messages(
     assert request.messages[0].role is Role.SYSTEM
     assert request.messages[0].origin is ContentOrigin.STATIC_INSTRUCTION
     assert "You are Emilia" in request.messages[0].content
-    assert "at most 20 words" in request.messages[0].content
+    assert "at most 50 words" in request.messages[0].content
+    assert "at most 20 words" not in request.messages[0].content
     assert request.messages[-1].role is Role.USER
     assert request.messages[-1].content == "Emilia, answer"
 
@@ -266,6 +269,8 @@ def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> No
     assert isinstance(local_messages, list)
     assert local_messages[0]["role"] == "system"
     assert "You are Emilia" in local_messages[0]["content"]
+    assert "at most 20 words" in local_messages[0]["content"]
+    assert "at most 50 words" not in local_messages[0]["content"]
     assert local_messages[-1] == {"role": "user", "content": "Emilia, answer"}
 
 

@@ -45,7 +45,7 @@ metrics_retention_days = 14
 
 [modes.talk]
 candidates = ["codex-talk", "local-talk"]
-max_output_tokens = 80
+max_output_tokens = 128
 first_speech_min_chars = 24
 
 [modes.think]
@@ -65,6 +65,8 @@ provider = "openai-codex"
 model = "gpt-5.6-sol"
 languages = ["it", "en"]
 retry_attempts = 1
+max_output_tokens = 128
+max_output_words = 50
 options = { reasoning_effort = "low" }
 
 [targets.codex-think]
@@ -79,6 +81,8 @@ provider = "ollama"
 model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
 languages = ["it", "en"]
 retry_attempts = 3
+max_output_tokens = 40
+max_output_words = 20
 
 [targets.local-think]
 provider = "ollama"

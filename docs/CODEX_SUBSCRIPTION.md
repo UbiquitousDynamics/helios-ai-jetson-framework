@@ -94,9 +94,15 @@ validation intentionally rejects it.
 
 ## Understand which model answered
 
-At request start, `Executing talk request using route codex-talk,local-talk`
-shows the eligible routes in fallback order, not the route that eventually
-answered. The completion line is authoritative:
+At request start, the planning line shows every eligible route in fallback
+order, not the route that eventually answered:
+
+```text
+Planning talk request with eligible routes in fallback order: codex-talk,local-talk
+```
+
+It appears for every normal voice command because normal commands call
+`APIClient.talk()`. The completion line is authoritative:
 
 ```text
 Completed talk request using route codex-talk (provider=openai-codex, ...)
@@ -110,11 +116,38 @@ open its circuit after three otherwise successful turns. If a circuit does
 open because of real failures, Helios logs its status and remaining cooldown;
 restarting Helios also clears in-memory health state.
 
-Both hybrid routes receive the same Emilia identity, response language,
-direct-answer rule and 20-word `talk` limit. They are still different models,
-so `remote_first` cannot guarantee identical wording or facts when fallback
+Both hybrid routes receive the same Emilia identity, response language and
+direct-answer rule. Limits are target-specific: `codex-talk` receives a
+50-word instruction with a 128-token cap, while `local-talk` receives a
+20-word instruction with a 40-token cap to reduce edge inference time. They are
+still different models, so
+`remote_first` cannot guarantee identical wording or facts when fallback
 occurs. Use `remote_only` or `local_only` when every answer must come from one
 engine; keep `remote_first` when availability is more important.
+
+## Voice talk and think modes
+
+The wake word is consumed by the assistant and is not sent to either model.
+A second occurrence that belongs to the question is preserved. For example,
+`Emilia, dimmi chi è Emilia` sends `dimmi chi è Emilia`.
+
+Normal commands use `talk`:
+
+```text
+Emilia, raccontami una storia
+```
+
+Prefix the command with `pensa` or `ragiona` to select `think`:
+
+```text
+Emilia, pensa: confronta due strategie energetiche
+Emilia, ragiona sui vantaggi e gli svantaggi di questa scelta
+```
+
+The activation prefix is also removed before inference. `think` uses
+`codex-think,local-think`, allows the larger 256-token response configured for
+that mode, and the voice assistant pronounces the final streamed response.
+English profiles use `think` or `reason`.
 
 ## Verify before starting the voice assistant
 
