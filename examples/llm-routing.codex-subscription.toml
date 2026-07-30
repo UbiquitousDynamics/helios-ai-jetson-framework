@@ -5,7 +5,7 @@ policy = "remote_first"
 remote_enabled = true
 allowlist = ["openai-codex", "ollama"]
 denylist = []
-unknown_connectivity = "allow_remote"
+unknown_connectivity = "prefer_local"
 
 [privacy]
 default = "remote_allowed"
@@ -42,6 +42,26 @@ metrics_path = "../logs/llm-metrics.jsonl"
 log_content = false
 log_headers = false
 metrics_retention_days = 14
+
+# A missing default route, carrier or usable IP excludes every remote target
+# synchronously. HTTPS path quality is refreshed in the background; stale,
+# captive, unreachable or poor-quality paths fail closed to local Ollama.
+[network]
+enabled = true
+probe_url = "https://chatgpt.com/"
+probe_interval_seconds = 3.0
+result_max_age_seconds = 6.0
+probe_timeout_seconds = 1.2
+probe_bytes = 32768
+goodput_probe_interval_seconds = 60.0
+minimum_quality_score = 0.50
+quality_hysteresis = 0.05
+target_ttfb_ms = 1200.0
+target_jitter_ms = 300.0
+minimum_goodput_kbps = 128.0
+history_size = 8
+require_wifi = false
+interface_allowlist = []
 
 [modes.talk]
 candidates = ["codex-talk-luna", "codex-talk-terra", "codex-talk-sol", "local-talk"]

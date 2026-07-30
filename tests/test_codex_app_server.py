@@ -28,6 +28,7 @@ from api.providers.contracts import (
     TextDelta,
     Timeouts,
 )
+from api.routing import Connectivity
 
 
 @dataclass
@@ -348,7 +349,10 @@ def test_api_client_registers_configured_codex_adapter_lazily() -> None:
     routing = Path(__file__).resolve().parents[1] / "examples" / (
         "llm-routing.codex-subscription.toml"
     )
-    client = APIClient(llm_settings=config.load_llm_settings(routing))
+    client = APIClient(
+        llm_settings=config.load_llm_settings(routing),
+        connectivity=Connectivity.UNKNOWN,
+    )
     try:
         provider = client._registry.get("openai-codex")
         assert isinstance(provider, CodexAppServerAdapter)

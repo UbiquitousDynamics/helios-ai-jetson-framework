@@ -7,6 +7,11 @@ escalate only when the estimated difficulty justifies it. Helios does not call
 another LLM to classify the question, so selection adds no network latency,
 tokens, subscription usage, or transcript exposure.
 
+Before complexity selection, the fast connectivity gate must admit the remote
+path. Missing route/carrier/IP, a stale or failed ChatGPT HTTPS validation, or
+poor measured quality removes all remote tiers and selects local Ollama
+immediately. See `docs/NETWORK_CONNECTIVITY_ROUTING.md`.
+
 The implementation follows the general model-selection objective of meeting an
 evaluated accuracy target with the smallest and fastest suitable model:
 
@@ -138,6 +143,7 @@ Run the network-free regression set:
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest \
+  tests/test_connectivity.py \
   tests/test_routing.py \
   tests/test_streaming.py \
   tests/test_codex_app_server.py \

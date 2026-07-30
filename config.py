@@ -130,6 +130,106 @@ class LLMObservabilitySettings:
 
 
 @dataclass(frozen=True)
+class LLMNetworkSettings:
+    enabled: bool = False
+    probe_url: str = "https://chatgpt.com/"
+    probe_interval_seconds: float = 3.0
+    result_max_age_seconds: float = 6.0
+    probe_timeout_seconds: float = 1.2
+    probe_bytes: int = 32_768
+    goodput_probe_interval_seconds: float = 60.0
+    minimum_quality_score: float = 0.50
+    quality_hysteresis: float = 0.05
+    target_ttfb_ms: float = 1_200.0
+    target_jitter_ms: float = 300.0
+    minimum_goodput_kbps: float = 128.0
+    history_size: int = 8
+    require_wifi: bool = False
+    interface_allowlist: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool) or not isinstance(self.require_wifi, bool):
+            raise ConfigurationError("network enabled and require_wifi must be booleans")
+        parsed = urlsplit(self.probe_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise ConfigurationError(
+                "network probe_url must be an HTTPS URL without credentials or fragment"
+            )
+        positive_values = (
+            ("probe_interval_seconds", self.probe_interval_seconds),
+            ("result_max_age_seconds", self.result_max_age_seconds),
+            ("probe_timeout_seconds", self.probe_timeout_seconds),
+            (
+                "goodput_probe_interval_seconds",
+                self.goodput_probe_interval_seconds,
+            ),
+            ("target_ttfb_ms", self.target_ttfb_ms),
+            ("target_jitter_ms", self.target_jitter_ms),
+            ("minimum_goodput_kbps", self.minimum_goodput_kbps),
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value <= 0
+            for _name, value in positive_values
+        ):
+            raise ConfigurationError("network timing and quality targets must be positive")
+        if self.result_max_age_seconds < self.probe_interval_seconds:
+            raise ConfigurationError(
+                "network result_max_age_seconds cannot be shorter than probe interval"
+            )
+        if self.goodput_probe_interval_seconds < self.probe_interval_seconds:
+            raise ConfigurationError(
+                "network goodput probe interval cannot be shorter than probe interval"
+            )
+        if (
+            isinstance(self.probe_bytes, bool)
+            or not isinstance(self.probe_bytes, int)
+            or not 1_024 <= self.probe_bytes <= 1_048_576
+        ):
+            raise ConfigurationError("network probe_bytes must be between 1024 and 1048576")
+        if (
+            isinstance(self.minimum_quality_score, bool)
+            or not isinstance(self.minimum_quality_score, (int, float))
+            or not 0 <= self.minimum_quality_score <= 1
+        ):
+            raise ConfigurationError("network minimum_quality_score must be between zero and one")
+        if (
+            isinstance(self.quality_hysteresis, bool)
+            or not isinstance(self.quality_hysteresis, (int, float))
+            or not 0 <= self.quality_hysteresis <= 0.25
+        ):
+            raise ConfigurationError("network quality_hysteresis must be between zero and 0.25")
+        if (
+            self.minimum_quality_score - self.quality_hysteresis < 0
+            or self.minimum_quality_score + self.quality_hysteresis > 1
+        ):
+            raise ConfigurationError("network quality hysteresis crosses the zero-to-one range")
+        if (
+            isinstance(self.history_size, bool)
+            or not isinstance(self.history_size, int)
+            or not 2 <= self.history_size <= 64
+        ):
+            raise ConfigurationError("network history_size must be between 2 and 64")
+        if len(set(self.interface_allowlist)) != len(self.interface_allowlist):
+            raise ConfigurationError("network interface_allowlist entries must be unique")
+        if any(
+            not interface
+            or len(interface) > 64
+            or re.search(r"[^A-Za-z0-9_.:-]", interface)
+            for interface in self.interface_allowlist
+        ):
+            raise ConfigurationError("network interface_allowlist contains an invalid name")
+
+
+@dataclass(frozen=True)
 class LLMModeSettings:
     candidates: tuple[str, ...] = ()
     max_output_tokens: int | None = None
@@ -286,6 +386,7 @@ class LLMSettings:
     health: LLMHealthSettings = field(default_factory=LLMHealthSettings)
     budget: LLMBudgetSettings = field(default_factory=LLMBudgetSettings)
     observability: LLMObservabilitySettings = field(default_factory=LLMObservabilitySettings)
+    network: LLMNetworkSettings = field(default_factory=LLMNetworkSettings)
     talk: LLMModeSettings = field(
         default_factory=lambda: LLMModeSettings(max_output_tokens=64, complexity_threshold=3)
     )
@@ -599,6 +700,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "health",
             "budget",
             "observability",
+            "network",
             "modes",
             "providers",
             "targets",
@@ -793,6 +895,88 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
         metrics_retention_days=_toml_int(
             observability_table.get("metrics_retention_days", 14),
             "observability.metrics_retention_days",
+        ),
+    )
+
+    network_table = _table(data.get("network"), "network")
+    _reject_unknown(
+        network_table,
+        {
+            "enabled",
+            "probe_url",
+            "probe_interval_seconds",
+            "result_max_age_seconds",
+            "probe_timeout_seconds",
+            "probe_bytes",
+            "goodput_probe_interval_seconds",
+            "minimum_quality_score",
+            "quality_hysteresis",
+            "target_ttfb_ms",
+            "target_jitter_ms",
+            "minimum_goodput_kbps",
+            "history_size",
+            "require_wifi",
+            "interface_allowlist",
+        },
+        "network",
+    )
+    network = LLMNetworkSettings(
+        enabled=_toml_bool(network_table.get("enabled", False), "network.enabled"),
+        probe_url=_toml_string(
+            network_table.get("probe_url", "https://chatgpt.com/"),
+            "network.probe_url",
+        ),
+        probe_interval_seconds=_toml_float(
+            network_table.get("probe_interval_seconds", 3.0),
+            "network.probe_interval_seconds",
+        ),
+        result_max_age_seconds=_toml_float(
+            network_table.get("result_max_age_seconds", 6.0),
+            "network.result_max_age_seconds",
+        ),
+        probe_timeout_seconds=_toml_float(
+            network_table.get("probe_timeout_seconds", 1.2),
+            "network.probe_timeout_seconds",
+        ),
+        probe_bytes=_toml_int(
+            network_table.get("probe_bytes", 32_768),
+            "network.probe_bytes",
+        ),
+        goodput_probe_interval_seconds=_toml_float(
+            network_table.get("goodput_probe_interval_seconds", 60.0),
+            "network.goodput_probe_interval_seconds",
+        ),
+        minimum_quality_score=_toml_float(
+            network_table.get("minimum_quality_score", 0.50),
+            "network.minimum_quality_score",
+        ),
+        quality_hysteresis=_toml_float(
+            network_table.get("quality_hysteresis", 0.05),
+            "network.quality_hysteresis",
+        ),
+        target_ttfb_ms=_toml_float(
+            network_table.get("target_ttfb_ms", 1_200.0),
+            "network.target_ttfb_ms",
+        ),
+        target_jitter_ms=_toml_float(
+            network_table.get("target_jitter_ms", 300.0),
+            "network.target_jitter_ms",
+        ),
+        minimum_goodput_kbps=_toml_float(
+            network_table.get("minimum_goodput_kbps", 128.0),
+            "network.minimum_goodput_kbps",
+        ),
+        history_size=_toml_int(
+            network_table.get("history_size", 8),
+            "network.history_size",
+        ),
+        require_wifi=_toml_bool(
+            network_table.get("require_wifi", False),
+            "network.require_wifi",
+        ),
+        interface_allowlist=_string_tuple(
+            network_table.get("interface_allowlist"),
+            "network.interface_allowlist",
         ),
     )
 
@@ -1017,6 +1201,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
         health=health,
         budget=budget,
         observability=observability,
+        network=network,
         talk=parse_mode("talk", default_output=64, default_complexity=3),
         think=parse_mode("think", default_output=256, default_complexity=2),
         providers=tuple(providers),

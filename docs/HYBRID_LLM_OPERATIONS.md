@@ -25,6 +25,9 @@ The hybrid subsystem includes:
   `min_complexity_score`;
 - per-mode candidate chains, language/model selection, allowlists, denylists,
   context limits, feature checks, connectivity state, and provider health;
+- a fail-closed Linux connectivity monitor with a synchronous route/carrier/IP
+  gate, netlink change events, background HTTPS validation, quality scoring,
+  smoothing, and hysteresis;
 - a provenance-based privacy guard with authorization rechecked at remote
   dispatch and again inside the OpenAI-compatible SSE adapter;
 - retry and fallback only before speech may have reached the listener;
@@ -142,11 +145,13 @@ routing does not reorder candidates from that EWMA. Battery state, Jetson power
 mode, thermal headroom, and metered-link state are not runtime inputs yet; an
 integrator must supply those policies before they can influence routing.
 
-Helios does not probe the internet during construction. Runtime connectivity is
-`unknown` until an integrator supplies `Connectivity.ONLINE` or `OFFLINE`.
-`unknown_connectivity = "prefer_local"` prevents `auto` remote escalation and
-turns `remote_first` into local-first. `"allow_remote"` permits a configured
-remote attempt while connectivity remains unknown.
+When `[network].enabled=true`, Helios starts a background HTTPS path monitor.
+Every request first performs the packet-free passive gate; an absent default
+route, carrier, or usable IP returns offline immediately. Remote also requires
+a fresh successful quality result. Unknown and stale states therefore remain
+local under `unknown_connectivity="prefer_local"`. See
+`docs/NETWORK_CONNECTIVITY_ROUTING.md` for the estimator, configuration, and
+Jetson diagnostic command.
 
 ## Streaming, retries, and failover
 

@@ -84,6 +84,13 @@ Helios -> Codex app-server (stdio) -> ChatGPT account
        -> Ollama fallback when the first route is unavailable
 ```
 
+Network admission is fail-closed. Helios synchronously checks the selected
+default route, carrier, and usable IP, then consumes a fresh HTTPS quality
+measurement maintained in the background. It never makes a voice request wait
+for a connectivity probe. Run `python scripts/network_diagnostics.py` to see
+the sanitized decision; configuration and tuning are documented in
+`docs/NETWORK_CONNECTIVITY_ROUTING.md`.
+
 The example selects adaptively among `gpt-5.6-luna`, `gpt-5.6-terra`, and
 `gpt-5.6-sol`. Model access is account-dependent. Run `models` and verify all
 three exact IDs on the Jetson. Remove or replace an unavailable tier instead of
@@ -169,6 +176,7 @@ Run the network-free tests:
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest \
+  tests/test_connectivity.py \
   tests/test_routing.py \
   tests/test_streaming.py \
   tests/test_codex_app_server.py \

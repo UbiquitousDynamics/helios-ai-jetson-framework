@@ -248,6 +248,21 @@ def test_codex_subscription_has_adaptive_remote_tiers_and_fast_speech() -> None:
     assert settings.talk.first_visible_token_seconds == 15.0
 
 
+def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.unknown_connectivity == "prefer_local"
+    assert settings.network.enabled
+    assert settings.network.probe_url == "https://chatgpt.com/"
+    assert settings.network.probe_interval_seconds == 3.0
+    assert settings.network.result_max_age_seconds == 6.0
+    assert settings.network.probe_timeout_seconds == 1.2
+    assert settings.network.probe_bytes == 32_768
+    assert settings.network.goodput_probe_interval_seconds == 60.0
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -257,6 +272,13 @@ def test_codex_subscription_has_adaptive_remote_tiers_and_fast_speech() -> None:
         "schema_version = 1\n[modes.talk]\nmax_output_tokens = true\n",
         "schema_version = 1\n[modes.talk]\nspeech_chunk_max_chars = true\n",
         "schema_version = 1\n[modes.talk]\nfirst_visible_token_seconds = true\n",
+        'schema_version = 1\n[network]\nenabled = "true"\n',
+        "schema_version = 1\n[network]\nrequire_wifi = 1\n",
+        'schema_version = 1\n[network]\nprobe_url = "http://example.invalid/"\n',
+        (
+            "schema_version = 1\n[network]\nprobe_interval_seconds = 10.0\n"
+            "goodput_probe_interval_seconds = 5.0\n"
+        ),
         (
             "schema_version = 1\n[targets.local]\nprovider = \"ollama\"\n"
             "model = \"test\"\nmax_output_words = true\n"

@@ -166,7 +166,10 @@ class APIClient:
         model_catalog: ModelCatalog | None = None,
         budget_ledger: BudgetLedger | None = None,
         metrics: SafeMetricsRecorder | None = None,
-        connectivity: Connectivity | str | Callable[[], Connectivity | str] = Connectivity.UNKNOWN,
+        connectivity: (
+            Connectivity | str | Callable[[], Connectivity | str] | None
+        ) = None,
+        network_monitor: Any | None = None,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
@@ -188,7 +191,26 @@ class APIClient:
         self._remote_prepare_lock = threading.Lock()
         self._remote_prepare_thread: threading.Thread | None = None
         self._remote_prepared = False
-        self._connectivity_source = connectivity
+        if connectivity is not None and network_monitor is not None:
+            raise ValueError("pass either connectivity or network_monitor, not both")
+        self._network_monitor = network_monitor
+        self._owns_network_monitor = False
+        if (
+            connectivity is None
+            and network_monitor is None
+            and self.llm_settings.remote_enabled
+            and self.llm_settings.network.enabled
+        ):
+            from api.connectivity import ConnectivityMonitor
+
+            self._network_monitor = ConnectivityMonitor(self.llm_settings.network)
+            self._owns_network_monitor = True
+        if self._network_monitor is not None:
+            self._connectivity_source = self._network_monitor.connectivity
+        else:
+            self._connectivity_source = (
+                Connectivity.UNKNOWN if connectivity is None else connectivity
+            )
 
         self._ollama = OllamaAdapter(
             self.host,
@@ -243,6 +265,17 @@ class APIClient:
             "talk": self._targets_for_mode("talk"),
             "think": self._targets_for_mode("think"),
         }
+        if self._network_monitor is not None:
+            set_online_callback = getattr(
+                self._network_monitor,
+                "set_online_callback",
+                None,
+            )
+            if callable(set_online_callback):
+                set_online_callback(self.prepare_remote_async)
+            start_monitor = getattr(self._network_monitor, "start", None)
+            if callable(start_monitor):
+                start_monitor()
 
         if warm_up:
             self.warm_up()
@@ -286,6 +319,14 @@ class APIClient:
     @connectivity.setter
     def connectivity(self, value: Connectivity | str) -> None:
         self._connectivity_source = Connectivity(value)
+
+    @property
+    def network_snapshot(self) -> Any | None:
+        monitor = self._network_monitor
+        if monitor is None:
+            return None
+        snapshot = getattr(monitor, "snapshot", None)
+        return snapshot() if callable(snapshot) else None
 
     def _register_provider(
         self,
@@ -695,6 +736,12 @@ class APIClient:
             or self.llm_settings.emergency_local_only
         ):
             return None
+        if (
+            self._network_monitor is not None
+            and self.connectivity is not Connectivity.ONLINE
+        ):
+            logger.info("Skipping remote preparation while the network gate is not online")
+            return None
         provider_names = tuple(
             provider.name
             for provider in self.llm_settings.providers
@@ -971,6 +1018,10 @@ class APIClient:
                 return
             self._closed = True
         self.cancel_current()
+        if self._owns_network_monitor and self._network_monitor is not None:
+            close_monitor = getattr(self._network_monitor, "close", None)
+            if callable(close_monitor):
+                close_monitor()
         try:
             if self._owns_registry:
                 self._registry.close()

@@ -88,6 +88,21 @@ class FakeRemoteProvider:
         self.closed = True
 
 
+class FakeNetworkMonitor:
+    def __init__(self, state: Connectivity) -> None:
+        self.state = state
+        self.start_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+
+    def connectivity(self) -> Connectivity:
+        return self.state
+
+    def snapshot(self) -> object:
+        return {"connectivity": self.state.value}
+
+
 def completed(provider: str, model: str) -> Completed:
     return Completed(
         CompletionMetadata(
@@ -204,6 +219,28 @@ def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
     assert remote.calls == []
     assert len(local.calls) == 1
     assert tts.spoken == ["Local."]
+
+
+def test_network_monitor_blocks_remote_before_provider_execution(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    local = FakeOllamaClient()
+    monitor = FakeNetworkMonitor(Connectivity.OFFLINE)
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=hybrid_settings(tmp_path),
+        providers={"remote": remote},
+        network_monitor=monitor,
+        retry_wait=0,
+    )
+
+    assert client.talk("hello") == "Local."
+    assert monitor.start_calls == 1
+    assert remote.calls == []
+    assert len(local.calls) == 1
+    assert client.network_snapshot == {"connectivity": "offline"}
 
 
 def test_unknown_context_provenance_never_leaves_the_device(tmp_path: Path) -> None:
