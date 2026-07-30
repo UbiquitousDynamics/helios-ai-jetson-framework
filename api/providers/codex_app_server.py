@@ -306,6 +306,8 @@ class CodexAppServerAdapter:
         self._runtime = runtime
         self._runtime_factory = runtime_factory or _OfficialCodexRuntime
         self._runtime_lock = threading.Lock()
+        self._account_lock = threading.Lock()
+        self._chatgpt_account_verified = False
         self._clock = clock
         self._closed = False
 
@@ -356,6 +358,41 @@ class CodexAppServerAdapter:
                         transmitted=False,
                     ) from None
             return self._runtime
+
+    def _get_authenticated_runtime(self) -> _Runtime:
+        with self._account_lock:
+            runtime = self._get_runtime()
+            if self._chatgpt_account_verified:
+                return runtime
+            try:
+                account_kind = runtime.account_kind()
+            except Exception as exc:
+                category, retryable = _classify_exception(exc)
+                raise self._error(
+                    category,
+                    model=None,
+                    retryable=retryable,
+                    transmitted=False,
+                ) from None
+            if self._closed:
+                raise self._error(
+                    ErrorCategory.PROVIDER_UNAVAILABLE,
+                    model=None,
+                    transmitted=False,
+                )
+            if account_kind != "chatgpt":
+                raise self._error(
+                    ErrorCategory.AUTHENTICATION,
+                    model=None,
+                    transmitted=False,
+                )
+            self._chatgpt_account_verified = True
+            return runtime
+
+    def prepare(self) -> None:
+        """Start Codex and validate ChatGPT auth without starting an inference turn."""
+
+        self._get_authenticated_runtime()
 
     def _preflight(self, request: ChatRequest) -> None:
         try:
@@ -428,12 +465,12 @@ class CodexAppServerAdapter:
         developer, prompt = _prompt(request)
         mailbox: queue.Queue[tuple[str, Any]] = queue.Queue()
         holder: dict[str, _Turn] = {}
+        stop_requested = threading.Event()
 
         def worker() -> None:
             try:
-                runtime = self._get_runtime()
-                if runtime.account_kind() != "chatgpt":
-                    mailbox.put(("auth", None))
+                runtime = self._get_authenticated_runtime()
+                if stop_requested.is_set():
                     return
                 turn = runtime.start_turn(
                     model=request.model,
@@ -443,8 +480,14 @@ class CodexAppServerAdapter:
                     service_tier=request.options.get("service_tier"),
                 )
                 holder["turn"] = turn
+                if stop_requested.is_set():
+                    self._interrupt(turn)
+                    return
                 mailbox.put(("turn", turn))
                 for notification in turn.stream():
+                    if stop_requested.is_set():
+                        self._interrupt(turn)
+                        return
                     mailbox.put(("event", notification))
                 mailbox.put(("eof", None))
             except BaseException as exc:
@@ -458,7 +501,6 @@ class CodexAppServerAdapter:
 
         began = self._clock()
         last_event = began
-        saw_output = False
         saw_visible_text = False
         saw_completed = False
         usage = Usage()
@@ -467,6 +509,7 @@ class CodexAppServerAdapter:
 
         while True:
             if self._cancelled(cancellation):
+                stop_requested.set()
                 self._interrupt(holder.get("turn"))
                 raise self._error(
                     ErrorCategory.CANCELLED,
@@ -481,17 +524,18 @@ class CodexAppServerAdapter:
                     request.timeouts.connect_seconds,
                     request.timeouts.first_token_seconds,
                 )
-            elif saw_output:
+            elif saw_visible_text:
                 stage_limit = request.timeouts.read_seconds
             else:
                 stage_limit = request.timeouts.first_token_seconds
             stage_remaining = stage_limit - (now - last_event)
             wait_seconds = min(0.1, total_remaining, stage_remaining)
             if wait_seconds <= 0:
+                stop_requested.set()
                 self._interrupt(holder.get("turn"))
                 if "turn" not in holder:
                     category = ErrorCategory.CONNECT_TIMEOUT
-                elif saw_output:
+                elif saw_visible_text:
                     category = ErrorCategory.READ_TIMEOUT
                 else:
                     category = ErrorCategory.FIRST_TOKEN_TIMEOUT
@@ -512,12 +556,16 @@ class CodexAppServerAdapter:
                 request_id = candidate if isinstance(candidate, str) else None
                 continue
             if kind == "auth":
+                stop_requested.set()
                 raise self._error(
                     ErrorCategory.AUTHENTICATION,
                     model=request.model,
                     transmitted=False,
                 )
             if kind == "error":
+                stop_requested.set()
+                if isinstance(value, ProviderError):
+                    raise value
                 category, retryable = _classify_exception(value)
                 raise self._error(
                     category,
@@ -528,6 +576,7 @@ class CodexAppServerAdapter:
                 ) from None
             if kind == "eof":
                 if not saw_completed:
+                    stop_requested.set()
                     raise self._error(
                         ErrorCategory.EMPTY_COMPLETION,
                         model=request.model,
@@ -542,9 +591,9 @@ class CodexAppServerAdapter:
                 delta = _field(payload, "delta")
                 if not isinstance(delta, str) or not delta:
                     continue
-                saw_output = True
+                visible_delta = method == "item/agentMessage/delta"
                 paused_at = self._clock()
-                if method == "item/agentMessage/delta":
+                if visible_delta:
                     saw_visible_text = True
                     event: StreamEvent = TextDelta(delta)
                 else:
@@ -552,12 +601,19 @@ class CodexAppServerAdapter:
                 try:
                     yield event
                 except GeneratorExit:
+                    stop_requested.set()
                     self._interrupt(holder.get("turn"))
                     raise
                 finally:
                     resumed = self._clock()
-                    began += max(0.0, resumed - paused_at)
-                    last_event = resumed
+                    paused_seconds = max(0.0, resumed - paused_at)
+                    began += paused_seconds
+                    if visible_delta:
+                        last_event = resumed
+                    else:
+                        # Reasoning is intentionally hidden from speech. It must
+                        # not reset the deadline for the first visible token.
+                        last_event += paused_seconds
                 continue
             if method == "thread/tokenUsage/updated":
                 usage = _usage(payload)
@@ -577,6 +633,7 @@ class CodexAppServerAdapter:
             if hasattr(status, "value"):
                 status = status.value
             if status != "completed":
+                stop_requested.set()
                 error = _field(turn_payload, "error")
                 category, retryable = _classify_exception(
                     RuntimeError(str(_field(error, "message", status)))
@@ -592,6 +649,7 @@ class CodexAppServerAdapter:
                     request_id=request_id,
                 )
             if not saw_visible_text:
+                stop_requested.set()
                 raise self._error(
                     ErrorCategory.EMPTY_COMPLETION,
                     model=request.model,
@@ -617,10 +675,13 @@ class CodexAppServerAdapter:
             raise ValueError("model cannot be empty")
 
     def close(self) -> None:
+        # Do not wait for account_kind(): closing the runtime is what can
+        # release a blocked app-server RPC during shutdown.
         with self._runtime_lock:
             if self._closed:
                 return
             self._closed = True
+            self._chatgpt_account_verified = False
             runtime = self._runtime
             self._runtime = None
         if runtime is not None:

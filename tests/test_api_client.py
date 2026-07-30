@@ -65,7 +65,7 @@ def test_talk_uses_one_stream_parser_and_flushes_done_reason() -> None:
     response = client.talk("Emilia, say hello", context="Be concise")
 
     assert response == "Hello, crew"
-    assert tts.spoken == ["Hello,", "crew"]
+    assert tts.spoken == ["Hello, crew"]
     assert fake.calls == [
         {
             "model": client.models["talk"],

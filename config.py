@@ -135,6 +135,8 @@ class LLMModeSettings:
     max_output_tokens: int | None = None
     complexity_threshold: int = 2
     first_speech_min_chars: int = 0
+    speech_chunk_max_chars: int = 0
+    first_visible_token_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
@@ -143,6 +145,15 @@ class LLMModeSettings:
             raise ConfigurationError("complexity_threshold cannot be negative")
         if self.first_speech_min_chars < 0:
             raise ConfigurationError("first_speech_min_chars cannot be negative")
+        if self.speech_chunk_max_chars < 0:
+            raise ConfigurationError("speech_chunk_max_chars cannot be negative")
+        if self.first_visible_token_seconds is not None and (
+            isinstance(self.first_visible_token_seconds, bool)
+            or not isinstance(self.first_visible_token_seconds, (int, float))
+            or not math.isfinite(float(self.first_visible_token_seconds))
+            or self.first_visible_token_seconds <= 0
+        ):
+            raise ConfigurationError("first_visible_token_seconds must be positive")
         if len(set(self.candidates)) != len(self.candidates):
             raise ConfigurationError("mode candidate names must be unique")
 
@@ -221,6 +232,7 @@ class LLMTargetSettings:
     context_window: int | None = None
     max_output_tokens: int | None = None
     max_output_words: int | None = None
+    min_complexity_score: int | None = None
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
 
@@ -239,6 +251,12 @@ class LLMTargetSettings:
             or self.max_output_words < 1
         ):
             raise ConfigurationError("target max_output_words must be a positive integer")
+        if self.min_complexity_score is not None and (
+            isinstance(self.min_complexity_score, bool)
+            or not isinstance(self.min_complexity_score, int)
+            or self.min_complexity_score < 0
+        ):
+            raise ConfigurationError("target min_complexity_score must be non-negative")
         if self.retry_attempts < 1:
             raise ConfigurationError("target retry_attempts must be at least one")
         if len({code for code, _model in self.model_by_language}) != len(self.model_by_language):
@@ -790,6 +808,8 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "max_output_tokens",
                 "complexity_threshold",
                 "first_speech_min_chars",
+                "speech_chunk_max_chars",
+                "first_visible_token_seconds",
             },
             f"modes.{name}",
         )
@@ -806,6 +826,18 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             first_speech_min_chars=_toml_int(
                 mode.get("first_speech_min_chars", 0),
                 f"modes.{name}.first_speech_min_chars",
+            ),
+            speech_chunk_max_chars=_toml_int(
+                mode.get("speech_chunk_max_chars", 0),
+                f"modes.{name}.speech_chunk_max_chars",
+            ),
+            first_visible_token_seconds=(
+                _toml_float(
+                    mode["first_visible_token_seconds"],
+                    f"modes.{name}.first_visible_token_seconds",
+                )
+                if "first_visible_token_seconds" in mode
+                else None
             ),
         )
 
@@ -878,6 +910,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "context_window",
                 "max_output_tokens",
                 "max_output_words",
+                "min_complexity_score",
                 "retry_attempts",
                 "options",
             },
@@ -945,6 +978,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                         f"targets.{name}.max_output_words",
                     )
                     if "max_output_words" in target
+                    else None
+                ),
+                min_complexity_score=(
+                    _toml_int(
+                        target["min_complexity_score"],
+                        f"targets.{name}.min_complexity_score",
+                    )
+                    if "min_complexity_score" in target
                     else None
                 ),
                 retry_attempts=_toml_int(

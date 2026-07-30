@@ -84,41 +84,47 @@ Helios -> Codex app-server (stdio) -> ChatGPT account
        -> Ollama fallback when the first route is unavailable
 ```
 
-The example currently selects `gpt-5.6-sol`. Model access is account-dependent.
-Run `models`, choose an ID actually returned on the Jetson, and change both
-`targets.codex-talk.model` and `targets.codex-think.model` if needed. Use lower
-reasoning effort for `talk` and a higher value for `think`.
+The example selects adaptively among `gpt-5.6-luna`, `gpt-5.6-terra`, and
+`gpt-5.6-sol`. Model access is account-dependent. Run `models` and verify all
+three exact IDs on the Jetson. Remove or replace an unavailable tier instead of
+guessing an ID. When removing one, delete it from the relevant mode candidate
+list as well as its target table. The complete algorithm and latency controls
+are documented in `docs/ADAPTIVE_REMOTE_ROUTING.md`.
 
 Do not add `api_key_env` to the `codex_app_server` provider. Configuration
 validation intentionally rejects it.
 
 ## Understand which model answered
 
-At request start, the planning line shows every eligible route in fallback
-order, not the route that eventually answered:
+Before planning, the router logs the content-free complexity score and the one
+remote tier selected for this request:
 
 ```text
-Planning talk request with eligible routes in fallback order: codex-talk,local-talk
+Adaptive remote tier selection: complexity_score=3, minimum_score=3, selected=codex-talk-terra
+Planning talk request with eligible routes in fallback order: codex-talk-terra,local-talk
 ```
 
 It appears for every normal voice command because normal commands call
 `APIClient.talk()`. The completion line is authoritative:
 
 ```text
-Completed talk request using route codex-talk (provider=openai-codex, ...)
+Completed talk request using route codex-talk-terra (provider=openai-codex, requested_model=gpt-5.6-terra, resolved_model=gpt-5.6-terra, ...)
 Completed talk request using route local-talk (provider=ollama, ...)
 ```
 
-The committed Codex profile gives remote speech 30 seconds to produce its first
-spoken sentence before counting the successful turn against provider health.
+`resolved_model` reveals any model reroute reported by Codex. The committed
+profile waits at most 15 seconds for the first visible `talk` token and 30
+seconds for `think`; hidden reasoning does not reset that deadline. A timeout
+before speech falls directly to Ollama. Remote speech also has a 30-second
+post-success health objective.
 The generic 1.5-second edge-model objective is too short for Codex and would
 open its circuit after three otherwise successful turns. If a circuit does
 open because of real failures, Helios logs its status and remaining cooldown;
 restarting Helios also clears in-memory health state.
 
 Both hybrid routes receive the same Emilia identity, response language and
-direct-answer rule. Limits are target-specific: `codex-talk` receives a
-50-word instruction with a 128-token cap, while `local-talk` receives a
+direct-answer rule. Limits are target-specific: every remote `talk` tier
+receives a 50-word instruction with a 128-token cap, while `local-talk` receives a
 20-word instruction with a 40-token cap to reduce edge inference time. They are
 still different models, so
 `remote_first` cannot guarantee identical wording or facts when fallback
@@ -144,10 +150,17 @@ Emilia, pensa: confronta due strategie energetiche
 Emilia, ragiona sui vantaggi e gli svantaggi di questa scelta
 ```
 
-The activation prefix is also removed before inference. `think` uses
-`codex-think,local-think`, allows the larger 256-token response configured for
-that mode, and the voice assistant pronounces the final streamed response.
-English profiles use `think` or `reason`.
+The activation prefix is also removed before inference. `think` adaptively
+selects one of `codex-think-luna`, `codex-think-terra`, or `codex-think-sol`,
+then keeps `local-think` as its direct fallback. It allows the larger 256-token
+response configured for that mode. English profiles use `think` or `reason`.
+
+Remote text is streamed into speech sentence by sentence before the complete
+answer arrives. `talk` begins with the first complete sentence and uses an
+80-character soft whitespace cutoff when punctuation is late. The Codex
+process and ChatGPT account validation are prepared in the background while
+the startup greeting plays; this preparation sends no prompt and starts no
+inference turn.
 
 ## Verify before starting the voice assistant
 
@@ -155,7 +168,12 @@ Run the network-free tests:
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest tests/test_codex_app_server.py tests/test_config_llm.py -q
+python -m pytest \
+  tests/test_routing.py \
+  tests/test_streaming.py \
+  tests/test_codex_app_server.py \
+  tests/test_hybrid_api_client.py \
+  tests/test_config_llm.py -q
 ```
 
 For one real remote-only certification request, copy the example outside the

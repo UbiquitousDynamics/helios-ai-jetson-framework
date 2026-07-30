@@ -21,12 +21,15 @@ The hybrid subsystem includes:
   retries;
 - deterministic `local_only`, `remote_only`, `local_first`, `remote_first`,
   and `auto` routing;
+- an optional zero-request adaptive remote model cascade through
+  `min_complexity_score`;
 - per-mode candidate chains, language/model selection, allowlists, denylists,
   context limits, feature checks, connectivity state, and provider health;
 - a provenance-based privacy guard with authorization rechecked at remote
   dispatch and again inside the OpenAI-compatible SSE adapter;
 - retry and fallback only before speech may have reached the listener;
-- optional pre-speech buffering through `first_speech_min_chars`;
+- sentence-level speech streaming, optional pre-speech buffering, and a soft
+  maximum fragment size;
 - provider/model cooldowns for transient, rate-limit, authentication, and
   quota failures;
 - a strict, expiring JSON model catalog using exact decimal prices;
@@ -126,6 +129,14 @@ The mode’s `complexity_threshold` selects remote-first when the score reaches
 the threshold. Candidate order remains deterministic. Health and budget can
 remove a candidate but do not use an opaque learned ranking.
 
+Remote targets that declare `min_complexity_score` form an adaptive model
+cascade independently of the selected policy. The planner retains only the
+healthy tier with the highest floor not exceeding the score (or the smallest
+available floor when none is below it). Untiered targets retain their normal
+behavior. Configure one local candidate after the adaptive remotes so a plan
+contains one selected remote followed directly by local fallback. See
+`docs/ADAPTIVE_REMOTE_ROUTING.md`.
+
 Health records latency EWMA for observation and circuit decisions, but current
 routing does not reorder candidates from that EWMA. Battery state, Jetson power
 mode, thermal headroom, and metered-link state are not runtime inputs yet; an
@@ -143,9 +154,11 @@ Every adapter performs one transport attempt. The coordinator owns retries and
 fallback so it can enforce one global speech-commit rule.
 
 Text deltas are collected exactly. Reasoning deltas are never spoken or
-returned as visible output. Punctuation triggers the existing sentence
-buffering behavior. Immediately before calling Piper, the coordinator marks
-speech as committed. From that moment:
+returned as visible output. Complete sentences are removed from the speech
+buffer as soon as they arrive; commas do not create fragments.
+`speech_chunk_max_chars` adds a soft whitespace cutoff for unpunctuated text.
+Immediately before calling Piper, the coordinator marks speech as committed.
+From that moment:
 
 - the same provider is not retried;
 - another provider is not tried;
@@ -175,6 +188,10 @@ is returned unchanged and is never relabeled as a provider error.
 `first_speech_min_chars` can improve safe failover by delaying the first spoken
 sentence. Keep it at `0` for legacy latency. Values around 20–40 characters are
 a reasonable benchmark range, not a production recommendation.
+`first_visible_token_seconds` overrides the provider first-token deadline for
+one mode. Hidden Codex reasoning does not satisfy or reset it. A value that is
+too aggressive increases local fallback; tune it from Jetson p95 measurements.
+Set `speech_chunk_max_chars = 0` to disable soft chunking.
 
 `APIClient.cancel_current()` cancels active streams, and
 `VoiceAssistant.stop()` invokes it. Cancellation is checked before dispatch and
@@ -197,6 +214,7 @@ Choose and copy one example:
 - `examples/llm-routing.free-tier-first.toml`
 - `examples/llm-routing.paid-first.toml`
 - `examples/llm-routing.local-first-escalation.toml`
+- `examples/llm-routing.codex-subscription.toml`
 
 Then set:
 

@@ -50,6 +50,7 @@ class FakeRemoteProvider:
     def __init__(self, streams: list[object]) -> None:
         self.streams = iter(streams)
         self.calls: list[ChatRequest] = []
+        self.prepare_calls = 0
         self.closed = False
 
     @property
@@ -79,6 +80,9 @@ class FakeRemoteProvider:
 
     def warm_up(self, model: str) -> None:
         raise AssertionError(f"remote warm-up is forbidden: {model}")
+
+    def prepare(self) -> None:
+        self.prepare_calls += 1
 
     def close(self) -> None:
         self.closed = True
@@ -272,6 +276,192 @@ def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> No
     assert "at most 20 words" in local_messages[0]["content"]
     assert "at most 50 words" not in local_messages[0]["content"]
     assert local_messages[-1] == {"role": "user", "content": "Emilia, answer"}
+
+
+def test_adaptive_remote_failure_falls_directly_to_capped_local_route(
+    tmp_path: Path,
+) -> None:
+    error = ProviderError(
+        ErrorCategory.CONNECT_TIMEOUT,
+        "remote timeout",
+        provider="remote",
+        model="gpt-5.6-luna",
+        transmitted=False,
+    )
+    remote = FakeRemoteProvider([error])
+    base = hybrid_settings(tmp_path)
+    llm = replace(
+        base,
+        talk=config.LLMModeSettings(
+            candidates=("luna", "terra", "sol", "local-talk"),
+            max_output_tokens=128,
+        ),
+        targets=(
+            config.LLMTargetSettings(
+                name="luna",
+                provider="remote",
+                model="gpt-5.6-luna",
+                min_complexity_score=0,
+            ),
+            config.LLMTargetSettings(
+                name="terra",
+                provider="remote",
+                model="gpt-5.6-terra",
+                min_complexity_score=3,
+            ),
+            config.LLMTargetSettings(
+                name="sol",
+                provider="remote",
+                model="gpt-5.6-sol",
+                min_complexity_score=5,
+            ),
+            config.LLMTargetSettings(
+                name="local-talk",
+                provider="ollama",
+                model="local-model",
+                max_output_tokens=40,
+            ),
+        ),
+    )
+    local = FakeOllamaClient()
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("hello") == "Local."
+
+    assert [call.model for call in remote.calls] == ["gpt-5.6-luna"]
+    assert len(local.calls) == 1
+    assert local.calls[0]["options"]["num_predict"] == 40
+
+
+def test_remote_prepare_is_background_idempotent_and_sends_no_prompt(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([])
+    llm = config.LLMSettings(
+        routing_file=tmp_path / "routing.toml",
+        routing_policy="remote_first",
+        remote_enabled=True,
+        privacy=config.LLMPrivacySettings(
+            default="remote_allowed",
+            allow_remote_transcripts=True,
+        ),
+        budget=config.LLMBudgetSettings(enabled=False),
+        talk=config.LLMModeSettings(candidates=("codex-talk",)),
+        providers=(
+            config.LLMProviderSettings(
+                name="openai-codex",
+                adapter="codex_app_server",
+                endpoint="stdio://codex",
+                locality="remote",
+            ),
+        ),
+        targets=(
+            config.LLMTargetSettings(
+                name="codex-talk",
+                provider="openai-codex",
+                model="gpt-5.6-luna",
+            ),
+        ),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"openai-codex": remote},
+        connectivity=Connectivity.ONLINE,
+    )
+
+    first = client.prepare_remote_async()
+    assert first is not None
+    first.join(timeout=1)
+    second = client.prepare_remote_async()
+
+    assert second is first
+    assert remote.prepare_calls == 1
+    assert remote.calls == []
+
+
+def test_mode_visible_token_timeout_reaches_remote_request(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider(
+        [[TextDelta("Remote."), completed("remote", "remote-model")]]
+    )
+    llm = hybrid_settings(tmp_path)
+    llm = replace(
+        llm,
+        talk=replace(llm.talk, first_visible_token_seconds=7.5),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("hello") == "Remote."
+    assert remote.calls[0].timeouts.first_token_seconds == 7.5
+
+
+def test_committed_codex_profile_selects_luna_terra_and_sol() -> None:
+    routing = Path(__file__).resolve().parents[1] / "examples" / (
+        "llm-routing.codex-subscription.toml"
+    )
+    llm = config.load_llm_settings(routing)
+    llm = replace(
+        llm,
+        observability=config.LLMObservabilitySettings(metrics_enabled=False),
+    )
+    remote = FakeRemoteProvider(
+        [
+            [
+                TextDelta("Luna."),
+                completed("openai-codex", "gpt-5.6-luna"),
+            ],
+            [
+                TextDelta("Terra."),
+                completed("openai-codex", "gpt-5.6-terra"),
+            ],
+            [
+                TextDelta("Sol."),
+                completed("openai-codex", "gpt-5.6-sol"),
+            ],
+        ]
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        language="en",
+        providers={"openai-codex": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+    try:
+        assert client.talk("hello") == "Luna."
+        assert client.talk("explain efficiency") == "Terra."
+        assert (
+            client.talk(
+                "explain the complete strategy",
+                request_options={"complex": True},
+            )
+            == "Sol."
+        )
+    finally:
+        client.close()
+
+    assert [call.model for call in remote.calls] == [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+    ]
 
 
 def test_remote_failure_after_speech_never_calls_ollama(tmp_path: Path) -> None:

@@ -37,7 +37,7 @@ from api.routing import ProviderRegistry, ProviderTarget, RoutePlanner
 logger = logging.getLogger(__name__)
 
 _SPEECH_MARKUP = re.compile(r"[*$#@]")
-_SENTENCE_BOUNDARY = re.compile(r"[.!?;:,](?:\s|$)")
+_SENTENCE_BOUNDARY = re.compile(r"[.!?;:](?=\s|$)")
 _TERMINAL_ERRORS = frozenset(
     {
         ErrorCategory.CANCELLED,
@@ -157,6 +157,7 @@ class StreamingResponseCoordinator:
         *,
         speak: Callable[[str], Any] | None = None,
         first_speech_min_chars: int = 0,
+        speech_chunk_max_chars: int = 0,
         maximum_first_audio_seconds: float | None = None,
         cancellation: CancellationToken | None = None,
         route_reason: str | None = None,
@@ -171,6 +172,8 @@ class StreamingResponseCoordinator:
             )
         if first_speech_min_chars < 0:
             raise ValueError("first_speech_min_chars cannot be negative")
+        if speech_chunk_max_chars < 0:
+            raise ValueError("speech_chunk_max_chars cannot be negative")
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
             raise ValueError("maximum_first_audio_seconds must be positive")
 
@@ -212,6 +215,7 @@ class StreamingResponseCoordinator:
                         request=routed_request,
                         speak=speak,
                         first_speech_min_chars=first_speech_min_chars,
+                        speech_chunk_max_chars=speech_chunk_max_chars,
                         cancellation=cancellation,
                         state=state,
                     )
@@ -395,21 +399,47 @@ class StreamingResponseCoordinator:
         request: ChatRequest,
         speak: Callable[[str], Any] | None,
         first_speech_min_chars: int,
+        speech_chunk_max_chars: int,
         cancellation: CancellationToken | None,
         state: _AttemptState,
     ) -> StreamingResult:
         response_parts: list[str] = []
-        sentence_parts: list[str] = []
-        boundary_seen = False
+        speech_buffer = ""
+        generated_chars = 0
         completed: CompletionMetadata | None = None
 
-        def flush_speech() -> None:
-            nonlocal boundary_seen
-            if speak is None or not sentence_parts:
+        def next_speech_end(*, force: bool) -> int | None:
+            if not speech_buffer:
+                return None
+            if force:
+                return len(speech_buffer)
+            if not state.speech_committed and generated_chars < first_speech_min_chars:
+                return None
+
+            boundary = _SENTENCE_BOUNDARY.search(speech_buffer)
+            if (
+                boundary is not None
+                and (
+                    speech_chunk_max_chars == 0
+                    or boundary.end() <= speech_chunk_max_chars
+                )
+            ):
+                return boundary.end()
+
+            if speech_chunk_max_chars > 0 and len(speech_buffer) >= speech_chunk_max_chars:
+                window = speech_buffer[: speech_chunk_max_chars + 1]
+                whitespace = tuple(re.finditer(r"\s+", window))
+                if whitespace and whitespace[-1].start() > 0:
+                    return whitespace[-1].start()
+
+            # Do not split a word merely to meet the soft chunk objective.
+            # If punctuation exists, it remains a safe boundary even when late.
+            return boundary.end() if boundary is not None else None
+
+        def speak_fragment(fragment: str) -> None:
+            if speak is None:
                 return
-            sentence = _SPEECH_MARKUP.sub("", "".join(sentence_parts)).strip()
-            sentence_parts.clear()
-            boundary_seen = False
+            sentence = _SPEECH_MARKUP.sub("", fragment).strip()
             if not sentence or not any(character.isalnum() for character in sentence):
                 return
             state.speech_committed = True
@@ -419,6 +449,18 @@ class StreamingResponseCoordinator:
                 speak(sentence)
             except Exception as error:
                 raise _SpeechFailure(error) from None
+
+        def flush_speech(*, force: bool = False) -> None:
+            nonlocal speech_buffer
+            while speech_buffer:
+                end = next_speech_end(force=force)
+                if end is None:
+                    return
+                fragment = speech_buffer[:end]
+                speech_buffer = speech_buffer[end:].lstrip()
+                speak_fragment(fragment)
+                if force:
+                    return
 
         iterator: Any = None
         try:
@@ -441,14 +483,10 @@ class StreamingResponseCoordinator:
                     if state.first_token_at is None:
                         state.first_token_at = self._clock()
                     response_parts.append(event.text)
+                    generated_chars += len(event.text)
                     if speak is not None:
-                        sentence_parts.append(event.text)
-                        boundary_seen = (
-                            boundary_seen or _SENTENCE_BOUNDARY.search(event.text) is not None
-                        )
-                        generated_chars = sum(len(part) for part in response_parts)
-                        if boundary_seen and generated_chars >= first_speech_min_chars:
-                            flush_speech()
+                        speech_buffer += event.text
+                        flush_speech()
                 elif isinstance(event, ReasoningDelta):
                     continue
                 elif isinstance(event, Refused):
@@ -558,7 +596,7 @@ class StreamingResponseCoordinator:
                 transmitted=True,
             )
         if speak is not None:
-            flush_speech()
+            flush_speech(force=True)
         return StreamingResult(
             text=text,
             metadata=completed,

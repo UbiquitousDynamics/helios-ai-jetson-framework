@@ -30,6 +30,7 @@ class FakeAPI:
         self.think_messages: list[str] = []
         self.closed = False
         self.cancelled = False
+        self.prepare_calls = 0
 
     def talk(self, message: str, context: str | None = None) -> str:
         assert context is None
@@ -52,6 +53,9 @@ class FakeAPI:
 
     def cancel_current(self) -> None:
         self.cancelled = True
+
+    def prepare_remote_async(self) -> None:
+        self.prepare_calls += 1
 
 
 class FakeRecognizer:
@@ -211,6 +215,19 @@ def test_stop_cancels_the_active_model_stream() -> None:
 
     assert not assistant._running
     assert api.cancelled
+
+
+def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
+    assistant, tts, api, _sounds, _recognizer = make_assistant([])
+
+    assistant.run(max_iterations=0)
+
+    assert api.prepare_calls == 1
+    assert tts.spoken == [
+        assistant.profile.welcome_message.format(
+            wake_word=assistant.profile.wake_word,
+        )
+    ]
 
 
 def test_settings_validate_language_and_root_derived_paths(tmp_path: Path) -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ from api.providers.contracts import (
     ReasoningDelta,
     Role,
     TextDelta,
+    Timeouts,
 )
 
 
@@ -45,9 +48,11 @@ class FakeRuntime:
         self.kind = kind
         self.turn = FakeTurn(events)
         self.started: dict[str, Any] | None = None
+        self.account_checks = 0
         self.closed = False
 
     def account_kind(self) -> str | None:
+        self.account_checks += 1
         return self.kind
 
     def start_turn(self, **kwargs: Any) -> FakeTurn:
@@ -56,6 +61,19 @@ class FakeRuntime:
 
     def close(self) -> None:
         self.closed = True
+
+
+class BlockingAuthRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__("chatgpt", [])
+        self.auth_entered = threading.Event()
+        self.auth_release = threading.Event()
+
+    def account_kind(self) -> str | None:
+        self.account_checks += 1
+        self.auth_entered.set()
+        self.auth_release.wait(timeout=2)
+        return self.kind
 
 
 def notification(method: str, payload: Any) -> dict[str, Any]:
@@ -206,6 +224,124 @@ def test_close_releases_owned_runtime() -> None:
     provider.close()
 
     assert runtime.closed
+
+
+def test_prepare_is_idempotent_and_never_starts_an_inference_turn() -> None:
+    runtime = FakeRuntime(
+        "chatgpt",
+        [
+            notification("item/agentMessage/delta", {"delta": "Ciao!"}),
+            notification("turn/completed", {"turn": {"status": "completed"}}),
+        ],
+    )
+    provider = CodexAppServerAdapter("openai-codex", runtime=runtime)
+
+    provider.prepare()
+    provider.prepare()
+
+    assert runtime.account_checks == 1
+    assert runtime.started is None
+
+    list(provider.stream(request()))
+    assert runtime.account_checks == 1
+    assert runtime.started is not None
+
+
+def test_prepare_rejects_non_chatgpt_auth_before_transmission() -> None:
+    runtime = FakeRuntime("apiKey", [])
+    provider = CodexAppServerAdapter("openai-codex", runtime=runtime)
+
+    with pytest.raises(ProviderError) as captured:
+        provider.prepare()
+
+    assert captured.value.category is ErrorCategory.AUTHENTICATION
+    assert captured.value.transmitted is False
+    assert runtime.started is None
+
+
+def test_timeout_while_prepare_holds_auth_lock_never_starts_orphan_turn() -> None:
+    runtime = BlockingAuthRuntime()
+    provider = CodexAppServerAdapter("openai-codex", runtime=runtime)
+    prepare_thread = threading.Thread(target=provider.prepare)
+    prepare_thread.start()
+    assert runtime.auth_entered.wait(timeout=1)
+
+    with pytest.raises(ProviderError) as captured:
+        list(
+            provider.stream(
+                request(
+                    timeouts=Timeouts(
+                        connect_seconds=0.05,
+                        first_token_seconds=0.05,
+                        read_seconds=1,
+                        total_seconds=1,
+                    )
+                )
+            )
+        )
+
+    assert captured.value.category is ErrorCategory.CONNECT_TIMEOUT
+    runtime.auth_release.set()
+    prepare_thread.join(timeout=1)
+    deadline = time.monotonic() + 1
+    while runtime.account_checks < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.05)
+    assert runtime.started is None
+
+
+def test_hidden_reasoning_does_not_reset_visible_first_token_timeout() -> None:
+    def reasoning_only() -> Any:
+        for _ in range(10):
+            time.sleep(0.02)
+            yield notification("item/reasoning/textDelta", {"delta": "hidden"})
+        yield notification("turn/completed", {"turn": {"status": "completed"}})
+
+    runtime = FakeRuntime("chatgpt", reasoning_only())
+    provider = CodexAppServerAdapter("openai-codex", runtime=runtime)
+
+    with pytest.raises(ProviderError) as captured:
+        list(
+            provider.stream(
+                request(
+                    timeouts=Timeouts(
+                        connect_seconds=0.5,
+                        first_token_seconds=0.05,
+                        read_seconds=0.5,
+                        total_seconds=1,
+                    )
+                )
+            )
+        )
+
+    assert captured.value.category is ErrorCategory.FIRST_TOKEN_TIMEOUT
+    assert runtime.turn.interrupted
+
+
+def test_close_does_not_wait_for_blocked_account_validation() -> None:
+    runtime = BlockingAuthRuntime()
+    provider = CodexAppServerAdapter("openai-codex", runtime=runtime)
+    errors: list[BaseException] = []
+
+    def prepare() -> None:
+        try:
+            provider.prepare()
+        except BaseException as error:
+            errors.append(error)
+
+    prepare_thread = threading.Thread(target=prepare)
+    prepare_thread.start()
+    assert runtime.auth_entered.wait(timeout=1)
+
+    started = time.monotonic()
+    provider.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5
+    assert runtime.closed
+    runtime.auth_release.set()
+    prepare_thread.join(timeout=1)
+    assert errors
 
 
 def test_api_client_registers_configured_codex_adapter_lazily() -> None:

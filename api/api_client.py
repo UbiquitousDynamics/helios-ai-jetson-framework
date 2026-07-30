@@ -185,6 +185,9 @@ class APIClient:
         self._closed = False
         self._cancellation_lock = threading.Lock()
         self._active_cancellations: list[CancellationToken] = []
+        self._remote_prepare_lock = threading.Lock()
+        self._remote_prepare_thread: threading.Thread | None = None
+        self._remote_prepared = False
         self._connectivity_source = connectivity
 
         self._ollama = OllamaAdapter(
@@ -450,6 +453,7 @@ class APIClient:
                         languages=frozenset(target.languages),
                         context_window=context_window,
                         max_output_tokens=maximum_output,
+                        min_complexity_score=target.min_complexity_score,
                         priority=priority,
                         enabled=enabled,
                     ),
@@ -513,11 +517,16 @@ class APIClient:
             return self.llm_settings.think
         raise ValueError(f"Unknown model mode: {mode!r}")
 
-    def _timeouts(self) -> Timeouts:
+    def _timeouts(self, mode: str) -> Timeouts:
         values = self.llm_settings.timeouts
+        mode_first_token = self._mode_settings(mode).first_visible_token_seconds
         return Timeouts(
             connect_seconds=values.connect_seconds,
-            first_token_seconds=values.first_token_seconds,
+            first_token_seconds=(
+                values.first_token_seconds
+                if mode_first_token is None
+                else float(mode_first_token)
+            ),
             read_seconds=values.read_seconds,
             total_seconds=values.total_seconds,
         )
@@ -575,7 +584,7 @@ class APIClient:
             max_output_tokens=(
                 self._mode_settings(mode).max_output_tokens if explicit_hybrid_config else None
             ),
-            timeouts=self._timeouts(),
+            timeouts=self._timeouts(mode),
             options=dict(request_options or {}),
         )
 
@@ -678,6 +687,81 @@ class APIClient:
             operation_name=f"warm up the {mode} model",
         )
 
+    def prepare_remote_async(self) -> threading.Thread | None:
+        """Start the non-inference Codex startup/authentication path in background."""
+
+        if (
+            not self.llm_settings.remote_enabled
+            or self.llm_settings.emergency_local_only
+        ):
+            return None
+        provider_names = tuple(
+            provider.name
+            for provider in self.llm_settings.providers
+            if provider.enabled
+            and provider.adapter == "codex_app_server"
+            and any(
+                execution.route.enabled
+                and execution.route.remote
+                and execution.route.provider == provider.name
+                for executions in self._execution_targets.values()
+                for execution in executions
+            )
+        )
+        if not provider_names:
+            return None
+
+        with self._remote_prepare_lock:
+            if self._closed or self._remote_prepared:
+                return self._remote_prepare_thread
+            if (
+                self._remote_prepare_thread is not None
+                and self._remote_prepare_thread.is_alive()
+            ):
+                return self._remote_prepare_thread
+
+            def prepare() -> None:
+                succeeded = True
+                for provider_name in provider_names:
+                    started_at = time.monotonic()
+                    try:
+                        provider = self._registry.get(provider_name)
+                        operation = getattr(provider, "prepare", None)
+                        if callable(operation):
+                            operation()
+                            logger.info(
+                                "Remote provider prepared without inference "
+                                "(provider=%s, startup_ms=%s)",
+                                provider_name,
+                                round((time.monotonic() - started_at) * 1_000),
+                            )
+                    except ProviderError as error:
+                        succeeded = False
+                        logger.warning(
+                            "Remote provider preparation failed "
+                            "(provider=%s, category=%s); normal fallback remains active",
+                            provider_name,
+                            error.category.value,
+                        )
+                    except Exception:
+                        succeeded = False
+                        logger.warning(
+                            "Remote provider preparation failed "
+                            "(provider=%s); normal fallback remains active",
+                            provider_name,
+                        )
+                with self._remote_prepare_lock:
+                    self._remote_prepared = succeeded
+
+            thread = threading.Thread(
+                target=prepare,
+                name="helios-remote-prepare",
+                daemon=True,
+            )
+            self._remote_prepare_thread = thread
+            thread.start()
+            return thread
+
     def _call_with_retry(
         self,
         operation: Callable[[], Any],
@@ -759,6 +843,7 @@ class APIClient:
                 executions,
                 speak=self.tts.speak if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
+                speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
                 maximum_first_audio_seconds=(
                     self.llm_settings.health.maximum_talk_first_audio_ms / 1_000
                     if mode == "talk" and speak
@@ -769,12 +854,24 @@ class APIClient:
             )
             logger.info(
                 "Completed %s request using route %s "
-                "(provider=%s, model=%s, attempts=%s)",
+                "(provider=%s, requested_model=%s, resolved_model=%s, "
+                "attempts=%s, first_text_ms=%s, first_speech_ms=%s)",
                 mode,
                 result.target.name,
                 result.target.provider,
                 result.target.model,
+                result.metadata.resolved_model or result.target.model,
                 result.attempts,
+                (
+                    round(result.first_token_seconds * 1_000)
+                    if result.first_token_seconds is not None
+                    else None
+                ),
+                (
+                    round(result.first_audio_seconds * 1_000)
+                    if result.first_audio_seconds is not None
+                    else None
+                ),
             )
             return result.text
         except SpeechReplayUnsafeError:

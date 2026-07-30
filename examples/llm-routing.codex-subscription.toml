@@ -44,14 +44,18 @@ log_headers = false
 metrics_retention_days = 14
 
 [modes.talk]
-candidates = ["codex-talk", "local-talk"]
+candidates = ["codex-talk-luna", "codex-talk-terra", "codex-talk-sol", "local-talk"]
 max_output_tokens = 128
-first_speech_min_chars = 24
+first_speech_min_chars = 0
+speech_chunk_max_chars = 80
+first_visible_token_seconds = 15.0
 
 [modes.think]
-candidates = ["codex-think", "local-think"]
+candidates = ["codex-think-luna", "codex-think-terra", "codex-think-sol", "local-think"]
 max_output_tokens = 256
 first_speech_min_chars = 0
+speech_chunk_max_chars = 96
+first_visible_token_seconds = 30.0
 
 [providers.openai-codex]
 adapter = "codex_app_server"
@@ -60,20 +64,58 @@ locality = "remote"
 enabled = true
 internal_retries = 0
 
-[targets.codex-talk]
+[targets.codex-talk-luna]
+provider = "openai-codex"
+model = "gpt-5.6-luna"
+languages = ["it", "en"]
+retry_attempts = 1
+max_output_tokens = 128
+max_output_words = 50
+min_complexity_score = 0
+options = { reasoning_effort = "none" }
+
+[targets.codex-talk-terra]
+provider = "openai-codex"
+model = "gpt-5.6-terra"
+languages = ["it", "en"]
+retry_attempts = 1
+max_output_tokens = 128
+max_output_words = 50
+min_complexity_score = 3
+options = { reasoning_effort = "low" }
+
+[targets.codex-talk-sol]
 provider = "openai-codex"
 model = "gpt-5.6-sol"
 languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
 max_output_words = 50
+min_complexity_score = 5
 options = { reasoning_effort = "low" }
 
-[targets.codex-think]
+[targets.codex-think-luna]
+provider = "openai-codex"
+model = "gpt-5.6-luna"
+languages = ["it", "en"]
+retry_attempts = 1
+min_complexity_score = 0
+options = { reasoning_effort = "low" }
+
+[targets.codex-think-terra]
+provider = "openai-codex"
+model = "gpt-5.6-terra"
+languages = ["it", "en"]
+retry_attempts = 1
+min_complexity_score = 3
+options = { reasoning_effort = "medium" }
+
+[targets.codex-think-sol]
 provider = "openai-codex"
 model = "gpt-5.6-sol"
 languages = ["it", "en"]
 retry_attempts = 1
+min_complexity_score = 5
 options = { reasoning_effort = "medium" }
 
 [targets.local-talk]

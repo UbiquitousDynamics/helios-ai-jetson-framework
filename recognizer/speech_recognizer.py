@@ -195,8 +195,12 @@ class SpeechRecognizer:
     def listen(self, timeout: float | None = None) -> Iterator[str]:
         """Compatibility generator yielding only event text."""
 
-        for result in self.listen_events(timeout=timeout):
-            yield result.text
+        events = self.listen_events(timeout=timeout)
+        try:
+            for result in events:
+                yield result.text
+        finally:
+            events.close()
 
     def close(self) -> None:
         if self._closed:
