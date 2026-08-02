@@ -4,27 +4,36 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
 
 _SPEECH_MARKUP = re.compile(r"[*$#@]")
 _SENTENCE_BOUNDARY = re.compile(r"[.!?;:](?=\s|$)")
 
 
-@dataclass(slots=True)
 class SpeechChunker:
     """Turn text deltas into clean sentence or soft-boundary speech fragments."""
 
-    first_speech_min_chars: int = 0
-    speech_chunk_max_chars: int = 0
-    _buffer: str = field(init=False, default="")
-    _generated_chars: int = field(init=False, default=0)
-    _speech_committed: bool = field(init=False, default=False)
+    __slots__ = (
+        "first_speech_min_chars",
+        "speech_chunk_max_chars",
+        "_buffer",
+        "_generated_chars",
+        "_speech_committed",
+    )
 
-    def __post_init__(self) -> None:
-        if self.first_speech_min_chars < 0:
+    def __init__(
+        self,
+        first_speech_min_chars: int = 0,
+        speech_chunk_max_chars: int = 0,
+    ) -> None:
+        if first_speech_min_chars < 0:
             raise ValueError("first_speech_min_chars cannot be negative")
-        if self.speech_chunk_max_chars < 0:
+        if speech_chunk_max_chars < 0:
             raise ValueError("speech_chunk_max_chars cannot be negative")
+        self.first_speech_min_chars = first_speech_min_chars
+        self.speech_chunk_max_chars = speech_chunk_max_chars
+        self._buffer = ""
+        self._generated_chars = 0
+        self._speech_committed = False
 
     @property
     def speech_committed(self) -> bool:

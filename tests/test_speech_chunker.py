@@ -18,6 +18,7 @@ def test_negative_limits_are_rejected(kwargs: dict[str, int]) -> None:
 def test_complete_sentences_are_emitted_without_splitting_at_commas() -> None:
     chunker = SpeechChunker()
 
+    assert list(chunker.finish()) == []
     assert list(chunker.push("Hello, crew. Second sentence.")) == [
         "Hello, crew.",
         "Second sentence.",
