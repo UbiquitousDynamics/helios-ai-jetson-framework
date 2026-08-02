@@ -217,80 +217,17 @@ class StreamingResponseCoordinator:
                         cancellation=cancellation,
                         state=state,
                     )
-                    self._require_priced_model_identity(execution, result.metadata)
-                    charged = self._settle_success(
-                        reservation,
-                        execution,
-                        result.metadata,
-                        speech_committed=state.speech_committed,
-                    )
-                    latency = self._clock() - state.started_at
-                    if self.health is not None:
-                        rate_limits = result.metadata.rate_limits
-                        if rate_limits is not None and (
-                            rate_limits.remaining_requests == 0 or rate_limits.remaining_tokens == 0
-                        ):
-                            self.health.record_failure(
-                                target.health_key,
-                                ErrorCategory.RATE_LIMITED,
-                                retry_after_seconds=rate_limits.retry_after_seconds,
-                            )
-                        elif (
-                            maximum_first_audio_seconds is not None
-                            and target.remote
-                            and len(targets) > 1
-                            and result.first_audio_seconds is not None
-                            and result.first_audio_seconds > maximum_first_audio_seconds
-                        ):
-                            logger.warning(
-                                "Route %s completed but exceeded the first-audio health "
-                                "objective (%.0f ms > %.0f ms)",
-                                target.name,
-                                result.first_audio_seconds * 1_000,
-                                maximum_first_audio_seconds * 1_000,
-                            )
-                            self.health.record_failure(
-                                target.health_key,
-                                ErrorCategory.FIRST_TOKEN_TIMEOUT,
-                            )
-                        else:
-                            self.health.record_success(
-                                target.health_key,
-                                latency_seconds=latency,
-                            )
-                    self._record_metric(
-                        MetricEvent.from_usage(
-                            "llm_attempt_succeeded",
-                            result.metadata.usage,
-                            provider=target.provider,
-                            model=target.model,
-                            mode=request.mode,
-                            language=request.language,
-                            route_reason=route_reason,
-                            request_id=result.metadata.request_id,
-                            attempt_id=attempt_id,
-                            latency_ms=latency * 1_000,
-                            first_token_ms=self._elapsed_ms(
-                                state.started_at,
-                                state.first_token_at,
-                            ),
-                            first_audio_ms=self._elapsed_ms(
-                                state.started_at,
-                                state.first_audio_at,
-                            ),
-                            remaining_requests=(
-                                result.metadata.rate_limits.remaining_requests
-                                if result.metadata.rate_limits is not None
-                                else None
-                            ),
-                            remaining_tokens=(
-                                result.metadata.rate_limits.remaining_tokens
-                                if result.metadata.rate_limits is not None
-                                else None
-                            ),
-                            cost_usd=charged,
-                            fallback_count=fallback_index,
-                        )
+                    result = self._finalize_success(
+                        result=result,
+                        reservation=reservation,
+                        execution=execution,
+                        request=request,
+                        state=state,
+                        maximum_first_audio_seconds=maximum_first_audio_seconds,
+                        has_fallback=len(targets) > 1,
+                        fallback_index=fallback_index,
+                        attempt_id=attempt_id,
+                        route_reason=route_reason,
                     )
                     return replace(result, attempts=total_attempts)
                 except _SpeechFailure as wrapped:
@@ -742,6 +679,115 @@ class StreamingResponseCoordinator:
                 model=execution.route.model,
                 transmitted=False,
             ) from None
+
+    def _finalize_success(
+        self,
+        *,
+        result: StreamingResult,
+        reservation: Reservation | None,
+        execution: ExecutionTarget,
+        request: ChatRequest,
+        state: _AttemptState,
+        maximum_first_audio_seconds: float | None,
+        has_fallback: bool,
+        fallback_index: int,
+        attempt_id: str,
+        route_reason: str | None,
+    ) -> StreamingResult:
+        """Validate, settle, and observe one successful provider attempt."""
+
+        self._require_priced_model_identity(execution, result.metadata)
+        charged = self._settle_success(
+            reservation,
+            execution,
+            result.metadata,
+            speech_committed=state.speech_committed,
+        )
+        latency = self._clock() - state.started_at
+        self._record_success_health(
+            execution=execution,
+            result=result,
+            latency=latency,
+            maximum_first_audio_seconds=maximum_first_audio_seconds,
+            has_fallback=has_fallback,
+        )
+        rate_limits = result.metadata.rate_limits
+        self._record_metric(
+            MetricEvent.from_usage(
+                "llm_attempt_succeeded",
+                result.metadata.usage,
+                provider=execution.route.provider,
+                model=execution.route.model,
+                mode=request.mode,
+                language=request.language,
+                route_reason=route_reason,
+                request_id=result.metadata.request_id,
+                attempt_id=attempt_id,
+                latency_ms=latency * 1_000,
+                first_token_ms=self._elapsed_ms(
+                    state.started_at,
+                    state.first_token_at,
+                ),
+                first_audio_ms=self._elapsed_ms(
+                    state.started_at,
+                    state.first_audio_at,
+                ),
+                remaining_requests=(
+                    rate_limits.remaining_requests if rate_limits is not None else None
+                ),
+                remaining_tokens=(
+                    rate_limits.remaining_tokens if rate_limits is not None else None
+                ),
+                cost_usd=charged,
+                fallback_count=fallback_index,
+            )
+        )
+        return result
+
+    def _record_success_health(
+        self,
+        *,
+        execution: ExecutionTarget,
+        result: StreamingResult,
+        latency: float,
+        maximum_first_audio_seconds: float | None,
+        has_fallback: bool,
+    ) -> None:
+        if self.health is None:
+            return
+        target = execution.route
+        rate_limits = result.metadata.rate_limits
+        if rate_limits is not None and (
+            rate_limits.remaining_requests == 0 or rate_limits.remaining_tokens == 0
+        ):
+            self.health.record_failure(
+                target.health_key,
+                ErrorCategory.RATE_LIMITED,
+                retry_after_seconds=rate_limits.retry_after_seconds,
+            )
+        elif (
+            maximum_first_audio_seconds is not None
+            and target.remote
+            and has_fallback
+            and result.first_audio_seconds is not None
+            and result.first_audio_seconds > maximum_first_audio_seconds
+        ):
+            logger.warning(
+                "Route %s completed but exceeded the first-audio health "
+                "objective (%.0f ms > %.0f ms)",
+                target.name,
+                result.first_audio_seconds * 1_000,
+                maximum_first_audio_seconds * 1_000,
+            )
+            self.health.record_failure(
+                target.health_key,
+                ErrorCategory.FIRST_TOKEN_TIMEOUT,
+            )
+        else:
+            self.health.record_success(
+                target.health_key,
+                latency_seconds=latency,
+            )
 
     def _settle_success(
         self,

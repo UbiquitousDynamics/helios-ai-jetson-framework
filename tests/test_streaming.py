@@ -10,6 +10,7 @@ import pytest
 from api.budget import BudgetLedger, BudgetLimits
 from api.catalog import ModelPrice
 from api.health import HealthTracker
+from api.metrics import SafeMetricsRecorder
 from api.providers.contracts import (
     ChatMessage,
     ChatRequest,
@@ -432,6 +433,40 @@ def test_slow_success_does_not_open_the_only_local_route() -> None:
     snapshot = health.snapshot(target("first").health_key)
     assert snapshot.successes == 1
     assert snapshot.failures == 0
+
+
+def test_success_records_attempt_timings_without_response_content() -> None:
+    provider = FakeProvider(
+        "first",
+        [[TextDelta("Ready."), completion("first")]],
+    )
+    metrics = SafeMetricsRecorder()
+    observed_times = iter([10.0, 10.1, 10.2, 10.4])
+
+    result = coordinator(
+        provider,
+        metrics=metrics,
+        clock=lambda: next(observed_times),
+    ).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        speak=lambda _text: None,
+        route_reason="network.good",
+    )
+
+    assert result.text == "Ready."
+    event = metrics.snapshot()[0]
+    assert event.event == "llm_attempt_succeeded"
+    assert event.provider == "first"
+    assert event.model == "model"
+    assert event.mode == "talk"
+    assert event.language == "en"
+    assert event.route_reason == "network.good"
+    assert event.latency_ms == pytest.approx(400)
+    assert event.first_token_ms == pytest.approx(100)
+    assert event.first_audio_ms == pytest.approx(200)
+    assert event.fallback_count == 0
+    assert "Ready" not in str(event.as_dict())
 
 
 @pytest.mark.parametrize(
