@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from api._strict_json import duplicate_key_rejecting_hook
 from api.catalog import ModelPrice
 from api.providers.contracts import Usage
 
@@ -96,13 +97,10 @@ _SETTLE_KEYS = frozenset(
 )
 
 
-def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise BudgetError("budget ledger contains a duplicate record key")
-        value[key] = item
-    return value
+_strict_json_object = duplicate_key_rejecting_hook(
+    BudgetError,
+    "budget ledger contains a duplicate record key",
+)
 
 
 class BudgetLedger:

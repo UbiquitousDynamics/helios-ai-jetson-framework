@@ -7,13 +7,12 @@ and uses an isolated, read-only workspace with tool surfaces disabled.
 
 from __future__ import annotations
 
-import queue
 import os
-import shutil
+import queue
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -34,21 +33,21 @@ from api.providers.contracts import (
     TextDelta,
     Usage,
 )
+from api.providers.codex_session import (
+    CODEX_DISABLED_FEATURES,
+    codex_child_environment,
+    copy_chatgpt_auth,
+    field_value,
+)
 
 _ALLOWED_OPTIONS = frozenset({"reasoning_effort", "service_tier"})
 _ALLOWED_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
-_DISABLED_CODEX_FEATURES = (
-    "features.apps=false",
-    "features.plugins=false",
-    "features.search_tool=false",
-    "features.shell_tool=false",
-    "features.skill_search=false",
-    "features.standalone_web_search=false",
-    "features.tool_search=false",
-    "features.unified_exec=false",
-    "features.web_search=false",
-    "features.web_search_request=false",
-)
+# Private aliases remain temporarily available for compatibility with existing
+# integrations and tests. New callers should use ``codex_session`` directly.
+_DISABLED_CODEX_FEATURES = CODEX_DISABLED_FEATURES
+_codex_child_env = codex_child_environment
+_copy_chatgpt_auth = copy_chatgpt_auth
+_field = field_value
 _BASE_INSTRUCTIONS = """\
 You are the remote language-model backend for the Helios voice assistant.
 Answer the user's request directly, in the requested language, as natural-language text.
@@ -81,30 +80,6 @@ class _Runtime(Protocol):
     def close(self) -> None: ...
 
 
-def _codex_child_env(codex_home: Path | None = None) -> dict[str, str]:
-    """Force Codex to ignore API credentials and use its local account profile."""
-
-    child_env = {
-        "OPENAI_API_KEY": "",
-        "CODEX_API_KEY": "",
-    }
-    if codex_home is not None:
-        child_env["CODEX_HOME"] = str(codex_home)
-    return child_env
-
-
-def _copy_chatgpt_auth(source_home: Path, isolated_home: Path) -> None:
-    """Copy only Codex authentication, never user tools or project settings."""
-
-    isolated_home.mkdir(mode=0o700, parents=True, exist_ok=False)
-    source = source_home / "auth.json"
-    if not source.is_file() or source.is_symlink():
-        return
-    destination = isolated_home / "auth.json"
-    shutil.copyfile(source, destination)
-    destination.chmod(0o600)
-
-
 class _OfficialCodexRuntime:
     def __init__(self) -> None:
         try:
@@ -124,11 +99,11 @@ class _OfficialCodexRuntime:
         source_home = Path(
             os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
         ).expanduser()
-        _copy_chatgpt_auth(source_home, self._codex_home)
+        copy_chatgpt_auth(source_home, self._codex_home)
         config = CodexConfig(
             cwd=str(self._working_directory),
-            env=_codex_child_env(self._codex_home),
-            config_overrides=_DISABLED_CODEX_FEATURES,
+            env=codex_child_environment(self._codex_home),
+            config_overrides=CODEX_DISABLED_FEATURES,
             client_name="helios",
             client_title="Helios Voice Assistant",
         )
@@ -136,11 +111,11 @@ class _OfficialCodexRuntime:
 
     def account_kind(self) -> str | None:
         response = self._client.account(refresh_token=False)
-        account = _field(response, "account")
+        account = field_value(response, "account")
         if account is None:
             return None
-        account = _field(account, "root", account)
-        kind = _field(account, "type")
+        account = field_value(account, "root", account)
+        kind = field_value(account, "type")
         return kind if isinstance(kind, str) else None
 
     def start_turn(
@@ -177,32 +152,26 @@ class _OfficialCodexRuntime:
             self._workspace.cleanup()
 
 
-def _field(value: Any, name: str, default: Any = None) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name, default)
-    return getattr(value, name, default)
-
-
 def _notification_parts(notification: Any) -> tuple[str | None, Any]:
-    root = _field(notification, "root", notification)
-    method = _field(root, "method")
-    payload = _field(root, "payload")
+    root = field_value(notification, "root", notification)
+    method = field_value(root, "method")
+    payload = field_value(root, "payload")
     if payload is None:
-        payload = _field(root, "params")
+        payload = field_value(root, "params")
     return (method if isinstance(method, str) else None), payload
 
 
 def _usage(payload: Any) -> Usage:
-    token_usage = _field(payload, "token_usage")
+    token_usage = field_value(payload, "token_usage")
     if token_usage is None:
-        token_usage = _field(payload, "tokenUsage")
-    latest = _field(token_usage, "last", token_usage)
+        token_usage = field_value(payload, "tokenUsage")
+    latest = field_value(token_usage, "last", token_usage)
     if latest is None:
         return Usage()
 
     def integer(*names: str) -> int | None:
         for name in names:
-            value = _field(latest, name)
+            value = field_value(latest, name)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 return value
         return None
@@ -552,7 +521,7 @@ class CodexAppServerAdapter:
                 continue
 
             if kind == "turn":
-                candidate = _field(value, "id")
+                candidate = field_value(value, "id")
                 request_id = candidate if isinstance(candidate, str) else None
                 continue
             if kind == "auth":
@@ -588,7 +557,7 @@ class CodexAppServerAdapter:
             method, payload = _notification_parts(value)
             if method in {"item/agentMessage/delta", "item/reasoning/textDelta",
                           "item/reasoning/summaryTextDelta"}:
-                delta = _field(payload, "delta")
+                delta = field_value(payload, "delta")
                 if not isinstance(delta, str) or not delta:
                     continue
                 visible_delta = method == "item/agentMessage/delta"
@@ -619,24 +588,24 @@ class CodexAppServerAdapter:
                 usage = _usage(payload)
                 continue
             if method == "model/rerouted":
-                candidate = _field(payload, "to_model")
+                candidate = field_value(payload, "to_model")
                 if candidate is None:
-                    candidate = _field(payload, "toModel")
+                    candidate = field_value(payload, "toModel")
                 if isinstance(candidate, str) and candidate:
                     resolved_model = candidate
                 continue
             if method != "turn/completed":
                 continue
 
-            turn_payload = _field(payload, "turn", payload)
-            status = _field(turn_payload, "status")
+            turn_payload = field_value(payload, "turn", payload)
+            status = field_value(turn_payload, "status")
             if hasattr(status, "value"):
                 status = status.value
             if status != "completed":
                 stop_requested.set()
-                error = _field(turn_payload, "error")
+                error = field_value(turn_payload, "error")
                 category, retryable = _classify_exception(
-                    RuntimeError(str(_field(error, "message", status)))
+                    RuntimeError(str(field_value(error, "message", status)))
                 )
                 if status == "interrupted":
                     category = ErrorCategory.CANCELLED

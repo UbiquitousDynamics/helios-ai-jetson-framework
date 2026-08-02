@@ -184,6 +184,29 @@ def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     assert sleeps == [0.25]
 
 
+def test_exhausted_route_reports_total_attempt_count() -> None:
+    failures = [
+        ProviderError(
+            ErrorCategory.CONNECTIVITY,
+            "temporarily unavailable",
+            provider="first",
+            model="model",
+            retryable_same_provider=True,
+        )
+        for _ in range(2)
+    ]
+    provider = FakeProvider("first", failures)
+    runner = coordinator(provider, retry_wait=0)
+
+    with pytest.raises(ProviderError) as captured:
+        runner.run(
+            request(),
+            (ExecutionTarget(target("first"), retry_attempts=2),),
+        )
+
+    assert captured.value.attempts == 2
+
+
 def test_stream_never_retries_or_falls_back_after_speech_commit() -> None:
     first = FakeProvider("first", [interrupted_after_speech()])
     second = FakeProvider(

@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
 
+from api._strict_json import duplicate_key_rejecting_hook
 from api.providers.contracts import Usage
 
 
@@ -37,13 +38,10 @@ _MODEL_OPTIONAL_KEYS = frozenset(
 _MILLION = Decimal(1_000_000)
 
 
-def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise CatalogError("model catalog contains a duplicate key")
-        value[key] = item
-    return value
+_strict_json_object = duplicate_key_rejecting_hook(
+    CatalogError,
+    "model catalog contains a duplicate key",
+)
 
 
 @dataclass(frozen=True, slots=True)

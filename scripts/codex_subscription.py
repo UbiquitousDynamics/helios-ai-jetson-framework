@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -16,17 +16,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from api.providers.codex_app_server import (  # noqa: E402
-    _DISABLED_CODEX_FEATURES,
-    _codex_child_env,
-    _copy_chatgpt_auth,
+from api.providers.codex_session import (  # noqa: E402
+    CODEX_DISABLED_FEATURES,
+    codex_child_environment,
+    copy_chatgpt_auth,
+    field_value,
 )
-
-
-def _field(value: Any, name: str, default: Any = None) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name, default)
-    return getattr(value, name, default)
 
 
 @contextmanager
@@ -46,11 +41,11 @@ def _client(*, persist_auth: bool = False) -> Iterator[Any]:
         workspace = root / "workspace"
         workspace.mkdir(mode=0o700)
         isolated_home = root / "codex-home"
-        _copy_chatgpt_auth(source_home, isolated_home)
+        copy_chatgpt_auth(source_home, isolated_home)
         config = CodexConfig(
             cwd=str(workspace),
-            env=_codex_child_env(isolated_home),
-            config_overrides=_DISABLED_CODEX_FEATURES,
+            env=codex_child_environment(isolated_home),
+            config_overrides=CODEX_DISABLED_FEATURES,
             client_name="helios_admin",
             client_title="Helios Codex Account Setup",
         )
@@ -68,8 +63,8 @@ def _client(*, persist_auth: bool = False) -> Iterator[Any]:
 
 
 def _account_root(response: Any) -> Any:
-    account = _field(response, "account")
-    return _field(account, "root", account) if account is not None else None
+    account = field_value(response, "account")
+    return field_value(account, "root", account) if account is not None else None
 
 
 def status() -> int:
@@ -78,8 +73,8 @@ def status() -> int:
     if root is None:
         print("Codex account: not signed in")
         return 1
-    kind = _field(root, "type", "unknown")
-    plan = _field(root, "plan_type", _field(root, "planType"))
+    kind = field_value(root, "type", "unknown")
+    plan = field_value(root, "plan_type", field_value(root, "planType"))
     print(f"Codex account type: {kind}")
     if plan is not None:
         print(f"ChatGPT plan: {getattr(plan, 'value', plan)}")
@@ -104,15 +99,15 @@ def login() -> int:
 def models() -> int:
     with _client() as client:
         root = _account_root(client.account(refresh_token=False))
-        if _field(root, "type") != "chatgpt":
+        if field_value(root, "type") != "chatgpt":
             print("A ChatGPT Codex sign-in is required.", file=sys.stderr)
             return 2
         response = client.models(include_hidden=False)
-    items = _field(response, "data", ())
+    items = field_value(response, "data", ())
     ids = sorted(
         identifier
         for item in items
-        if isinstance((identifier := _field(item, "id")), str)
+        if isinstance((identifier := field_value(item, "id")), str)
     )
     if not ids:
         print("No Codex models were returned for this account.", file=sys.stderr)

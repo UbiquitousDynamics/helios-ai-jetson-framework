@@ -927,7 +927,7 @@ class APIClient:
                 "the request was not retried"
             ) from None
         except ProviderError as error:
-            attempts = getattr(error, "attempts", 1)
+            attempts = error.attempts
             if attempts > 1:
                 raise APIClientError(
                     f"Unable to stream a model response after {attempts} attempt(s)"

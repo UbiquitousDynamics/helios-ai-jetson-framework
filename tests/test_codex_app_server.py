@@ -10,11 +10,8 @@ import pytest
 
 import config
 from api.api_client import APIClient
-from api.providers.codex_app_server import (
-    CodexAppServerAdapter,
-    _codex_child_env,
-    _copy_chatgpt_auth,
-)
+from api.providers.codex_app_server import CodexAppServerAdapter
+from api.providers.codex_session import codex_child_environment, copy_chatgpt_auth
 from api.providers.contracts import (
     ChatMessage,
     ChatRequest,
@@ -108,7 +105,7 @@ def request(**overrides: Any) -> ChatRequest:
 
 
 def test_child_environment_prevents_api_key_auth() -> None:
-    assert _codex_child_env() == {
+    assert codex_child_environment() == {
         "OPENAI_API_KEY": "",
         "CODEX_API_KEY": "",
     }
@@ -123,13 +120,13 @@ def test_isolated_codex_home_copies_auth_but_not_user_configuration(
     (source / "config.toml").write_text("[mcp_servers.unsafe]", encoding="utf-8")
     isolated = tmp_path / "isolated"
 
-    _copy_chatgpt_auth(source, isolated)
+    copy_chatgpt_auth(source, isolated)
 
     assert (isolated / "auth.json").read_text(encoding="utf-8") == (
         '{"auth_mode":"chatgpt"}'
     )
     assert not (isolated / "config.toml").exists()
-    child_env = _codex_child_env(isolated)
+    child_env = codex_child_environment(isolated)
     assert child_env["CODEX_HOME"] == str(isolated)
 
 
