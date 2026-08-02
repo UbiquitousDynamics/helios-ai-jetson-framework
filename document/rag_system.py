@@ -603,6 +603,16 @@ class RagSystem:
         else:
             self.load_embedding_matrix()
 
+    def prepare(self) -> bool:
+        """Load an existing index without triggering an implicit index build."""
+
+        if self._ready:
+            return True
+        if self.reindex or not Path(self.emb_file).is_file():
+            return False
+        self.load_embedding_matrix()
+        return True
+
     def search(
         self,
         query: str,

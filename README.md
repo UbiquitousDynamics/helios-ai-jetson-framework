@@ -471,8 +471,11 @@ app-server startup and ChatGPT account validation also begin in a background
 thread while the welcome message is spoken. Preparation sends no prompt and
 starts no inference turn.
 
-The embedding model and corpus are not loaded during normal startup. RAG is
-initialized only after the user enters RAG mode and asks a question.
+The embedding model and corpus are not loaded during normal startup. When the
+user enters RAG mode, Helios prepares the model and any existing validated
+index in the background while the user asks the question. A missing index is
+not built during listening; that expensive operation remains part of the query
+path or the explicit index-building command.
 
 ### Conversational command
 
@@ -525,7 +528,12 @@ sequenceDiagram
     User->>VA: "regolamento"
     VA->>VA: Enter RAG state
     VA->>VA: Queue wake sound
-    User->>VA: Ask question
+    par User asks question
+        User->>VA: Ask question
+    and Existing RAG preparation
+        VA->>R: prepare()
+        R->>FS: Load and validate existing index only
+    end
     VA->>R: run(query, top_k=settings.top_k)
     R->>FS: Read corpus snapshot
     alt embeddings.npz is missing
@@ -1176,7 +1184,7 @@ Expected behavior:
 4. Vosk/PyAudio prepare in the background without opening the input stream;
 5. Piper loads and speaks the localized welcome message concurrently;
 6. the assistant waits in `COMMAND` state;
-7. Ollama or RAG resources initialize only when their flow is used.
+7. Ollama stays lazy until inference; RAG stays lazy until RAG-mode entry.
 
 Typical content-free INFO records for a hybrid request look like:
 
@@ -1558,6 +1566,9 @@ specific Jetson audio/inference image is correctly provisioned.
 - Already normalized encoder output is reused without another division/copy.
 - RAG top-k selection partitions the similarity vector in linear time and
   deterministically sorts only the selected candidates.
+- RAG model and existing-index loading overlap the interval between the RAG
+  trigger and the following spoken question; missing indexes are never built
+  by this background preparation.
 - No startup RAG query is executed and discarded.
 - No constructor sends an Ollama warm-up request by default.
 - Eligible Codex startup/account validation overlaps the welcome message and

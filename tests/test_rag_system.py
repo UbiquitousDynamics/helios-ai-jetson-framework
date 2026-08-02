@@ -101,6 +101,29 @@ def test_retrieve_caches_corpus_and_index_and_returns_provenance(tmp_path: Path)
     assert len(encoder.calls) == 3  # one corpus batch, then one encoding per query
 
 
+def test_prepare_loads_existing_index_without_encoding_a_query(tmp_path: Path) -> None:
+    make_rag(tmp_path, "Alpha sentence. Beta sentence.").index_database()
+    encoder = FakeEncoder()
+    fresh = make_rag(
+        tmp_path,
+        "Alpha sentence. Beta sentence.",
+        encoder=encoder,
+        reindex=False,
+    )
+
+    assert fresh.prepare() is True
+    assert fresh.manifest is not None
+    assert encoder.calls == []
+
+
+def test_prepare_never_builds_a_missing_index(tmp_path: Path) -> None:
+    rag = make_rag(tmp_path, "Alpha sentence.", reindex=False)
+
+    assert rag.prepare() is False
+    assert rag.manifest is None
+    assert not (tmp_path / "embeddings.npz").exists()
+
+
 def test_legacy_index_without_manifest_is_rejected(tmp_path: Path) -> None:
     rag = make_rag(tmp_path, "Only one sentence.", reindex=False)
     with (tmp_path / "embeddings.npz").open("wb") as handle:

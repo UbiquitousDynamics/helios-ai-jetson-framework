@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -85,6 +86,9 @@ class VoiceAssistant:
 
         self._rag_searcher = rag_searcher
         self._rag_factory = rag_factory
+        self._rag_lock = threading.RLock()
+        self._rag_prepare_future: Future[Any] | None = None
+        self._rag_prepared = False
         self._sound_executor = sound_executor or ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="helios-sound",
@@ -210,10 +214,18 @@ class VoiceAssistant:
         if not command:
             raise RagCommandError("RAG command cannot be empty")
         try:
-            result = (searcher or self._get_rag_searcher()).run(
-                query=command,
-                top_k=self.settings.top_k,
-            )
+            if searcher is not None:
+                result = searcher.run(
+                    query=command,
+                    top_k=self.settings.top_k,
+                )
+            else:
+                with self._rag_lock:
+                    result = self._get_rag_searcher().run(
+                        query=command,
+                        top_k=self.settings.top_k,
+                    )
+                    self._rag_prepared = True
             result_text = self._rag_result_text(result).strip()
             if not result_text:
                 raise RagCommandError("The RAG search returned no text")
@@ -225,22 +237,48 @@ class VoiceAssistant:
             raise RagCommandError("Unable to answer the RAG command") from exc
 
     def _get_rag_searcher(self) -> Any:
-        if self._rag_searcher is None:
-            try:
-                if self._rag_factory is not None:
-                    self._rag_searcher = self._rag_factory()
-                else:
-                    from document.rag_system import RagSystem
+        with self._rag_lock:
+            if self._rag_searcher is None:
+                try:
+                    if self._rag_factory is not None:
+                        self._rag_searcher = self._rag_factory()
+                    else:
+                        from document.rag_system import RagSystem
 
-                    self._rag_searcher = RagSystem(
-                        txt_dir=str(self.settings.upload_folder),
-                        emb_file=str(self.settings.embeddings_file),
-                        model_name=str(self.settings.sentence_transformer_model),
-                        reindex=False,
-                    )
-            except Exception as exc:
-                raise RagCommandError("Unable to initialize the RAG searcher") from exc
-        return self._rag_searcher
+                        self._rag_searcher = RagSystem(
+                            txt_dir=str(self.settings.upload_folder),
+                            emb_file=str(self.settings.embeddings_file),
+                            model_name=str(self.settings.sentence_transformer_model),
+                            reindex=False,
+                        )
+                except Exception as exc:
+                    raise RagCommandError("Unable to initialize the RAG searcher") from exc
+            return self._rag_searcher
+
+    def _prepare_rag(self) -> None:
+        try:
+            with self._rag_lock:
+                searcher = self._get_rag_searcher()
+                prepare = getattr(searcher, "prepare", None)
+                prepared = True if not callable(prepare) else prepare() is not False
+                self._rag_prepared = prepared
+                logger.info("RAG background preparation completed (ready=%s)", prepared)
+        except Exception:
+            logger.warning("RAG background preparation failed", exc_info=True)
+
+    def prepare_rag_async(self) -> Future[Any] | None:
+        """Queue lazy RAG preparation behind the entry notification sound."""
+
+        with self._rag_lock:
+            if self._closed or self._rag_prepared:
+                return self._rag_prepare_future
+            if (
+                self._rag_prepare_future is not None
+                and not self._rag_prepare_future.done()
+            ):
+                return self._rag_prepare_future
+            self._rag_prepare_future = self._sound_executor.submit(self._prepare_rag)
+            return self._rag_prepare_future
 
     @staticmethod
     def _log_sound_failure(future: Future[Any]) -> None:
@@ -295,6 +333,7 @@ class VoiceAssistant:
         if self.state is AssistantState.COMMAND:
             if self._contains_rag_word(command):
                 self.play_sound_async(str(self.settings.wake_sound))
+                self.prepare_rag_async()
                 self.state = AssistantState.RAG
                 logger.info("Entering RAG mode")
                 return True

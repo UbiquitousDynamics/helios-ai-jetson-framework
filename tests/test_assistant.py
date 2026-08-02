@@ -98,6 +98,11 @@ class ImmediateExecutor:
 class FakeRag:
     def __init__(self) -> None:
         self.queries: list[tuple[str, int]] = []
+        self.prepare_calls = 0
+
+    def prepare(self) -> bool:
+        self.prepare_calls += 1
+        return True
 
     def run(self, query: str, top_k: int) -> str:
         self.queries.append((query, top_k))
@@ -188,6 +193,7 @@ def test_rag_state_transition_has_no_startup_warmup_query() -> None:
     assert assistant.run_once()
     assert assistant.state is AssistantState.RAG
     assert rag.queries == []
+    assert rag.prepare_calls == 1
     assert api.messages == []
 
     assert assistant.run_once()
