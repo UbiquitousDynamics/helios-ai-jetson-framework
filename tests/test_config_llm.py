@@ -198,12 +198,68 @@ options = { api_key = "must-not-be-here" }
         "llm-routing.free-tier-first.toml",
         "llm-routing.paid-first.toml",
         "llm-routing.local-first-escalation.toml",
+        "llm-routing.codex-subscription.toml",
     ],
 )
 def test_committed_routing_examples_are_valid(name: str) -> None:
     settings = config.load_llm_settings(PROJECT_ROOT / "examples" / name)
 
     assert settings.routing_file is not None
+
+
+def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.health.maximum_talk_first_audio_ms == 30_000
+
+
+def test_codex_subscription_has_target_specific_talk_limits() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+    targets = {target.name: target for target in settings.targets}
+
+    for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol"):
+        assert targets[name].max_output_words == 50
+        assert targets[name].max_output_tokens == 128
+    assert targets["local-talk"].max_output_words == 20
+    assert targets["local-talk"].max_output_tokens == 40
+    assert targets["codex-think-sol"].max_output_words is None
+
+
+def test_codex_subscription_has_adaptive_remote_tiers_and_fast_speech() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+    targets = {target.name: target for target in settings.targets}
+
+    assert [
+        targets[name].model for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol")
+    ] == ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]
+    assert [
+        targets[name].min_complexity_score
+        for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol")
+    ] == [0, 3, 5]
+    assert settings.talk.first_speech_min_chars == 0
+    assert settings.talk.speech_chunk_max_chars == 80
+    assert settings.talk.first_visible_token_seconds == 15.0
+
+
+def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.unknown_connectivity == "prefer_local"
+    assert settings.network.enabled
+    assert settings.network.probe_url == "https://chatgpt.com/"
+    assert settings.network.probe_interval_seconds == 3.0
+    assert settings.network.result_max_age_seconds == 6.0
+    assert settings.network.probe_timeout_seconds == 1.2
+    assert settings.network.probe_bytes == 32_768
+    assert settings.network.goodput_probe_interval_seconds == 60.0
 
 
 @pytest.mark.parametrize(
@@ -213,6 +269,23 @@ def test_committed_routing_examples_are_valid(name: str) -> None:
         'schema_version = 1\n[router]\nremote_enabled = "false"\n',
         'schema_version = 1\n[budget]\nenabled = "false"\n',
         "schema_version = 1\n[modes.talk]\nmax_output_tokens = true\n",
+        "schema_version = 1\n[modes.talk]\nspeech_chunk_max_chars = true\n",
+        "schema_version = 1\n[modes.talk]\nfirst_visible_token_seconds = true\n",
+        'schema_version = 1\n[network]\nenabled = "true"\n',
+        "schema_version = 1\n[network]\nrequire_wifi = 1\n",
+        'schema_version = 1\n[network]\nprobe_url = "http://example.invalid/"\n',
+        (
+            "schema_version = 1\n[network]\nprobe_interval_seconds = 10.0\n"
+            "goodput_probe_interval_seconds = 5.0\n"
+        ),
+        (
+            'schema_version = 1\n[targets.local]\nprovider = "ollama"\n'
+            'model = "test"\nmax_output_words = true\n'
+        ),
+        (
+            'schema_version = 1\n[targets.remote]\nprovider = "ollama"\n'
+            'model = "test"\nmin_complexity_score = true\n'
+        ),
         "schema_version = 1\n[timeouts]\nconnect_seconds = 1" + ("0" * 400) + "\n",
     ],
 )
@@ -260,3 +333,31 @@ def test_denylist_typos_and_inconsistent_adapter_locality_are_rejected() -> None
             endpoint="http://127.0.0.1:8000/v1",
             locality="device",
         )
+
+
+def test_codex_provider_requires_stdio_and_forbids_api_key_configuration() -> None:
+    provider = config.LLMProviderSettings(
+        name="openai-codex",
+        adapter="codex_app_server",
+        endpoint="stdio://codex",
+        locality="remote",
+    )
+
+    assert provider.api_key_env is None
+
+    with pytest.raises(config.ConfigurationError, match="local ChatGPT sign-in"):
+        config.LLMProviderSettings(
+            name="openai-codex",
+            adapter="codex_app_server",
+            endpoint="stdio://codex",
+            locality="remote",
+            api_key_env="OPENAI_API_KEY",
+        )
+    for invalid_endpoint in ("stdio://other", "stdio://codex/", "stdio://codex:123"):
+        with pytest.raises(config.ConfigurationError, match="exactly"):
+            config.LLMProviderSettings(
+                name="openai-codex",
+                adapter="codex_app_server",
+                endpoint=invalid_endpoint,
+                locality="remote",
+            )

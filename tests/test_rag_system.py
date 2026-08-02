@@ -101,6 +101,29 @@ def test_retrieve_caches_corpus_and_index_and_returns_provenance(tmp_path: Path)
     assert len(encoder.calls) == 3  # one corpus batch, then one encoding per query
 
 
+def test_prepare_loads_existing_index_without_encoding_a_query(tmp_path: Path) -> None:
+    make_rag(tmp_path, "Alpha sentence. Beta sentence.").index_database()
+    encoder = FakeEncoder()
+    fresh = make_rag(
+        tmp_path,
+        "Alpha sentence. Beta sentence.",
+        encoder=encoder,
+        reindex=False,
+    )
+
+    assert fresh.prepare() is True
+    assert fresh.manifest is not None
+    assert encoder.calls == []
+
+
+def test_prepare_never_builds_a_missing_index(tmp_path: Path) -> None:
+    rag = make_rag(tmp_path, "Alpha sentence.", reindex=False)
+
+    assert rag.prepare() is False
+    assert rag.manifest is None
+    assert not (tmp_path / "embeddings.npz").exists()
+
+
 def test_legacy_index_without_manifest_is_rejected(tmp_path: Path) -> None:
     rag = make_rag(tmp_path, "Only one sentence.", reindex=False)
     with (tmp_path / "embeddings.npz").open("wb") as handle:
@@ -174,6 +197,48 @@ def test_top_k_boundaries_and_ties_are_stable(tmp_path: Path) -> None:
     for invalid in (0, -1, 4, True, 1.5):
         with pytest.raises(ValueError, match="top_k"):
             rag.search("query", matrix, top_k=invalid)  # type: ignore[arg-type]
+
+
+def test_partial_top_k_keeps_lowest_rows_at_cutoff_tie(tmp_path: Path) -> None:
+    rag = make_rag(tmp_path, "Alpha. Beta. Gamma. Delta. Epsilon.")
+    matrix = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.8, 0.6],
+            [0.8, 0.6],
+            [0.8, 0.6],
+            [0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    rag.model.encode = lambda *_args, **_kwargs: np.asarray(  # type: ignore[method-assign]
+        [[1.0, 0.0]],
+        dtype=np.float32,
+    )
+
+    assert rag.search("query", matrix, top_k=3) == [
+        (0, 1.0),
+        (1, pytest.approx(0.8)),
+        (2, pytest.approx(0.8)),
+    ]
+
+
+def test_already_normalized_encoder_output_is_reused(tmp_path: Path) -> None:
+    matrix = np.asarray([[1.0, 0.0]], dtype=np.float32)
+
+    class NormalizedEncoder:
+        def encode(self, _sentences: list[str], **_: object) -> np.ndarray:
+            return matrix
+
+    rag = make_rag(
+        tmp_path,
+        "Alpha.",
+        encoder=NormalizedEncoder(),  # type: ignore[arg-type]
+    )
+
+    encoded = rag._encode_batch(["query"])
+
+    assert encoded is matrix
 
 
 def test_local_model_identity_is_path_independent(tmp_path: Path) -> None:

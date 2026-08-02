@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 import wave
 from pathlib import Path
 from typing import Any, Protocol
@@ -36,7 +37,53 @@ class AudioPlaybackError(TTSError):
 
 
 class SoundDeviceBackend:
-    """Lazy sounddevice adapter used by the production runtime."""
+    """Persistent blocking sounddevice stream used by the production runtime."""
+
+    _DTYPE_BY_WIDTH = {
+        1: "uint8",
+        2: "int16",
+        4: "int32",
+    }
+
+    def __init__(self, *, sounddevice_module: Any | None = None) -> None:
+        self._sounddevice = sounddevice_module
+        self._stream: Any | None = None
+        self._stream_format: tuple[int, int, str] | None = None
+        self._lock = threading.RLock()
+
+    def _module(self) -> Any:
+        if self._sounddevice is None:
+            try:
+                import sounddevice as sd
+            except ImportError as exc:  # pragma: no cover - deployment dependency
+                raise AudioPlaybackError("sounddevice is required for TTS playback") from exc
+            self._sounddevice = sd
+        return self._sounddevice
+
+    def _close_stream(self) -> None:
+        stream = self._stream
+        self._stream = None
+        self._stream_format = None
+        if stream is not None:
+            stream.close()
+
+    def _get_stream(
+        self,
+        sample_rate: int,
+        channels: int,
+        dtype: str,
+    ) -> Any:
+        stream_format = (sample_rate, channels, dtype)
+        if self._stream is not None and self._stream_format == stream_format:
+            return self._stream
+        self._close_stream()
+        self._stream = self._module().RawOutputStream(
+            samplerate=sample_rate,
+            channels=channels,
+            dtype=dtype,
+        )
+        self._stream_format = stream_format
+        return self._stream
 
     def play(
         self,
@@ -46,24 +93,35 @@ class SoundDeviceBackend:
         sample_width: int,
     ) -> None:
         try:
-            import numpy as np
-            import sounddevice as sd
-        except ImportError as exc:  # pragma: no cover - deployment dependency
-            raise AudioPlaybackError("numpy and sounddevice are required for TTS playback") from exc
-
-        dtype_by_width = {1: np.uint8, 2: np.int16, 4: np.int32}
-        try:
-            dtype = dtype_by_width[sample_width]
-        except KeyError as exc:
+            dtype = self._DTYPE_BY_WIDTH[sample_width]
+        except KeyError:
             raise AudioPlaybackError(
                 f"Unsupported PCM sample width: {sample_width} byte(s)"
-            ) from exc
+            ) from None
 
-        samples = np.frombuffer(frames, dtype=dtype)
-        if channels > 1:
-            samples = samples.reshape((-1, channels))
-        sd.play(samples, sample_rate)
-        sd.wait()
+        with self._lock:
+            try:
+                stream = self._get_stream(sample_rate, channels, dtype)
+                stream.start()
+                underflowed = stream.write(frames)
+                stream.stop()
+                if underflowed:
+                    logger.warning("Audio output underflow while playing TTS")
+            except AudioPlaybackError:
+                raise
+            except Exception as exc:
+                try:
+                    self._close_stream()
+                except Exception:
+                    pass
+                raise AudioPlaybackError("Unable to play synthesized audio") from exc
+
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._close_stream()
+            except Exception as exc:
+                raise AudioPlaybackError("Unable to close the audio output") from exc
 
 
 class PiperTTS:
@@ -161,6 +219,9 @@ class PiperTTS:
             raise AudioPlaybackError("Unable to play synthesized audio") from exc
 
     def speak(self, text: str) -> None:
+        if text and text.strip() and not any(character.isalnum() for character in text):
+            logger.debug("Skipping punctuation-only speech fragment")
+            return
         logger.debug("Synthesizing %s character(s) of speech", len(text))
         output = self.synthesize_wave(text)
         self._play_wave(output)

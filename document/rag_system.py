@@ -335,6 +335,8 @@ class RagSystem:
         norms = np.linalg.norm(matrix, axis=1)
         if np.any(norms == 0):
             raise IndexIntegrityError("Embedding encoder returned a zero-length vector")
+        if np.allclose(norms, 1.0, rtol=1e-4, atol=1e-6):
+            return np.ascontiguousarray(matrix)
         normalized = matrix / norms[:, np.newaxis]
         return np.ascontiguousarray(normalized.astype(matrix.dtype, copy=False))
 
@@ -601,6 +603,16 @@ class RagSystem:
         else:
             self.load_embedding_matrix()
 
+    def prepare(self) -> bool:
+        """Load an existing index without triggering an implicit index build."""
+
+        if self._ready:
+            return True
+        if self.reindex or not Path(self.emb_file).is_file():
+            return False
+        self.load_embedding_matrix()
+        return True
+
     def search(
         self,
         query: str,
@@ -635,8 +647,22 @@ class RagSystem:
         if not np.isfinite(similarities).all():
             raise IndexIntegrityError("Similarity calculation produced non-finite values")
 
+        if requested == len(similarities):
+            candidates = np.arange(len(similarities))
+        else:
+            # Partition finds the cutoff in linear time. Include all strictly
+            # better rows, then the lowest row indices tied at the boundary so
+            # results remain deterministic without sorting the full corpus.
+            cutoff = np.partition(similarities, len(similarities) - requested)[
+                len(similarities) - requested
+            ]
+            better = np.flatnonzero(similarities > cutoff)
+            boundary = np.flatnonzero(similarities == cutoff)
+            candidates = np.concatenate((better, boundary[: requested - len(better)]))
+
         # lexsort uses the final key as primary: descending score, then row index.
-        ranked = np.lexsort((np.arange(len(similarities)), -similarities))[:requested]
+        order = np.lexsort((candidates, -similarities[candidates]))
+        ranked = candidates[order]
         return [(int(index), float(similarities[index])) for index in ranked]
 
     def retrieve(self, query: str, top_k: int = 5) -> list[RetrievedPassage]:

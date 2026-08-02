@@ -130,11 +130,111 @@ class LLMObservabilitySettings:
 
 
 @dataclass(frozen=True)
+class LLMNetworkSettings:
+    enabled: bool = False
+    probe_url: str = "https://chatgpt.com/"
+    probe_interval_seconds: float = 3.0
+    result_max_age_seconds: float = 6.0
+    probe_timeout_seconds: float = 1.2
+    probe_bytes: int = 32_768
+    goodput_probe_interval_seconds: float = 60.0
+    minimum_quality_score: float = 0.50
+    quality_hysteresis: float = 0.05
+    target_ttfb_ms: float = 1_200.0
+    target_jitter_ms: float = 300.0
+    minimum_goodput_kbps: float = 128.0
+    history_size: int = 8
+    require_wifi: bool = False
+    interface_allowlist: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool) or not isinstance(self.require_wifi, bool):
+            raise ConfigurationError("network enabled and require_wifi must be booleans")
+        parsed = urlsplit(self.probe_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise ConfigurationError(
+                "network probe_url must be an HTTPS URL without credentials or fragment"
+            )
+        positive_values = (
+            ("probe_interval_seconds", self.probe_interval_seconds),
+            ("result_max_age_seconds", self.result_max_age_seconds),
+            ("probe_timeout_seconds", self.probe_timeout_seconds),
+            (
+                "goodput_probe_interval_seconds",
+                self.goodput_probe_interval_seconds,
+            ),
+            ("target_ttfb_ms", self.target_ttfb_ms),
+            ("target_jitter_ms", self.target_jitter_ms),
+            ("minimum_goodput_kbps", self.minimum_goodput_kbps),
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value <= 0
+            for _name, value in positive_values
+        ):
+            raise ConfigurationError("network timing and quality targets must be positive")
+        if self.result_max_age_seconds < self.probe_interval_seconds:
+            raise ConfigurationError(
+                "network result_max_age_seconds cannot be shorter than probe interval"
+            )
+        if self.goodput_probe_interval_seconds < self.probe_interval_seconds:
+            raise ConfigurationError(
+                "network goodput probe interval cannot be shorter than probe interval"
+            )
+        if (
+            isinstance(self.probe_bytes, bool)
+            or not isinstance(self.probe_bytes, int)
+            or not 1_024 <= self.probe_bytes <= 1_048_576
+        ):
+            raise ConfigurationError("network probe_bytes must be between 1024 and 1048576")
+        if (
+            isinstance(self.minimum_quality_score, bool)
+            or not isinstance(self.minimum_quality_score, (int, float))
+            or not 0 <= self.minimum_quality_score <= 1
+        ):
+            raise ConfigurationError("network minimum_quality_score must be between zero and one")
+        if (
+            isinstance(self.quality_hysteresis, bool)
+            or not isinstance(self.quality_hysteresis, (int, float))
+            or not 0 <= self.quality_hysteresis <= 0.25
+        ):
+            raise ConfigurationError("network quality_hysteresis must be between zero and 0.25")
+        if (
+            self.minimum_quality_score - self.quality_hysteresis < 0
+            or self.minimum_quality_score + self.quality_hysteresis > 1
+        ):
+            raise ConfigurationError("network quality hysteresis crosses the zero-to-one range")
+        if (
+            isinstance(self.history_size, bool)
+            or not isinstance(self.history_size, int)
+            or not 2 <= self.history_size <= 64
+        ):
+            raise ConfigurationError("network history_size must be between 2 and 64")
+        if len(set(self.interface_allowlist)) != len(self.interface_allowlist):
+            raise ConfigurationError("network interface_allowlist entries must be unique")
+        if any(
+            not interface or len(interface) > 64 or re.search(r"[^A-Za-z0-9_.:-]", interface)
+            for interface in self.interface_allowlist
+        ):
+            raise ConfigurationError("network interface_allowlist contains an invalid name")
+
+
+@dataclass(frozen=True)
 class LLMModeSettings:
     candidates: tuple[str, ...] = ()
     max_output_tokens: int | None = None
     complexity_threshold: int = 2
     first_speech_min_chars: int = 0
+    speech_chunk_max_chars: int = 0
+    first_visible_token_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
@@ -143,6 +243,15 @@ class LLMModeSettings:
             raise ConfigurationError("complexity_threshold cannot be negative")
         if self.first_speech_min_chars < 0:
             raise ConfigurationError("first_speech_min_chars cannot be negative")
+        if self.speech_chunk_max_chars < 0:
+            raise ConfigurationError("speech_chunk_max_chars cannot be negative")
+        if self.first_visible_token_seconds is not None and (
+            isinstance(self.first_visible_token_seconds, bool)
+            or not isinstance(self.first_visible_token_seconds, (int, float))
+            or not math.isfinite(float(self.first_visible_token_seconds))
+            or self.first_visible_token_seconds <= 0
+        ):
+            raise ConfigurationError("first_visible_token_seconds must be positive")
         if len(set(self.candidates)) != len(self.candidates):
             raise ConfigurationError("mode candidate names must be unique")
 
@@ -160,20 +269,24 @@ class LLMProviderSettings:
     def __post_init__(self) -> None:
         if not self.name or not self.adapter or not self.endpoint:
             raise ConfigurationError("provider name, adapter, and endpoint are required")
-        if self.adapter not in {"ollama", "openai_chat_sse"}:
+        if self.adapter not in {"ollama", "openai_chat_sse", "codex_app_server"}:
             raise ConfigurationError(f"Unsupported provider adapter: {self.adapter!r}")
         if self.adapter == "ollama" and self.name != "ollama":
             raise ConfigurationError("the Ollama adapter must use provider name 'ollama'")
         if self.name == "ollama" and self.adapter != "ollama":
             raise ConfigurationError("provider name 'ollama' is reserved for the Ollama adapter")
-        if self.adapter == "openai_chat_sse" and self.locality != "remote":
-            raise ConfigurationError("OpenAI-compatible SSE providers must be remote")
+        if self.adapter in {"openai_chat_sse", "codex_app_server"} and self.locality != "remote":
+            raise ConfigurationError("OpenAI and Codex providers must be remote")
         if self.locality not in {"device", "trusted_lan", "remote"}:
             raise ConfigurationError(f"Unsupported provider locality: {self.locality!r}")
         if self.api_key_env is not None and not _ENV_NAME.fullmatch(self.api_key_env):
             raise ConfigurationError(f"Invalid API-key environment name: {self.api_key_env!r}")
         if self.adapter == "ollama" and self.api_key_env is not None:
             raise ConfigurationError("Ollama providers do not accept an API-key setting")
+        if self.adapter == "codex_app_server" and self.api_key_env is not None:
+            raise ConfigurationError(
+                "Codex app-server uses the local ChatGPT sign-in, not an API-key setting"
+            )
         if (
             self.locality == "remote"
             and self.adapter == "openai_chat_sse"
@@ -190,6 +303,12 @@ class LLMProviderSettings:
             raise ConfigurationError(
                 "provider endpoints cannot contain credentials, query, or fragment"
             )
+        if self.adapter == "codex_app_server":
+            if self.endpoint != "stdio://codex":
+                raise ConfigurationError(
+                    "Codex app-server endpoint must be exactly 'stdio://codex'"
+                )
+            return
         if (
             self.adapter == "ollama"
             and self.locality == "device"
@@ -210,6 +329,8 @@ class LLMTargetSettings:
     languages: tuple[str, ...] = ("it", "en")
     context_window: int | None = None
     max_output_tokens: int | None = None
+    max_output_words: int | None = None
+    min_complexity_score: int | None = None
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
 
@@ -222,6 +343,18 @@ class LLMTargetSettings:
             raise ConfigurationError("target context_window must be positive")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ConfigurationError("target max_output_tokens must be positive")
+        if self.max_output_words is not None and (
+            isinstance(self.max_output_words, bool)
+            or not isinstance(self.max_output_words, int)
+            or self.max_output_words < 1
+        ):
+            raise ConfigurationError("target max_output_words must be a positive integer")
+        if self.min_complexity_score is not None and (
+            isinstance(self.min_complexity_score, bool)
+            or not isinstance(self.min_complexity_score, int)
+            or self.min_complexity_score < 0
+        ):
+            raise ConfigurationError("target min_complexity_score must be non-negative")
         if self.retry_attempts < 1:
             raise ConfigurationError("target retry_attempts must be at least one")
         if len({code for code, _model in self.model_by_language}) != len(self.model_by_language):
@@ -251,6 +384,7 @@ class LLMSettings:
     health: LLMHealthSettings = field(default_factory=LLMHealthSettings)
     budget: LLMBudgetSettings = field(default_factory=LLMBudgetSettings)
     observability: LLMObservabilitySettings = field(default_factory=LLMObservabilitySettings)
+    network: LLMNetworkSettings = field(default_factory=LLMNetworkSettings)
     talk: LLMModeSettings = field(
         default_factory=lambda: LLMModeSettings(max_output_tokens=64, complexity_threshold=3)
     )
@@ -314,6 +448,7 @@ class LanguageProfile:
     voice: str
     wake_word: str
     wake_word_aliases: tuple[str, ...]
+    think_words: tuple[str, ...]
     rag_word: str
     presentation_questions: tuple[str, str, str]
     presentation_answers: tuple[str, str, str]
@@ -332,6 +467,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             voice="mb-us1",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
+            think_words=("think", "reason"),
             rag_word="regulation",
             presentation_questions=(
                 "what's your name",
@@ -361,6 +497,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             voice="mb-it4",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
+            think_words=("pensa", "ragiona"),
             rag_word="regolamento",
             presentation_questions=("come ti chiami", "chi sei", "presentati a"),
             presentation_answers=(
@@ -561,6 +698,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "health",
             "budget",
             "observability",
+            "network",
             "modes",
             "providers",
             "targets",
@@ -758,6 +896,88 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
         ),
     )
 
+    network_table = _table(data.get("network"), "network")
+    _reject_unknown(
+        network_table,
+        {
+            "enabled",
+            "probe_url",
+            "probe_interval_seconds",
+            "result_max_age_seconds",
+            "probe_timeout_seconds",
+            "probe_bytes",
+            "goodput_probe_interval_seconds",
+            "minimum_quality_score",
+            "quality_hysteresis",
+            "target_ttfb_ms",
+            "target_jitter_ms",
+            "minimum_goodput_kbps",
+            "history_size",
+            "require_wifi",
+            "interface_allowlist",
+        },
+        "network",
+    )
+    network = LLMNetworkSettings(
+        enabled=_toml_bool(network_table.get("enabled", False), "network.enabled"),
+        probe_url=_toml_string(
+            network_table.get("probe_url", "https://chatgpt.com/"),
+            "network.probe_url",
+        ),
+        probe_interval_seconds=_toml_float(
+            network_table.get("probe_interval_seconds", 3.0),
+            "network.probe_interval_seconds",
+        ),
+        result_max_age_seconds=_toml_float(
+            network_table.get("result_max_age_seconds", 6.0),
+            "network.result_max_age_seconds",
+        ),
+        probe_timeout_seconds=_toml_float(
+            network_table.get("probe_timeout_seconds", 1.2),
+            "network.probe_timeout_seconds",
+        ),
+        probe_bytes=_toml_int(
+            network_table.get("probe_bytes", 32_768),
+            "network.probe_bytes",
+        ),
+        goodput_probe_interval_seconds=_toml_float(
+            network_table.get("goodput_probe_interval_seconds", 60.0),
+            "network.goodput_probe_interval_seconds",
+        ),
+        minimum_quality_score=_toml_float(
+            network_table.get("minimum_quality_score", 0.50),
+            "network.minimum_quality_score",
+        ),
+        quality_hysteresis=_toml_float(
+            network_table.get("quality_hysteresis", 0.05),
+            "network.quality_hysteresis",
+        ),
+        target_ttfb_ms=_toml_float(
+            network_table.get("target_ttfb_ms", 1_200.0),
+            "network.target_ttfb_ms",
+        ),
+        target_jitter_ms=_toml_float(
+            network_table.get("target_jitter_ms", 300.0),
+            "network.target_jitter_ms",
+        ),
+        minimum_goodput_kbps=_toml_float(
+            network_table.get("minimum_goodput_kbps", 128.0),
+            "network.minimum_goodput_kbps",
+        ),
+        history_size=_toml_int(
+            network_table.get("history_size", 8),
+            "network.history_size",
+        ),
+        require_wifi=_toml_bool(
+            network_table.get("require_wifi", False),
+            "network.require_wifi",
+        ),
+        interface_allowlist=_string_tuple(
+            network_table.get("interface_allowlist"),
+            "network.interface_allowlist",
+        ),
+    )
+
     modes_table = _table(data.get("modes"), "modes")
     _reject_unknown(modes_table, {"talk", "think"}, "modes")
 
@@ -770,6 +990,8 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "max_output_tokens",
                 "complexity_threshold",
                 "first_speech_min_chars",
+                "speech_chunk_max_chars",
+                "first_visible_token_seconds",
             },
             f"modes.{name}",
         )
@@ -786,6 +1008,18 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             first_speech_min_chars=_toml_int(
                 mode.get("first_speech_min_chars", 0),
                 f"modes.{name}.first_speech_min_chars",
+            ),
+            speech_chunk_max_chars=_toml_int(
+                mode.get("speech_chunk_max_chars", 0),
+                f"modes.{name}.speech_chunk_max_chars",
+            ),
+            first_visible_token_seconds=(
+                _toml_float(
+                    mode["first_visible_token_seconds"],
+                    f"modes.{name}.first_visible_token_seconds",
+                )
+                if "first_visible_token_seconds" in mode
+                else None
             ),
         )
 
@@ -857,6 +1091,8 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "languages",
                 "context_window",
                 "max_output_tokens",
+                "max_output_words",
+                "min_complexity_score",
                 "retry_attempts",
                 "options",
             },
@@ -918,6 +1154,22 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                     if "max_output_tokens" in target
                     else None
                 ),
+                max_output_words=(
+                    _toml_int(
+                        target["max_output_words"],
+                        f"targets.{name}.max_output_words",
+                    )
+                    if "max_output_words" in target
+                    else None
+                ),
+                min_complexity_score=(
+                    _toml_int(
+                        target["min_complexity_score"],
+                        f"targets.{name}.min_complexity_score",
+                    )
+                    if "min_complexity_score" in target
+                    else None
+                ),
                 retry_attempts=_toml_int(
                     target.get("retry_attempts", 1),
                     f"targets.{name}.retry_attempts",
@@ -947,6 +1199,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
         health=health,
         budget=budget,
         observability=observability,
+        network=network,
         talk=parse_mode("talk", default_output=64, default_complexity=3),
         think=parse_mode("think", default_output=256, default_complexity=2),
         providers=tuple(providers),

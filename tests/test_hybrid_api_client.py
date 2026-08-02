@@ -15,11 +15,13 @@ from api.providers.contracts import (
     ChatRequest,
     Completed,
     CompletionMetadata,
+    ContentOrigin,
     ErrorCategory,
     FinishReason,
     ProviderCapabilities,
     ProviderError,
     ProviderIdentity,
+    Role,
     TextDelta,
 )
 from api.routing import Connectivity
@@ -48,6 +50,7 @@ class FakeRemoteProvider:
     def __init__(self, streams: list[object]) -> None:
         self.streams = iter(streams)
         self.calls: list[ChatRequest] = []
+        self.prepare_calls = 0
         self.closed = False
 
     @property
@@ -78,8 +81,26 @@ class FakeRemoteProvider:
     def warm_up(self, model: str) -> None:
         raise AssertionError(f"remote warm-up is forbidden: {model}")
 
+    def prepare(self) -> None:
+        self.prepare_calls += 1
+
     def close(self) -> None:
         self.closed = True
+
+
+class FakeNetworkMonitor:
+    def __init__(self, state: Connectivity) -> None:
+        self.state = state
+        self.start_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+
+    def connectivity(self) -> Connectivity:
+        return self.state
+
+    def snapshot(self) -> object:
+        return {"connectivity": self.state.value}
 
 
 def completed(provider: str, model: str) -> Completed:
@@ -125,11 +146,13 @@ def hybrid_settings(
                 name="remote-talk",
                 provider="remote",
                 model="remote-model",
+                max_output_words=50,
             ),
             config.LLMTargetSettings(
                 name="local-talk",
                 provider="ollama",
                 model="local-model",
+                max_output_words=20,
             ),
         ),
     )
@@ -174,7 +197,41 @@ def test_remote_route_receives_only_canonical_authorized_messages(
     request = remote.calls[0]
     assert request.remote_authorized
     assert request.model == "remote-model"
-    assert request.messages[0].content == "Emilia, answer"
+    assert request.messages[0].role is Role.SYSTEM
+    assert request.messages[0].origin is ContentOrigin.STATIC_INSTRUCTION
+    assert "You are Emilia" in request.messages[0].content
+    assert "at most 50 words" in request.messages[0].content
+    assert "at most 20 words" not in request.messages[0].content
+    assert request.messages[-1].role is Role.USER
+    assert request.messages[-1].content == "Emilia, answer"
+
+
+def test_static_hybrid_instruction_is_reused_between_requests(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider(
+        [
+            [TextDelta("First."), completed("remote", "remote-model")],
+            [TextDelta("Second."), completed("remote", "remote-model")],
+        ]
+    )
+    llm = hybrid_settings(tmp_path)
+    llm = replace(
+        llm,
+        targets=(replace(llm.targets[0], max_output_words=None), llm.targets[1]),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        language="en",
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("first") == "First."
+    assert client.talk("second") == "Second."
+
+    assert remote.calls[0].messages[0] is remote.calls[1].messages[0]
 
 
 def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
@@ -187,6 +244,46 @@ def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
 
     assert client.talk("Emilia, stay private") == "Local."
 
+    assert remote.calls == []
+    assert len(local.calls) == 1
+    assert tts.spoken == ["Local."]
+
+
+def test_network_monitor_blocks_remote_before_provider_execution(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    local = FakeOllamaClient()
+    monitor = FakeNetworkMonitor(Connectivity.OFFLINE)
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=hybrid_settings(tmp_path),
+        providers={"remote": remote},
+        network_monitor=monitor,
+        retry_wait=0,
+    )
+
+    assert client.talk("hello") == "Local."
+    assert monitor.start_calls == 1
+    assert remote.calls == []
+    assert len(local.calls) == 1
+    assert client.network_snapshot == {"connectivity": "offline"}
+
+
+def test_precompiled_planner_still_reads_provider_health_live(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, tts = make_client(tmp_path, remote)
+    planner = client._route_planners["talk"]
+
+    for _ in range(client.llm_settings.health.failures_to_open):
+        client.health.record_failure(
+            "remote/remote-model",
+            ErrorCategory.CONNECTIVITY,
+        )
+
+    assert client.talk("hello") == "Local."
+    assert client._route_planners["talk"] is planner
     assert remote.calls == []
     assert len(local.calls) == 1
     assert tts.spoken == ["Local."]
@@ -236,7 +333,7 @@ def test_remote_redacted_requires_an_explicit_redaction_attestation(
         )
         == "Redacted remote."
     )
-    assert remote.calls[0].messages[0].redacted is True
+    assert remote.calls[0].messages[-1].redacted is True
 
 
 def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> None:
@@ -255,6 +352,197 @@ def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> No
     assert len(remote.calls) == 1
     assert len(local.calls) == 1
     assert tts.spoken == ["Local."]
+    local_messages = local.calls[0]["messages"]
+    assert isinstance(local_messages, list)
+    assert local_messages[0]["role"] == "system"
+    assert "You are Emilia" in local_messages[0]["content"]
+    assert "at most 20 words" in local_messages[0]["content"]
+    assert "at most 50 words" not in local_messages[0]["content"]
+    assert local_messages[-1] == {"role": "user", "content": "Emilia, answer"}
+
+
+def test_adaptive_remote_failure_falls_directly_to_capped_local_route(
+    tmp_path: Path,
+) -> None:
+    error = ProviderError(
+        ErrorCategory.CONNECT_TIMEOUT,
+        "remote timeout",
+        provider="remote",
+        model="gpt-5.6-luna",
+        transmitted=False,
+    )
+    remote = FakeRemoteProvider([error])
+    base = hybrid_settings(tmp_path)
+    llm = replace(
+        base,
+        talk=config.LLMModeSettings(
+            candidates=("luna", "terra", "sol", "local-talk"),
+            max_output_tokens=128,
+        ),
+        targets=(
+            config.LLMTargetSettings(
+                name="luna",
+                provider="remote",
+                model="gpt-5.6-luna",
+                min_complexity_score=0,
+            ),
+            config.LLMTargetSettings(
+                name="terra",
+                provider="remote",
+                model="gpt-5.6-terra",
+                min_complexity_score=3,
+            ),
+            config.LLMTargetSettings(
+                name="sol",
+                provider="remote",
+                model="gpt-5.6-sol",
+                min_complexity_score=5,
+            ),
+            config.LLMTargetSettings(
+                name="local-talk",
+                provider="ollama",
+                model="local-model",
+                max_output_tokens=40,
+            ),
+        ),
+    )
+    local = FakeOllamaClient()
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("hello") == "Local."
+
+    assert [call.model for call in remote.calls] == ["gpt-5.6-luna"]
+    assert len(local.calls) == 1
+    assert local.calls[0]["options"]["num_predict"] == 40
+
+
+def test_remote_prepare_is_background_idempotent_and_sends_no_prompt(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([])
+    llm = config.LLMSettings(
+        routing_file=tmp_path / "routing.toml",
+        routing_policy="remote_first",
+        remote_enabled=True,
+        privacy=config.LLMPrivacySettings(
+            default="remote_allowed",
+            allow_remote_transcripts=True,
+        ),
+        budget=config.LLMBudgetSettings(enabled=False),
+        talk=config.LLMModeSettings(candidates=("codex-talk",)),
+        providers=(
+            config.LLMProviderSettings(
+                name="openai-codex",
+                adapter="codex_app_server",
+                endpoint="stdio://codex",
+                locality="remote",
+            ),
+        ),
+        targets=(
+            config.LLMTargetSettings(
+                name="codex-talk",
+                provider="openai-codex",
+                model="gpt-5.6-luna",
+            ),
+        ),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"openai-codex": remote},
+        connectivity=Connectivity.ONLINE,
+    )
+
+    first = client.prepare_remote_async()
+    assert first is not None
+    first.join(timeout=1)
+    second = client.prepare_remote_async()
+
+    assert second is first
+    assert remote.prepare_calls == 1
+    assert remote.calls == []
+
+
+def test_mode_visible_token_timeout_reaches_remote_request(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    llm = hybrid_settings(tmp_path)
+    llm = replace(
+        llm,
+        talk=replace(llm.talk, first_visible_token_seconds=7.5),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("hello") == "Remote."
+    assert remote.calls[0].timeouts.first_token_seconds == 7.5
+
+
+def test_committed_codex_profile_selects_luna_terra_and_sol() -> None:
+    routing = (
+        Path(__file__).resolve().parents[1] / "examples" / ("llm-routing.codex-subscription.toml")
+    )
+    llm = config.load_llm_settings(routing)
+    llm = replace(
+        llm,
+        observability=config.LLMObservabilitySettings(metrics_enabled=False),
+    )
+    remote = FakeRemoteProvider(
+        [
+            [
+                TextDelta("Luna."),
+                completed("openai-codex", "gpt-5.6-luna"),
+            ],
+            [
+                TextDelta("Terra."),
+                completed("openai-codex", "gpt-5.6-terra"),
+            ],
+            [
+                TextDelta("Sol."),
+                completed("openai-codex", "gpt-5.6-sol"),
+            ],
+        ]
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        language="en",
+        providers={"openai-codex": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+    try:
+        assert client.talk("hello") == "Luna."
+        assert client.talk("explain efficiency") == "Terra."
+        assert (
+            client.talk(
+                "explain the complete strategy",
+                request_options={"complex": True},
+            )
+            == "Sol."
+        )
+    finally:
+        client.close()
+
+    assert [call.model for call in remote.calls] == [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+    ]
 
 
 def test_remote_failure_after_speech_never_calls_ollama(tmp_path: Path) -> None:
@@ -337,6 +625,32 @@ def test_pre_cancelled_request_never_reaches_provider() -> None:
         client.talk("Emilia, stop", cancellation=cancellation)
 
     assert local.calls == []
+
+
+def test_emergency_switch_restores_local_route_for_remote_only_mode(
+    tmp_path: Path,
+) -> None:
+    base = hybrid_settings(tmp_path)
+    llm = replace(
+        base,
+        emergency_local_only=True,
+        allowlist=("remote",),
+        talk=replace(base.talk, candidates=("remote-talk",)),
+    )
+    local = FakeOllamaClient()
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=llm,
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("Emilia, rollback") == "Local."
+    assert len(local.calls) == 1
+    assert remote.calls == []
 
 
 def test_matching_ollama_endpoint_can_be_explicitly_trusted(

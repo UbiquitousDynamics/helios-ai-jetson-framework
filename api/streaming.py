@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import logging
 import threading
 import time
 import uuid
@@ -18,20 +18,24 @@ from api.metrics import MetricEvent, SafeMetricsRecorder
 from api.privacy import PrivacyGuard
 from api.providers.contracts import (
     CancellationToken,
+    ChatMessage,
     ChatRequest,
     Completed,
     CompletionMetadata,
+    ContentOrigin,
     ErrorCategory,
     FinishReason,
     ProviderError,
     ReasoningDelta,
     Refused,
+    Role,
     TextDelta,
 )
 from api.routing import ProviderRegistry, ProviderTarget, RoutePlanner
+from api.speech_chunker import SpeechChunker
 
-_SPEECH_MARKUP = re.compile(r"[*$#@]")
-_SENTENCE_BOUNDARY = re.compile(r"[.!?;:,](?:\s|$)")
+logger = logging.getLogger(__name__)
+
 _TERMINAL_ERRORS = frozenset(
     {
         ErrorCategory.CANCELLED,
@@ -47,6 +51,7 @@ class ExecutionTarget:
     route: ProviderTarget
     retry_attempts: int = 1
     max_output_tokens: int | None = None
+    max_output_words: int | None = None
     options: Mapping[str, Any] = field(default_factory=dict)
     price: ModelPrice | None = None
 
@@ -55,6 +60,12 @@ class ExecutionTarget:
             raise ValueError("retry_attempts must be at least one")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be at least one")
+        if self.max_output_words is not None and (
+            isinstance(self.max_output_words, bool)
+            or not isinstance(self.max_output_words, int)
+            or self.max_output_words < 1
+        ):
+            raise ValueError("max_output_words must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +155,7 @@ class StreamingResponseCoordinator:
         *,
         speak: Callable[[str], Any] | None = None,
         first_speech_min_chars: int = 0,
+        speech_chunk_max_chars: int = 0,
         maximum_first_audio_seconds: float | None = None,
         cancellation: CancellationToken | None = None,
         route_reason: str | None = None,
@@ -158,6 +170,8 @@ class StreamingResponseCoordinator:
             )
         if first_speech_min_chars < 0:
             raise ValueError("first_speech_min_chars cannot be negative")
+        if speech_chunk_max_chars < 0:
+            raise ValueError("speech_chunk_max_chars cannot be negative")
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
             raise ValueError("maximum_first_audio_seconds must be positive")
 
@@ -199,76 +213,21 @@ class StreamingResponseCoordinator:
                         request=routed_request,
                         speak=speak,
                         first_speech_min_chars=first_speech_min_chars,
+                        speech_chunk_max_chars=speech_chunk_max_chars,
                         cancellation=cancellation,
                         state=state,
                     )
-                    self._require_priced_model_identity(execution, result.metadata)
-                    charged = self._settle_success(
-                        reservation,
-                        execution,
-                        result.metadata,
-                        speech_committed=state.speech_committed,
-                    )
-                    latency = self._clock() - state.started_at
-                    if self.health is not None:
-                        rate_limits = result.metadata.rate_limits
-                        if rate_limits is not None and (
-                            rate_limits.remaining_requests == 0 or rate_limits.remaining_tokens == 0
-                        ):
-                            self.health.record_failure(
-                                target.health_key,
-                                ErrorCategory.RATE_LIMITED,
-                                retry_after_seconds=rate_limits.retry_after_seconds,
-                            )
-                        elif (
-                            maximum_first_audio_seconds is not None
-                            and target.remote
-                            and len(targets) > 1
-                            and result.first_audio_seconds is not None
-                            and result.first_audio_seconds > maximum_first_audio_seconds
-                        ):
-                            self.health.record_failure(
-                                target.health_key,
-                                ErrorCategory.FIRST_TOKEN_TIMEOUT,
-                            )
-                        else:
-                            self.health.record_success(
-                                target.health_key,
-                                latency_seconds=latency,
-                            )
-                    self._record_metric(
-                        MetricEvent.from_usage(
-                            "llm_attempt_succeeded",
-                            result.metadata.usage,
-                            provider=target.provider,
-                            model=target.model,
-                            mode=request.mode,
-                            language=request.language,
-                            route_reason=route_reason,
-                            request_id=result.metadata.request_id,
-                            attempt_id=attempt_id,
-                            latency_ms=latency * 1_000,
-                            first_token_ms=self._elapsed_ms(
-                                state.started_at,
-                                state.first_token_at,
-                            ),
-                            first_audio_ms=self._elapsed_ms(
-                                state.started_at,
-                                state.first_audio_at,
-                            ),
-                            remaining_requests=(
-                                result.metadata.rate_limits.remaining_requests
-                                if result.metadata.rate_limits is not None
-                                else None
-                            ),
-                            remaining_tokens=(
-                                result.metadata.rate_limits.remaining_tokens
-                                if result.metadata.rate_limits is not None
-                                else None
-                            ),
-                            cost_usd=charged,
-                            fallback_count=fallback_index,
-                        )
+                    result = self._finalize_success(
+                        result=result,
+                        reservation=reservation,
+                        execution=execution,
+                        request=request,
+                        state=state,
+                        maximum_first_audio_seconds=maximum_first_audio_seconds,
+                        has_fallback=len(targets) > 1,
+                        fallback_index=fallback_index,
+                        attempt_id=attempt_id,
+                        route_reason=route_reason,
                     )
                     return replace(result, attempts=total_attempts)
                 except _SpeechFailure as wrapped:
@@ -375,23 +334,23 @@ class StreamingResponseCoordinator:
         request: ChatRequest,
         speak: Callable[[str], Any] | None,
         first_speech_min_chars: int,
+        speech_chunk_max_chars: int,
         cancellation: CancellationToken | None,
         state: _AttemptState,
     ) -> StreamingResult:
         response_parts: list[str] = []
-        sentence_parts: list[str] = []
-        boundary_seen = False
         completed: CompletionMetadata | None = None
+        speech_chunker = (
+            SpeechChunker(
+                first_speech_min_chars=first_speech_min_chars,
+                speech_chunk_max_chars=speech_chunk_max_chars,
+            )
+            if speak is not None
+            else None
+        )
 
-        def flush_speech() -> None:
-            nonlocal boundary_seen
-            if speak is None or not sentence_parts:
-                return
-            sentence = _SPEECH_MARKUP.sub("", "".join(sentence_parts)).strip()
-            sentence_parts.clear()
-            boundary_seen = False
-            if not sentence:
-                return
+        def speak_fragment(sentence: str) -> None:
+            assert speak is not None
             state.speech_committed = True
             if state.first_audio_at is None:
                 state.first_audio_at = self._clock()
@@ -405,20 +364,25 @@ class StreamingResponseCoordinator:
             events = provider.stream(request, cancellation=cancellation)
             iterator = iter(events)
             for event in iterator:
+                if completed is not None:
+                    raise ProviderError(
+                        ErrorCategory.MALFORMED_RESPONSE,
+                        "Provider emitted data after completion metadata",
+                        provider=execution.route.provider,
+                        model=execution.route.model,
+                        retryable_same_provider=False,
+                        transmitted=True,
+                        request_id=completed.request_id,
+                    )
                 if isinstance(event, TextDelta):
                     if not event.text:
                         continue
                     if state.first_token_at is None:
                         state.first_token_at = self._clock()
                     response_parts.append(event.text)
-                    if speak is not None:
-                        sentence_parts.append(event.text)
-                        boundary_seen = (
-                            boundary_seen or _SENTENCE_BOUNDARY.search(event.text) is not None
-                        )
-                        generated_chars = sum(len(part) for part in response_parts)
-                        if boundary_seen and generated_chars >= first_speech_min_chars:
-                            flush_speech()
+                    if speech_chunker is not None:
+                        for sentence in speech_chunker.push(event.text):
+                            speak_fragment(sentence)
                 elif isinstance(event, ReasoningDelta):
                     continue
                 elif isinstance(event, Refused):
@@ -433,7 +397,10 @@ class StreamingResponseCoordinator:
                     )
                 elif isinstance(event, Completed):
                     completed = event.metadata
-                    break
+                    # Exhaust the provider generator naturally. Closing it at
+                    # this point injects GeneratorExit into HTTP-backed streams
+                    # even though the completion itself was successful.
+                    continue
                 else:
                     raise ProviderError(
                         ErrorCategory.MALFORMED_RESPONSE,
@@ -524,8 +491,9 @@ class StreamingResponseCoordinator:
                 retryable_same_provider=True,
                 transmitted=True,
             )
-        if speak is not None:
-            flush_speech()
+        if speech_chunker is not None:
+            for sentence in speech_chunker.finish():
+                speak_fragment(sentence)
         return StreamingResult(
             text=text,
             metadata=completed,
@@ -551,9 +519,38 @@ class StreamingResponseCoordinator:
             max_output = request.max_output_tokens
         if execution.route.max_output_tokens is not None and max_output is not None:
             max_output = min(max_output, execution.route.max_output_tokens)
+        messages = request.messages
+        if execution.max_output_words is not None:
+            suffix = (
+                f" Limita la risposta a un massimo di {execution.max_output_words} parole."
+                if request.language == "it"
+                else f" Limit the answer to at most {execution.max_output_words} words."
+            )
+            updated_messages = list(messages)
+            for index, message in enumerate(updated_messages):
+                if (
+                    message.role is Role.SYSTEM
+                    and message.origin is ContentOrigin.STATIC_INSTRUCTION
+                ):
+                    updated_messages[index] = replace(
+                        message,
+                        content=message.content + suffix,
+                    )
+                    break
+            else:
+                updated_messages.insert(
+                    0,
+                    ChatMessage(
+                        Role.SYSTEM,
+                        suffix.strip(),
+                        origin=ContentOrigin.STATIC_INSTRUCTION,
+                    ),
+                )
+            messages = tuple(updated_messages)
         return replace(
             request,
             model=execution.route.model,
+            messages=messages,
             max_output_tokens=max_output,
             options={
                 **dict(execution.options),
@@ -682,6 +679,115 @@ class StreamingResponseCoordinator:
                 model=execution.route.model,
                 transmitted=False,
             ) from None
+
+    def _finalize_success(
+        self,
+        *,
+        result: StreamingResult,
+        reservation: Reservation | None,
+        execution: ExecutionTarget,
+        request: ChatRequest,
+        state: _AttemptState,
+        maximum_first_audio_seconds: float | None,
+        has_fallback: bool,
+        fallback_index: int,
+        attempt_id: str,
+        route_reason: str | None,
+    ) -> StreamingResult:
+        """Validate, settle, and observe one successful provider attempt."""
+
+        self._require_priced_model_identity(execution, result.metadata)
+        charged = self._settle_success(
+            reservation,
+            execution,
+            result.metadata,
+            speech_committed=state.speech_committed,
+        )
+        latency = self._clock() - state.started_at
+        self._record_success_health(
+            execution=execution,
+            result=result,
+            latency=latency,
+            maximum_first_audio_seconds=maximum_first_audio_seconds,
+            has_fallback=has_fallback,
+        )
+        rate_limits = result.metadata.rate_limits
+        self._record_metric(
+            MetricEvent.from_usage(
+                "llm_attempt_succeeded",
+                result.metadata.usage,
+                provider=execution.route.provider,
+                model=execution.route.model,
+                mode=request.mode,
+                language=request.language,
+                route_reason=route_reason,
+                request_id=result.metadata.request_id,
+                attempt_id=attempt_id,
+                latency_ms=latency * 1_000,
+                first_token_ms=self._elapsed_ms(
+                    state.started_at,
+                    state.first_token_at,
+                ),
+                first_audio_ms=self._elapsed_ms(
+                    state.started_at,
+                    state.first_audio_at,
+                ),
+                remaining_requests=(
+                    rate_limits.remaining_requests if rate_limits is not None else None
+                ),
+                remaining_tokens=(
+                    rate_limits.remaining_tokens if rate_limits is not None else None
+                ),
+                cost_usd=charged,
+                fallback_count=fallback_index,
+            )
+        )
+        return result
+
+    def _record_success_health(
+        self,
+        *,
+        execution: ExecutionTarget,
+        result: StreamingResult,
+        latency: float,
+        maximum_first_audio_seconds: float | None,
+        has_fallback: bool,
+    ) -> None:
+        if self.health is None:
+            return
+        target = execution.route
+        rate_limits = result.metadata.rate_limits
+        if rate_limits is not None and (
+            rate_limits.remaining_requests == 0 or rate_limits.remaining_tokens == 0
+        ):
+            self.health.record_failure(
+                target.health_key,
+                ErrorCategory.RATE_LIMITED,
+                retry_after_seconds=rate_limits.retry_after_seconds,
+            )
+        elif (
+            maximum_first_audio_seconds is not None
+            and target.remote
+            and has_fallback
+            and result.first_audio_seconds is not None
+            and result.first_audio_seconds > maximum_first_audio_seconds
+        ):
+            logger.warning(
+                "Route %s completed but exceeded the first-audio health "
+                "objective (%.0f ms > %.0f ms)",
+                target.name,
+                result.first_audio_seconds * 1_000,
+                maximum_first_audio_seconds * 1_000,
+            )
+            self.health.record_failure(
+                target.health_key,
+                ErrorCategory.FIRST_TOKEN_TIMEOUT,
+            )
+        else:
+            self.health.record_success(
+                target.health_key,
+                latency_seconds=latency,
+            )
 
     def _settle_success(
         self,

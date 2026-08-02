@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -72,3 +73,30 @@ def test_jsonl_metric_sink_prunes_records_older_than_retention(tmp_path):
 
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert records == [{"event": "new", "timestamp": "2026-07-27T12:00:00Z"}]
+
+
+def test_async_recorder_keeps_sink_io_off_the_calling_thread_and_flushes():
+    entered = threading.Event()
+    release = threading.Event()
+    emitted = []
+
+    def blocking_sink(payload):
+        entered.set()
+        release.wait(timeout=1)
+        emitted.append(payload)
+
+    recorder = SafeMetricsRecorder(
+        sink=blocking_sink,
+        clock=fixed_clock,
+        asynchronous=True,
+    )
+
+    recorded = recorder.record(MetricEvent("attempt.completed"))
+    assert entered.wait(timeout=1)
+    assert emitted == []
+
+    release.set()
+    recorder.close()
+    recorder.close()
+
+    assert emitted == [recorded.as_dict()]

@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from audio.sound_player import SoundPlaybackError, SoundPlayer
-from audio.tts import AudioSynthesisError, PiperTTS, Pyttsx3TTS
+from audio.tts import (
+    AudioSynthesisError,
+    PiperTTS,
+    Pyttsx3TTS,
+    SoundDeviceBackend,
+)
 
 
 class FakeVoice:
@@ -50,6 +55,38 @@ class CapturingBackend:
         self.calls.append((frames, sample_rate, channels, sample_width))
 
 
+class FakeRawOutputStream:
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+        self.started = 0
+        self.stopped = 0
+        self.closed = 0
+        self.writes: list[bytes] = []
+
+    def start(self) -> None:
+        self.started += 1
+
+    def write(self, frames: bytes) -> bool:
+        self.writes.append(frames)
+        return False
+
+    def stop(self) -> None:
+        self.stopped += 1
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+class FakeSoundDevice:
+    def __init__(self) -> None:
+        self.streams: list[FakeRawOutputStream] = []
+
+    def RawOutputStream(self, **kwargs: object) -> FakeRawOutputStream:
+        stream = FakeRawOutputStream(**kwargs)
+        self.streams.append(stream)
+        return stream
+
+
 def test_piper_plays_pcm_frames_not_the_wav_header() -> None:
     backend = CapturingBackend()
     tts = PiperTTS("unused.onnx", voice=FakeVoice(), audio_backend=backend)
@@ -67,6 +104,48 @@ def test_piper_supports_modern_synthesize_wav_api() -> None:
     tts.speak("hello")
 
     assert backend.calls == [(b"\x03\x00\x04\x00", 22_050, 1, 2)]
+
+
+def test_piper_skips_punctuation_only_fragment() -> None:
+    backend = CapturingBackend()
+    tts = PiperTTS("unused.onnx", voice=FakeVoice(), audio_backend=backend)
+
+    tts.speak(":")
+
+    assert backend.calls == []
+
+
+def test_sounddevice_backend_reuses_stream_for_matching_pcm_format() -> None:
+    module = FakeSoundDevice()
+    backend = SoundDeviceBackend(sounddevice_module=module)
+
+    backend.play(b"\x01\x00", 16_000, 1, 2)
+    backend.play(b"\x02\x00", 16_000, 1, 2)
+
+    assert len(module.streams) == 1
+    stream = module.streams[0]
+    assert stream.kwargs == {
+        "samplerate": 16_000,
+        "channels": 1,
+        "dtype": "int16",
+    }
+    assert stream.writes == [b"\x01\x00", b"\x02\x00"]
+    assert stream.started == 2
+    assert stream.stopped == 2
+
+    backend.close()
+    assert stream.closed == 1
+
+
+def test_sounddevice_backend_reopens_stream_when_pcm_format_changes() -> None:
+    module = FakeSoundDevice()
+    backend = SoundDeviceBackend(sounddevice_module=module)
+
+    backend.play(b"\x01\x00", 16_000, 1, 2)
+    backend.play(b"\x01\x00", 22_050, 1, 2)
+
+    assert len(module.streams) == 2
+    assert module.streams[0].closed == 1
 
 
 def test_piper_preserves_failure_that_occurs_before_wav_header() -> None:

@@ -27,13 +27,26 @@ class FakeTTS:
 class FakeAPI:
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.think_messages: list[str] = []
         self.closed = False
         self.cancelled = False
+        self.prepare_calls = 0
 
     def talk(self, message: str, context: str | None = None) -> str:
         assert context is None
         self.messages.append(message)
         return "model response"
+
+    def think(
+        self,
+        message: str,
+        context: str | None = None,
+        tts: bool = False,
+    ) -> str:
+        assert context is None
+        assert tts is True
+        self.think_messages.append(message)
+        return "reasoned response"
 
     def close(self) -> None:
         self.closed = True
@@ -41,11 +54,18 @@ class FakeAPI:
     def cancel_current(self) -> None:
         self.cancelled = True
 
+    def prepare_remote_async(self) -> None:
+        self.prepare_calls += 1
+
 
 class FakeRecognizer:
     def __init__(self, results: list[RecognitionResult | None]) -> None:
         self.results = iter(results)
         self.closed = False
+        self.prepare_calls = 0
+
+    def prepare_async(self) -> None:
+        self.prepare_calls += 1
 
     def listen_once(self, timeout: float) -> RecognitionResult | None:
         assert timeout > 0
@@ -78,6 +98,11 @@ class ImmediateExecutor:
 class FakeRag:
     def __init__(self) -> None:
         self.queries: list[tuple[str, int]] = []
+        self.prepare_calls = 0
+
+    def prepare(self) -> bool:
+        self.prepare_calls += 1
+        return True
 
     def run(self, query: str, top_k: int) -> str:
         self.queries.append((query, top_k))
@@ -114,6 +139,37 @@ def test_command_requires_a_whole_wake_word() -> None:
     assert api.messages == []
 
 
+def test_wake_word_is_removed_but_a_semantic_second_occurrence_is_preserved() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assert assistant.process_command("Emilia, dimmi chi è Emilia?") == "model response"
+
+    assert api.messages == ["dimmi chi è Emilia?"]
+
+
+@pytest.mark.parametrize("trigger", ["pensa", "ragiona"])
+def test_think_prefix_selects_think_mode_and_is_not_sent_to_the_model(trigger: str) -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assert (
+        assistant.process_command(f"Emilia, {trigger}: confronta due strategie")
+        == "reasoned response"
+    )
+
+    assert api.messages == []
+    assert api.think_messages == ["confronta due strategie"]
+
+
+def test_empty_wake_and_think_commands_are_ignored() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+
+    assert assistant.process_command("Emilia") is None
+    assert assistant.process_command("Emilia, pensa") is None
+
+    assert api.messages == []
+    assert api.think_messages == []
+
+
 def test_partial_recognition_is_not_executed() -> None:
     assistant, _tts, api, _sounds, _recognizer = make_assistant(
         [RecognitionResult("emilia dimmi qualcosa", is_final=False)]
@@ -137,6 +193,7 @@ def test_rag_state_transition_has_no_startup_warmup_query() -> None:
     assert assistant.run_once()
     assert assistant.state is AssistantState.RAG
     assert rag.queries == []
+    assert rag.prepare_calls == 1
     assert api.messages == []
 
     assert assistant.run_once()
@@ -168,6 +225,20 @@ def test_stop_cancels_the_active_model_stream() -> None:
 
     assert not assistant._running
     assert api.cancelled
+
+
+def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
+    assistant, tts, api, _sounds, recognizer = make_assistant([])
+
+    assistant.run(max_iterations=0)
+
+    assert api.prepare_calls == 1
+    assert recognizer.prepare_calls == 1
+    assert tts.spoken == [
+        assistant.profile.welcome_message.format(
+            wake_word=assistant.profile.wake_word,
+        )
+    ]
 
 
 def test_settings_validate_language_and_root_derived_paths(tmp_path: Path) -> None:

@@ -4,18 +4,28 @@
 
 # Helios AI
 
-## Local voice and RAG framework for NVIDIA Jetson
+## Offline-first voice assistant and adaptive LLM framework for NVIDIA Jetson
 
 Helios AI turns an edge computer into a hands-free, voice-driven assistant. A
-user can speak to the system, ask a local language model a question, or search a
-bundled knowledge base without needing a keyboard or display.
+user can speak to it, ask a language model a question, or search a bundled
+knowledge base without needing a keyboard, display, or permanently available
+Internet connection.
 
 The project was created for **Emilia 5.9**, Onda Solare's solar vehicle, and is
 primarily aimed at developers building voice interfaces for NVIDIA Jetson
 devices, robots, demonstrators, and other installations where interaction must
-remain simple and local. Its distinguishing feature is the combination of
-offline speech recognition, local neural text-to-speech, local semantic search,
-and an Ollama-hosted language model in one Python application.
+remain simple and resilient. It combines offline speech recognition, local
+neural text-to-speech, local semantic search, and an Ollama-hosted language
+model in one Python application. When explicitly authorized, it can also
+offload a request to an OpenAI-compatible API or to Codex through a ChatGPT
+subscription, while preserving the local model as a fast fallback.
+
+What makes Helios unusual is that remote inference is not merely an on/off
+switch. Before a transcript can leave the device, the runtime checks privacy,
+network reachability and quality, provider health, model capabilities, and
+optional cost limits. It then selects an appropriately sized remote model from
+an explainable complexity score. Generated text is spoken sentence by sentence
+as it streams, reducing perceived latency.
 
 Helios AI is a developer-oriented framework, not a packaged consumer
 application. The repository contains the complete voice pipeline and the
@@ -24,8 +34,9 @@ vehicle control, telemetry, navigation, battery management, or GPIO
 integration.
 
 > **Current implementation:** Vosk transcribes the microphone, an explicit
-> state machine routes finalized utterances, a local-first hybrid LLM layer
-> selects Ollama or an explicitly authorized remote SSE endpoint, a local
+> state machine routes finalized utterances, an offline-first hybrid LLM layer
+> selects Ollama, an explicitly authorized remote SSE endpoint, or the Codex
+> app-server, a local
 > SentenceTransformer retrieves regulations through an integrity-checked
 > index, and a shared Piper instance speaks the result.
 
@@ -35,6 +46,10 @@ integration.
 - [Architecture](#architecture)
   - [Design and responsibilities](#design-and-responsibilities)
   - [Component interaction](#component-interaction)
+- [Hybrid inference and data flow](#hybrid-inference-and-data-flow)
+  - [Routing and model selection](#routing-and-model-selection)
+  - [Connectivity gate](#connectivity-gate)
+  - [Privacy, cost, and failure safety](#privacy-cost-and-failure-safety)
 - [Runtime workflows](#runtime-workflows)
   - [Startup](#startup)
   - [Conversational command](#conversational-command)
@@ -47,6 +62,8 @@ integration.
 - [Installation](#installation)
 - [Ollama model setup](#ollama-model-setup)
 - [Configuration](#configuration)
+- [Remote inference setup](#remote-inference-setup)
+- [Active settings](#active-settings)
 - [Running and using the assistant](#running-and-using-the-assistant)
 - [Knowledge base and embeddings](#knowledge-base-and-embeddings)
 - [Asset validation and provenance](#asset-validation-and-provenance)
@@ -65,14 +82,15 @@ The default profile runs in Italian and listens through the default microphone.
 Each recognition call has a maximum duration of 6.5 seconds, but it returns
 earlier as soon as Vosk produces a finalized phrase.
 
-Helios supports two user flows:
+Helios supports two primary user flows:
 
 1. **Conversational command**
    - Include `emilia`, `amelia`, or `hello` as a complete word in the spoken
      phrase.
-   - Helios sends the phrase to the configured Ollama chat model.
-   - The streamed answer is synthesized locally with Piper as punctuation is
-     received.
+   - Helios removes the first wake-word occurrence before inference.
+   - The configured route chooses local Ollama or an authorized remote target.
+   - The streamed answer is synthesized locally with Piper at sentence or soft
+     length boundaries.
 
 2. **Knowledge-base query**
    - Say `regolamento` to enter RAG mode (`regulation` in English mode).
@@ -87,8 +105,13 @@ Implemented capabilities include:
 - consecutive-word deduplication for Vosk results;
 - whole-word wake and RAG trigger detection;
 - local streaming chat through the official Ollama Python client;
-- optional, fail-closed remote Chat Completions SSE routing with privacy,
-  health, cost, and no-replay controls;
+- optional, fail-closed OpenAI-compatible Chat Completions SSE routing;
+- optional Codex app-server routing using a ChatGPT sign-in instead of an API
+  key;
+- deterministic routing policies and an explainable adaptive remote model
+  cascade;
+- a Linux route/carrier/IP gate plus background HTTPS quality measurements;
+- privacy, health, cost, observability, timeout, and audio no-replay controls;
 - custom Italian and English Ollama definitions for concise responses;
 - offline Italian and English Piper voices bundled as ONNX models;
 - one Piper instance shared by direct and Ollama-generated responses;
@@ -113,10 +136,13 @@ flowchart LR
     Command --> Intro{Presentation question?}
     Intro -->|Yes| Preset[Local predefined answer]
     Intro -->|No| LLMRouter{Hybrid LLM router}
-    LLMRouter -->|Default| Ollama[Local Ollama model]
-    LLMRouter -->|Explicit opt-in| Remote[Remote SSE provider]
+    LLMRouter --> Gates{Privacy, network,<br/>health, budget}
+    Gates -->|Local route| Ollama[Local Ollama model]
+    Gates -->|API opt-in| Remote[OpenAI-compatible SSE]
+    Gates -->|Subscription opt-in| Codex[Codex app-server]
     Ollama --> Stream[Normalized text deltas]
     Remote --> Stream
+    Codex --> Stream
 
     Router -->|Regolamento / Regulation| RagState[RAG state]
     RagState --> Query[Next finalized utterance]
@@ -142,8 +168,9 @@ The application uses a small composition-root architecture:
 - `main.py` configures logging and owns the top-level application lifecycle.
 - `VoiceAssistant` coordinates state without implementing hardware details.
 - `SpeechRecognizer` isolates PyAudio and Vosk.
-- `APIClient` preserves the public model API while provider adapters, routing,
-  streaming safety, privacy, health, and budget controls remain internal.
+- `APIClient` preserves the public `talk()`/`think()` API while provider
+  adapters, connectivity, routing, streaming safety, privacy, health, budget,
+  and metrics remain internal.
 - `RagSystem` owns corpus chunking, index generation, integrity validation, and
   ranking.
 - `PiperTTS` isolates voice loading, synthesis, WAV parsing, and playback.
@@ -203,7 +230,36 @@ classDiagram
         +warm_up(mode)
         +talk(message, context) str
         +think(message, context, tts) str
+        +cancel_current()
         +close()
+    }
+
+    class RoutePlanner {
+        +plan(request, targets, policy) tuple
+        +complexity_score(request, targets) int
+        +estimate_input_tokens(request) int
+    }
+
+    class ConnectivityMonitor {
+        +connectivity() Connectivity
+        +refresh_once() NetworkQualitySnapshot
+        +snapshot() NetworkQualitySnapshot
+        +close()
+    }
+
+    class ProviderRegistry {
+        +register(name, factory)
+        +get(name) ChatProvider
+        +close()
+    }
+
+    class TargetCompiler {
+        +compile_all() dict
+        +compile(mode) tuple
+    }
+
+    class ProviderFactory {
+        +configured_provider_factory(settings) Callable
     }
 
     class RagSystem {
@@ -231,11 +287,151 @@ classDiagram
     Settings --> VoiceAssistant
     VoiceAssistant --> SpeechRecognizer
     VoiceAssistant --> APIClient
+    APIClient --> RoutePlanner
+    APIClient --> ConnectivityMonitor
+    APIClient --> TargetCompiler
+    APIClient --> ProviderFactory
+    APIClient --> ProviderRegistry
     VoiceAssistant --> RagSystem
     VoiceAssistant --> PiperTTS
     VoiceAssistant --> SoundPlayer
     APIClient --> PiperTTS
 ```
+
+## Hybrid inference and data flow
+
+The default behavior remains fully local. Remote transmission is possible only
+after a valid routing file and an independent environment switch both enable
+it. The same provider-neutral request then travels through a sequence of
+fail-closed checks:
+
+```mermaid
+flowchart TD
+    Input[Finalized voice command] --> Clean[Remove wake and mode trigger]
+    Clean --> Request[Canonical ChatRequest<br/>with content provenance]
+    Request --> Privacy{Privacy permits<br/>this content?}
+    Privacy -->|No| Local[Local eligible targets]
+    Privacy -->|Yes| Link{Default route, carrier,<br/>usable IP?}
+    Link -->|No| Local
+    Link -->|Yes| Quality{Fresh HTTPS quality<br/>above threshold?}
+    Quality -->|No| Local
+    Quality -->|Yes| Eligible[Filter language, context,<br/>features, health and budget]
+    Eligible --> Score[Compute explainable<br/>complexity score]
+    Score --> Plan[Select ordered execution plan]
+    Plan --> Attempt[Stream first target]
+    Attempt -->|Failure before speech| Fallback[Retry or next target]
+    Fallback --> Attempt
+    Attempt -->|First speech committed| NoReplay[Disable retry and fallback]
+    Attempt -->|Completed| TTS[Piper sentence streaming]
+    Local --> Plan
+```
+
+No persistent conversation-memory subsystem exists in the current codebase.
+Each voice command is independent unless an in-process caller explicitly passes
+context to `APIClient`. Codex also creates a fresh ephemeral thread for every
+turn.
+
+### Routing and model selection
+
+`RoutePlanner` supports five policies:
+
+| Policy | Eligible-target order |
+|---|---|
+| `local_only` | Local targets only |
+| `remote_only` | Remote targets only |
+| `local_first` | Local targets, then remote targets |
+| `remote_first` | Remote targets, then local targets |
+| `auto` | Complexity score chooses local-first or remote-first |
+
+Candidate order is declared separately for `talk` and `think`. Eligibility
+checks target/provider enablement, allowlists and denylists, language,
+capabilities, conservative context size, health, privacy authorization,
+connectivity, and—when enabled—catalog and budget state.
+
+The complexity score adds:
+
+- 2 points when input plus reserved output exceeds 80% of the largest eligible
+  local context;
+- 1 point for `think`;
+- 1 point above 160 conservatively estimated input tokens;
+- 1 point for an Italian or English reasoning cue;
+- 1 point for at least three connectors or question separators;
+- 1 point for more than 64 estimated context tokens;
+- 2 points when an API caller supplies `request_options={"complex": true}`.
+
+For `auto`, the mode's `complexity_threshold` controls local-versus-remote
+order. Independently, remote targets with `min_complexity_score` form a model
+cascade: the planner keeps only the healthy tier with the highest floor not
+exceeding the score. The committed Codex profile maps scores as follows:
+
+| Score | Talk/think remote model | Typical intent |
+|---:|---|---|
+| 0–2 | `gpt-5.6-luna` | Short, direct requests |
+| 3–4 | `gpt-5.6-terra` | Explanations and moderate reasoning |
+| 5+ | `gpt-5.6-sol` | Longer, multi-step work |
+
+Only one remote tier is attempted before the local fallback. Helios does not
+try all three remote models serially during an outage. Model availability is
+account-dependent and must be checked on the deployment device.
+
+See [Adaptive remote model routing and latency](docs/ADAPTIVE_REMOTE_ROUTING.md)
+for scoring, calibration, speech chunking, and benchmark guidance.
+
+### Connectivity gate
+
+When network monitoring is enabled, a request never waits for a new Internet
+probe. A synchronous Linux-only passive check reads kernel route/address state
+and requires:
+
+1. an IPv4 or IPv6 default route;
+2. an allowed interface, and Wi-Fi when configured;
+3. `operstate` equal to `up` or `unknown`;
+4. no explicit `carrier=0`;
+5. a usable non-loopback, non-link-local address.
+
+Failure removes remote targets immediately. A background monitor then validates
+the real HTTPS path with bounded DNS, TCP, TLS, time-to-first-byte, and
+application payload measurements. It smooths TTFB, variation, success ratio,
+payload rate, and available Wi-Fi signal into a zero-to-one quality score with
+hysteresis. Netlink route events wake the monitor when Linux link state changes.
+A failed probe, stale result, captive/intercepted TLS path, changed interface,
+or sub-threshold score fails closed.
+
+Run the sanitized diagnostic with the active routing profile:
+
+```bash
+export HELIOS_LLM_CONFIG="$PWD/examples/llm-routing.codex-subscription.toml"
+export HELIOS_LLM_REMOTE_ENABLED=true
+python scripts/network_diagnostics.py
+```
+
+Exit status is zero only when the remote path is admitted. The JSON deliberately
+omits addresses, URLs, prompts, responses, tokens, and credentials. Detailed
+tuning is in
+[Fast connectivity and network-quality routing](docs/NETWORK_CONNECTIVITY_ROUTING.md).
+
+### Privacy, cost, and failure safety
+
+Remote content is labeled by origin. Raw transcripts, conversation/tool
+context, and local documents have independent permission gates; unknown-origin
+content never leaves the device. `remote_redacted` additionally requires every
+non-static message to be explicitly marked as already redacted. Helios does not
+implement a general-purpose redactor.
+
+When budget enforcement is enabled, a strict expiring JSON catalog defines the
+exact provider/model identity, context limits, output limits, and decimal token
+prices. An append-only ledger reserves the conservative maximum before
+dispatch, then settles returned usage. Missing usage settles the full
+reservation. A missing/stale catalog, corrupt/unwritable ledger, price mismatch,
+clock rollback, or exceeded per-request/daily/monthly limit blocks remote
+execution.
+
+Every provider adapter performs one transport attempt; retry and fallback are
+owned centrally. Text received before speech is discarded if an attempt fails.
+After Helios commits the first fragment to Piper, retry and fallback are
+disabled because replaying another answer could duplicate speech already heard.
+Reasoning deltas are neither spoken nor returned as visible text. Refusal,
+cancellation, and TTS errors are terminal.
 
 ## Runtime workflows
 
@@ -247,27 +443,39 @@ sequenceDiagram
     participant VA as VoiceAssistant
     participant P as PiperTTS
     participant V as SpeechRecognizer
-    participant O as APIClient
+    participant A as APIClient
+    participant R as Remote provider
 
     Main->>Main: configure_logging()
     Main->>VA: Construct adapters
-    Note over VA,O: Constructors do not contact Ollama or load Vosk/Piper weights
+    Note over VA,A: Constructors do not contact Ollama or load Vosk/Piper weights
     Main->>VA: run()
+    VA->>A: prepare_remote_async()
+    A-->>R: Optionally prepare Codex in background
+    VA->>V: prepare_async()
+    V->>V: Load Vosk and initialize PyAudio in background
     VA->>P: Speak welcome message
     P->>P: Lazily load configured voice
     VA->>V: listen_once(timeout)
-    V->>V: Lazily load Vosk and initialize PyAudio
     V-->>VA: First finalized RecognitionResult
-    VA->>O: Contact Ollama only for a conversational command
+    VA->>A: Dispatch only for a conversational command
 ```
 
 The constructor establishes the dependency graph without performing network
 requests or opening audio devices. The first welcome message loads Piper, and
-the first listening cycle loads Vosk and PyAudio. The Ollama SDK client remains
-lazy until a conversational request or an explicit `warm_up()` call.
+the runtime begins loading Vosk and initializing PyAudio in a background thread
+at the same time. The input stream is opened only when listening begins. The
+Ollama SDK client remains lazy until a conversational request or an explicit
+`warm_up()` call. If the current network gate admits a configured Codex route,
+app-server startup and ChatGPT account validation also begin in a background
+thread while the welcome message is spoken. Preparation sends no prompt and
+starts no inference turn.
 
-The embedding model and corpus are not loaded during normal startup. RAG is
-initialized only after the user enters RAG mode and asks a question.
+The embedding model and corpus are not loaded during normal startup. When the
+user enters RAG mode, Helios prepares the model and any existing validated
+index in the background while the user asks the question. A missing index is
+not built during listening; that expensive operation remains part of the query
+path or the explicit index-building command.
 
 ### Conversational command
 
@@ -276,7 +484,8 @@ sequenceDiagram
     participant User
     participant STT as SpeechRecognizer
     participant VA as VoiceAssistant
-    participant O as APIClient / Ollama
+    participant A as APIClient
+    participant P as Selected provider
     participant TTS as Shared PiperTTS
 
     User->>STT: "Emilia, raccontami del veicolo"
@@ -285,12 +494,15 @@ sequenceDiagram
     VA->>VA: Check local presentation questions
     alt Predefined answer
         VA->>TTS: Speak local response
-    else Ollama answer
-        VA->>O: talk(message)
+    else LLM answer
+        VA->>A: talk(message)
+        A->>A: Authorize, score and plan route
+        A->>P: Stream canonical request
         loop Until stream completes
-            O-->>VA: ChatResponse chunk
-            VA->>TTS: Speak buffered text at punctuation
+            P-->>A: TextDelta / Completed
+            A->>TTS: Speak sentence or soft-size fragment
         end
+        A-->>VA: Complete visible text
     end
 ```
 
@@ -298,10 +510,10 @@ Only finalized recognition results are executed. Partial phrases are available
 through `listen_events()` for other consumers, but they do not trigger commands
 in `VoiceAssistant`.
 
-Ollama transport failures are retried only while retrying is safe. Once speech
-has started, a failed stream is not replayed because doing so could duplicate
-audio already heard by the user. TTS failures are preserved as TTS errors
-rather than being relabeled as network failures.
+Provider failures are retried or routed to the next target only while doing so
+is safe. Once speech has started, a failed stream is not replayed because doing
+so could duplicate audio already heard by the user. TTS failures are preserved
+as TTS errors rather than being relabeled as network failures.
 
 ### RAG query
 
@@ -316,7 +528,12 @@ sequenceDiagram
     User->>VA: "regolamento"
     VA->>VA: Enter RAG state
     VA->>VA: Queue wake sound
-    User->>VA: Ask question
+    par User asks question
+        User->>VA: Ask question
+    and Existing RAG preparation
+        VA->>R: prepare()
+        R->>FS: Load and validate existing index only
+    end
     VA->>R: run(query, top_k=settings.top_k)
     R->>FS: Read corpus snapshot
     alt embeddings.npz is missing
@@ -363,11 +580,27 @@ process from blocking shutdown indefinitely.
 |-- requirements.txt                Portable desktop dependency entry point
 |-- requirements-runtime.txt        Platform-neutral direct dependencies
 |-- requirements-jetson.txt         Jetson-specific installation contract
+|-- requirements-remote.txt         Optional remote SSE and Codex dependencies
 |-- requirements-dev.txt            Model-free test and quality dependencies
 |-- assets-manifest.json            Machine-readable asset inventory and hashes
 |-- THIRD_PARTY_NOTICES.md          Provenance and redistribution gaps
 |-- api/
-|   |-- api_client.py               Lazy Ollama streaming client
+|   |-- api_client.py               Public talk/think facade and composition
+|   |-- provider_factory.py         Lazy configured-adapter construction
+|   |-- target_compiler.py          Settings-to-execution-target compilation
+|   |-- routing.py                  Eligibility, policies, complexity scoring
+|   |-- streaming.py                Retry, fallback, speech and settlement
+|   |-- connectivity.py             Linux passive gate and HTTPS quality monitor
+|   |-- privacy.py                  Provenance-aware remote authorization
+|   |-- health.py                   Provider/model circuits and cooldowns
+|   |-- catalog.py                  Strict expiring model/price catalog
+|   |-- budget.py                   Durable reservation and settlement ledger
+|   |-- metrics.py                  Content-free metric schema and recorder
+|   |-- providers/
+|   |   |-- contracts.py            Provider-neutral requests and stream events
+|   |   |-- ollama.py               Local or explicitly trusted Ollama adapter
+|   |   |-- openai_chat_sse.py      Strict Chat Completions SSE adapter
+|   |   `-- codex_app_server.py     ChatGPT-subscription Codex adapter
 |   |-- Modelfile-IT                Italian Emilia Ollama definition
 |   `-- Modelfile-EN                English Emilia Ollama definition
 |-- audio/
@@ -385,14 +618,26 @@ process from blocking shutdown indefinitely.
 |-- scripts/
 |   |-- build_index.py              Explicit RAG index builder
 |   |-- doctor.py                   Environment and asset validator
-|   `-- smoke_tts.py                Side-effect-free manual TTS smoke command
+|   |-- run_jetson.py               Virtualenv/OpenMP-aware Jetson launcher
+|   |-- network_diagnostics.py      Sanitized route and HTTPS quality report
+|   |-- codex_subscription.py       Device login, status, and model listing
+|   `-- smoke_tts.py                Manual Piper/audio smoke command
+|-- docs/
+|   |-- HYBRID_LLM_OPERATIONS.md    Security, deployment, live-test checklist
+|   |-- CODEX_SUBSCRIPTION.md       ChatGPT sign-in and Codex operation
+|   |-- ADAPTIVE_REMOTE_ROUTING.md  Complexity tiers and latency tuning
+|   `-- NETWORK_CONNECTIVITY_ROUTING.md
+|                                    Network decision and calibration details
+|-- examples/
+|   |-- llm-routing.offline.toml    Explicit local-only policy
+|   |-- llm-routing.codex-subscription.toml
+|   |                                Remote-first ChatGPT/Codex policy
+|   |-- llm-routing.free-tier-first.toml
+|   |-- llm-routing.paid-first.toml
+|   |-- llm-routing.local-first-escalation.toml
+|   `-- model-catalog.example.json  Deliberately stale fail-closed template
 |-- tests/
-|   |-- test_api_client.py          Ollama streaming and retry behavior
-|   |-- test_assistant.py           State routing and lifecycle behavior
-|   |-- test_doctor.py              Asset validation behavior
-|   |-- test_rag_system.py          Index integrity and retrieval behavior
-|   |-- test_recognizer.py          Recognition result and cleanup behavior
-|   `-- test_tts.py                 WAV, TTS, and cue playback behavior
+|   `-- test_*.py                   Model-free unit/integration-style coverage
 |-- uploads/
 |   |-- qa_pairs.txt                Question-and-answer knowledge
 |   |-- regolamento.txt             Competition regulations
@@ -405,6 +650,7 @@ process from blocking shutdown indefinitely.
 |   `-- emilia5.9.bmp               Emilia 5.9 photograph
 |-- prompts/
 |   `-- update_readme.txt           Technical-writing prompt for this README
+|-- .env.example                    Non-secret deployment variable template
 |-- .github/workflows/quality.yml   Cross-platform quality workflow
 |-- .gitattributes                  Line-ending and future LFS policy
 |-- .gitignore                      Generated/runtime artifact exclusions
@@ -427,6 +673,8 @@ console command.
 | Vosk | Offline Italian/English speech recognition |
 | PyAudio / PortAudio | 16 kHz mono microphone capture |
 | Ollama Python SDK | Streaming communication with a local chat model |
+| HTTPX | Optional timed HTTPS and OpenAI-compatible SSE transport |
+| `openai-codex` | Optional native Codex app-server and ChatGPT authentication |
 | Gemma 3 GGUF | Base model referenced by the included Ollama Modelfiles |
 | Piper | Offline neural text-to-speech |
 | ONNX Runtime | Piper inference backend |
@@ -439,9 +687,9 @@ console command.
 | Ruff | Linting and formatting checks |
 | GitHub Actions | Linux/Windows automated quality checks |
 
-There is no HTTP API exposed by Helios itself. `APIClient` is an internal Python
-adapter over Ollama's chat interface; the other interfaces are in-process
-classes and protocols.
+There is no HTTP server or public network API exposed by Helios itself.
+`APIClient` is an in-process Python facade. Provider integrations are outgoing
+clients behind typed contracts.
 
 ### Dependency files
 
@@ -450,7 +698,7 @@ classes and protocols.
 | `requirements-runtime.txt` | Dependencies that resolve consistently across desktop and Jetson |
 | `requirements.txt` | Desktop install, adding generic Torch, ONNX Runtime, and Piper |
 | `requirements-jetson.txt` | Shared dependencies after platform backends are provisioned |
-| `requirements-remote.txt` | Optional HTTP transport for remote SSE providers |
+| `requirements-remote.txt` | Optional HTTP/SSE and native Codex app-server clients |
 | `requirements-dev.txt` | Model-free test and lint dependencies, including the fake-transport HTTP surface |
 
 Jetson inference packages are deliberately not pinned to guessed public wheel
@@ -481,13 +729,16 @@ and library logging is not globally disabled.
 Its most important methods are:
 
 - `run_once()` — consume and route at most one finalized utterance;
-- `process_command()` — answer presentation questions locally or call Ollama;
+- `process_command()` — remove the wake word, select talk/think, and dispatch
+  the model request;
 - `process_rag_command()` — execute retrieval and speak the localized result;
 - `run()` — speak the greeting and maintain the recoverable main loop;
 - `close()` — release owned resources exactly once.
 
 Wake words are matched as complete words, avoiding accidental activation by
-larger words such as `emiliana`.
+larger words such as `emiliana`. The activation occurrence is removed before
+inference. Italian commands prefixed with `pensa` or `ragiona` use `think`;
+English commands use `think` or `reason`.
 
 ### `SpeechRecognizer`
 
@@ -512,6 +763,11 @@ The compatibility boundary:
 - defaults to the same lazy Ollama client and model payloads;
 - keeps `talk()`, `think()`, `warm_up()`, shared Piper, and idempotent cleanup;
 - normalizes provider streams before sentence-level speech;
+- registers provider adapters lazily and builds per-language execution targets;
+- constructs canonical, provenance-labeled messages and applies the shared
+  Emilia system instruction only when a hybrid routing file is active;
+- supports Ollama, OpenAI-compatible Chat Completions SSE, and Codex app-server
+  providers;
 - retries or switches targets only before speech is committed;
 - supports strict remote privacy authorization, health cooldowns, an expiring
   price catalog, durable budgets, and content-free metrics;
@@ -519,6 +775,21 @@ The compatibility boundary:
 - raises sanitized `APIClientError` values after routing is exhausted.
 
 The configured host defaults to `http://localhost:11434`.
+
+The supporting modules separate policy from transport:
+
+| Module | Responsibility |
+|---|---|
+| `providers/contracts.py` | Typed messages, requests, deltas, completion metadata, usage, errors, cancellation, and capabilities |
+| `provider_factory.py` | Converts validated provider settings into lazy adapter factories without importing optional transports at startup |
+| `target_compiler.py` | Compiles talk/think candidate chains, limits, prices, language models, priorities, and emergency-local behavior into execution targets |
+| `routing.py` | Lazy registry, eligibility, policy ordering, input estimation, and adaptive tier selection |
+| `streaming.py` | Attempt loop, text buffering, speech commit, retry/fallback, health, metrics, and budget settlement |
+| `connectivity.py` | Passive Linux path inspection, active TLS/HTTPS probe, smoothing, and hysteresis |
+| `privacy.py` | Origin-specific authorization and dispatch-time revalidation |
+| `health.py` | Exponential provider/model circuits, quota/auth state, and latency EWMA |
+| `catalog.py` / `budget.py` | Strict model identity/pricing and durable spending limits |
+| `metrics.py` | Validated content-free operational events |
 
 ### `RagSystem`
 
@@ -564,8 +835,8 @@ on one reusable assistant worker and has a configurable timeout.
   models.
 
 The exact production Jetson model, JetPack release, microphone, and audio-device
-configuration are deployment-specific and could not be determined completely
-from the current codebase.
+configuration are deployment-specific. **This could not be determined from the
+current codebase.**
 
 ### Software
 
@@ -610,6 +881,12 @@ python -m pip install -r requirements.txt
 ```
 
 On Linux, PyAudio may require PortAudio headers supplied by the distribution.
+Install `requirements-remote.txt` in addition when this deployment will use an
+HTTP/SSE provider or Codex:
+
+```bash
+python -m pip install -r requirements-remote.txt
+```
 
 ### NVIDIA Jetson
 
@@ -630,6 +907,15 @@ python -m pip install piper-phonemize-fix==1.2.1
 python -m pip install --no-deps piper-tts==1.2.0
 python -m pip install -r requirements-jetson.txt
 python -c "import piper, torch, onnxruntime; print('Jetson backends import successfully')"
+```
+
+`requirements-jetson.txt` contains runtime dependencies only. To run the
+model-free test and quality suite on the Jetson, install the separate developer
+dependencies:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
 ```
 
 Use the repository launcher for validation and normal operation:
@@ -693,7 +979,11 @@ module-level constants remain as compatibility aliases.
 
 ### Environment variables
 
-The two original deployment overrides remain supported:
+Copy [`.env.example`](.env.example) into a deployment-owned environment or
+secret manager as a starting point. The application reads process environment
+variables; it does not load `.env` files itself.
+
+Core overrides:
 
 ```bash
 export HELIOS_LANGUAGE=it
@@ -740,7 +1030,110 @@ provider data. See
 configuration, credential, privacy, budget, live-test, benchmark, rollout, and
 human-review checklist.
 
-### Active settings
+For OpenClaw-style ChatGPT subscription routing through the native Codex
+app-server, see
+[`docs/CODEX_SUBSCRIPTION.md`](docs/CODEX_SUBSCRIPTION.md). It requires no API
+key and keeps Ollama as the configured fallback.
+
+All implemented LLM environment overrides are:
+
+| Variable | Purpose |
+|---|---|
+| `HELIOS_LLM_CONFIG` | Path to a version-1 routing TOML |
+| `HELIOS_LLM_REMOTE_ENABLED` | Independent remote-transmission gate |
+| `HELIOS_LLM_EMERGENCY_LOCAL_ONLY` | Force local-only operation after restart |
+| `HELIOS_LLM_POLICY` | Override `local_only`, `remote_only`, `local_first`, `remote_first`, or `auto` |
+| `HELIOS_LLM_ALLOW_REMOTE_TRANSCRIPTS` | Permit raw transcript origin remotely |
+| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | Permit conversation/tool context remotely |
+| `HELIOS_LLM_ALLOW_REMOTE_RAG` | Permit local-document content remotely |
+| `HELIOS_LLM_CATALOG` | Override the strict model catalog path |
+| `HELIOS_LLM_DAILY_BUDGET_USD` | Override the daily USD limit |
+| `HELIOS_LLM_MONTHLY_BUDGET_USD` | Override the monthly USD limit |
+| `HELIOS_LLM_ZERO_COST_ONLY` | Reject nonzero cost reservations when true |
+| `HELIOS_LLM_METRICS_ENABLED` | Enable content-free metrics |
+| `HELIOS_LLM_LOG_CONTENT` | Reserved; content logging remains disabled |
+
+`HELIOS_PYTHON` is consumed by `scripts/run_jetson.py` and must point to a
+virtual-environment interpreter. API credentials use the environment-variable
+name declared by the selected provider, such as `OPENAI_API_KEY` or
+`GROQ_API_KEY`; secret values never belong in TOML or Git.
+
+Environment overrides can disable remote operation, but cannot construct a
+remote route without a validated TOML. Invalid files and invalid overrides
+restore local-only behavior.
+
+## Remote inference setup
+
+Remote inference is optional. Choose exactly the mechanism appropriate for the
+deployment.
+
+### Codex through a ChatGPT subscription
+
+This path follows the OpenClaw-style mechanism: the official Codex app-server
+runs locally over stdio and uses a ChatGPT device login. It does **not** use
+`OPENAI_API_KEY`.
+
+```bash
+python -m pip install -r requirements-remote.txt
+python scripts/codex_subscription.py login
+python scripts/codex_subscription.py status
+python scripts/codex_subscription.py models
+```
+
+Open the displayed verification URL on any computer, enter the one-time code,
+and complete sign-in. `status` must identify a `chatgpt` account. Then:
+
+```bash
+export HELIOS_LLM_CONFIG="$PWD/examples/llm-routing.codex-subscription.toml"
+export HELIOS_LLM_REMOTE_ENABLED=true
+python scripts/network_diagnostics.py
+python3 scripts/run_jetson.py
+```
+
+The Codex child receives cleared API-key variables, an isolated temporary
+`CODEX_HOME` containing only a private copy of `auth.json`, a temporary empty
+workspace, read-only sandboxing, and deny-all approvals. Tools, shell, web,
+plugins, connectors, and user Codex configuration are not exposed to the voice
+request. The prompt still leaves the device and is subject to the signed-in
+account's terms and limits.
+
+Verify that every configured Luna/Terra/Sol identifier appears in the output of
+`models`; otherwise remove or replace the unavailable target and its candidate
+reference. Do not guess model identifiers.
+
+### OpenAI-compatible API with an API key
+
+Copy and review `examples/llm-routing.paid-first.toml`. Replace placeholder
+model and catalog entries with current, independently verified provider data.
+Inject the actual key outside source control:
+
+```bash
+export OPENAI_API_KEY='sk-example-not-a-real-key'
+export HELIOS_LLM_CONFIG=/etc/helios/llm-routing.toml
+export HELIOS_LLM_REMOTE_ENABLED=true
+python3 scripts/run_jetson.py
+```
+
+The shell assignment must not contain whitespace around `=`. The adapter
+accepts only HTTPS endpoints without embedded credentials, query strings, or
+fragments and performs no hidden internal retry.
+
+The example catalog is deliberately expired and uses blocking placeholder
+prices. It is documentation, not a ready production catalog. Complete the
+account, pricing, privacy, budget, and failure-injection checklist in
+[Hybrid LLM deployment and operations](docs/HYBRID_LLM_OPERATIONS.md) before
+enabling a paid or free-tier API route.
+
+### Immediate rollback
+
+```bash
+export HELIOS_LLM_EMERGENCY_LOCAL_ONLY=true
+```
+
+Restart Helios after changing the switch. Remove or set it to `false` only
+after the remote issue has been reviewed.
+
+## Active settings
 
 | `Settings` field | Default | Runtime effect |
 |---|---|---|
@@ -787,10 +1180,25 @@ Expected behavior:
 
 1. logging is configured;
 2. lightweight service adapters are constructed;
-3. Piper loads and speaks the localized welcome message;
-4. Vosk/PyAudio initialize on the first listening cycle;
-5. the assistant waits in `COMMAND` state;
-6. Ollama or RAG resources initialize only when their flow is used.
+3. an eligible Codex route may prepare in the background without sending text;
+4. Vosk/PyAudio prepare in the background without opening the input stream;
+5. Piper loads and speaks the localized welcome message concurrently;
+6. the assistant waits in `COMMAND` state;
+7. Ollama stays lazy until inference; RAG stays lazy until RAG-mode entry.
+
+Typical content-free INFO records for a hybrid request look like:
+
+```text
+Adaptive remote tier selection: complexity_score=3, minimum_score=3, selected=codex-talk-terra
+Planning talk request with eligible routes in fallback order: codex-talk-terra,local-talk
+Completed talk request using route codex-talk-terra (provider=openai-codex, requested_model=gpt-5.6-terra, resolved_model=gpt-5.6-terra, attempts=1, ...)
+```
+
+The planning line reports candidates, not the provider that ultimately
+answered. Use the completion line and its `provider`, `requested_model`, and
+`resolved_model` fields. A plan containing only `local-talk` means the remote
+route was excluded by configuration, privacy, connectivity, health, catalog,
+budget, or provider eligibility.
 
 ### Example: conversational answer
 
@@ -800,8 +1208,20 @@ Say:
 Emilia, spiegami come funziona la tua intelligenza artificiale
 ```
 
-The complete recognized phrase is passed to Ollama. The wake word is retained in
-the prompt.
+The assistant removes the activation occurrence of the wake word and sends
+`spiegami come funziona la tua intelligenza artificiale` to the selected
+`talk` route.
+
+### Example: reasoned answer
+
+Say:
+
+```text
+Emilia, pensa: confronta due strategie energetiche
+```
+
+The assistant removes `Emilia` and `pensa`, selects the configured `think`
+route, and speaks the streamed answer.
 
 ### Example: predefined introduction
 
@@ -833,6 +1253,27 @@ prefix. The stop cue plays when the assistant returns to `COMMAND`.
 
 The application has no spoken shutdown command. Stop it from the terminal with
 `Ctrl+C`.
+
+### In-process Python API
+
+`APIClient` is the stable compatibility facade:
+
+```python
+from api.api_client import APIClient
+
+with APIClient() as client:
+    short_answer = client.talk("Spiega in breve il progetto")
+    detailed_answer = client.think(
+        "Confronta inferenza locale e remota",
+        tts=False,
+    )
+```
+
+`talk()` speaks by default. `think()` returns text without speech unless
+`tts=True`. Both accept optional context, provenance, privacy, connectivity,
+redaction attestations, request options, and cancellation; consult the method
+signatures in `api/api_client.py` before integrating non-voice callers. There
+is no REST, WebSocket, MQTT, or gRPC server in this repository.
 
 ### Manual TTS smoke check
 
@@ -1038,8 +1479,12 @@ Covered behaviors include:
 - retry success, exhaustion, and no-replay behavior;
 - preservation of TTS failures;
 - normalized Ollama and OpenAI-compatible SSE adapters;
+- isolated Codex app-server authentication, streaming, timeout, and teardown;
 - deterministic routing, privacy authorization, cooldowns, catalog freshness,
   durable budget limits, and content-free metrics;
+- passive/active connectivity admission, freshness, route-change notification,
+  quality smoothing, and hysteresis;
+- adaptive Luna/Terra/Sol tier selection and direct local fallback;
 - fallback before speech and the global no-replay rule after speech;
 - PCM-frame playback without WAV-header corruption;
 - lazy and bounded `aplay` execution;
@@ -1065,6 +1510,20 @@ python -m compileall -q main.py assistant.py config.py api audio document recogn
 python -m pytest
 python scripts/doctor.py --assets-only --check-hashes
 ```
+
+The only test allowed to contact a remote service is marked `remote_live` and
+skips unless both opt-in variables are present. It additionally requires a
+reviewed `remote_only` configuration:
+
+```bash
+export HELIOS_LLM_LIVE=1
+export HELIOS_LLM_LIVE_CONFIG=/etc/helios/llm-routing-live.toml
+python -m pytest tests/test_live_llm.py -m remote_live -q
+```
+
+Normal `pytest` and CI runs remain network-free. For Codex, a convenient
+certification procedure using a temporary copy of the committed profile is
+documented in [Codex via ChatGPT subscription](docs/CODEX_SUBSCRIPTION.md).
 
 ### CI
 
@@ -1104,14 +1563,33 @@ specific Jetson audio/inference image is correctly provisioned.
 
 - The corpus and compressed embedding matrix are loaded once and cached.
 - Every query is encoded once.
+- Already normalized encoder output is reused without another division/copy.
+- RAG top-k selection partitions the similarity vector in linear time and
+  deterministically sorts only the selected candidates.
+- RAG model and existing-index loading overlap the interval between the RAG
+  trigger and the following spoken question; missing indexes are never built
+  by this background preparation.
 - No startup RAG query is executed and discarded.
 - No constructor sends an Ollama warm-up request by default.
-- Vosk, PyAudio, the Ollama client, Piper weights, and RAG are lazy at their
-  relevant boundary.
+- Eligible Codex startup/account validation overlaps the welcome message and
+  never starts an inference turn.
+- Vosk and PyAudio prepare concurrently with the greeting without opening the
+  microphone stream; the Ollama client, Piper weights, and RAG remain lazy at
+  their relevant boundary.
 - One Piper object is shared between direct responses and streamed chat.
 - Synthesis stays in memory and does not repeatedly write a fixed WAV file.
+- TTS fragments reuse one blocking raw PortAudio output stream while the PCM
+  format remains unchanged, avoiding per-sentence device reconstruction and
+  NumPy conversion.
 - Recognition returns on the first finalized phrase instead of always waiting
   the full timeout.
+- Remote deltas are spoken at sentence boundaries before completion; long
+  unpunctuated output uses a configurable soft whitespace boundary.
+- Content-free JSONL metrics use a bounded background queue and are flushed on
+  client shutdown, keeping filesystem writes and daily retention pruning out
+  of the conversational return path.
+- Voice requests read cached network quality and perform only a fast passive
+  kernel check instead of waiting for an active probe.
 - Notification cues reuse one bounded worker instead of creating a process per
   state change.
 - Index writes are atomic, and valid data is not repeatedly decompressed.
@@ -1124,6 +1602,8 @@ specific Jetson audio/inference image is correctly provisioned.
 - Stable full ranking is used instead of partial or approximate ranking.
 - Model identity hashes relevant model/tokenizer content once when RAG is
   created.
+- Remote selection uses local integer scoring and adds no classifier request,
+  network latency, token cost, or additional transcript exposure.
 
 With approximately 1,115 chunks, the full ranking cost is small and the simpler
 algorithm improves determinism. An ANN database should be considered only after
@@ -1136,6 +1616,8 @@ the corpus grows enough for profiling to show a material bottleneck.
 - overlap between LLM generation and audio playback;
 - audio device latency and buffer tuning;
 - alternative embedding models or chunking strategies.
+- Codex model-tier floors, first-visible-token limits, and speech-fragment size;
+- connectivity thresholds against real Wi-Fi/cellular p50 and p95 data.
 
 The repository does not claim a Jetson speedup for these changes without
 target-device measurements.
@@ -1150,6 +1632,8 @@ target-device measurements.
 - Notification cues rely on Linux ALSA `aplay`.
 - There is no spoken shutdown command.
 - The active loop is single-session and does not expose a web or remote API.
+- There is no persistent conversation memory; separate commands do not
+  automatically share names, preferences, or prior dialogue.
 - The first RAG build can be expensive on constrained hardware.
 - Retrieval quality needs a language-specific gold-question set before changing
   the embedding model or splitter.
@@ -1158,10 +1642,14 @@ target-device measurements.
 - Existing large binary history has not been migrated to Git LFS.
 - Some voice, Vosk, corpus, sound, and image provenance/license metadata remains
   incomplete.
-- `think()` exists as an API capability but is not used by the active assistant
-  state machine.
-- The only remote vertical slice is strict OpenAI-compatible Chat Completions
-  SSE. Providers with different semantics require a separately tested adapter.
+- Remote support is limited to strict OpenAI-compatible Chat Completions SSE
+  and the native Codex app-server adapter. Other semantics require a separately
+  tested adapter.
+- Active network-quality admission depends on Linux interfaces and kernel
+  route/sysfs behavior; deployment behavior on non-Linux systems is not
+  certified.
+- The network score is an explainable heuristic, not a universal learned
+  optimum; its thresholds require target-network calibration.
 - Provider accounts, current catalogs, legal/privacy approval, connectivity and
   battery signals, and target-Jetson benchmarks are deployment responsibilities.
 
@@ -1173,6 +1661,11 @@ target-device measurements.
 | Ollama cannot be reached | Start `ollama serve`, verify `HELIOS_OLLAMA_HOST`, and check the configured tag with `ollama list`. |
 | Conversational stream stops after speaking part of an answer | Check `app.log`. The request is intentionally not replayed after speech begins. |
 | Remote route always falls back locally | Check the privacy gates, connectivity state, catalog expiry, ledger permissions, budget, provider allowlist, and named credential variable. |
+| Codex subscription route is rejected | Run `python scripts/codex_subscription.py status`; Helios accepts only account type `chatgpt`, not `apiKey`. |
+| A configured Codex model fails | Run `python scripts/codex_subscription.py models` and use only exact IDs returned for that account. |
+| Network diagnostic returns nonzero | Inspect its `passive_gate`, `active_quality`, and `decision`; verify route/carrier/IP, TLS reachability, freshness, and quality thresholds. |
+| Live remote test is skipped | Set `HELIOS_LLM_LIVE=1`, point `HELIOS_LLM_LIVE_CONFIG` to a reviewed configuration whose policy is exactly `remote_only`, and provide its required authentication. |
+| `export` reports “not a valid identifier” | Use `export NAME='value'` with no whitespace around `=`. |
 | Remote routing must be stopped immediately | Set `HELIOS_LLM_EMERGENCY_LOCAL_ONLY=true` and restart Helios. |
 | Vosk model fails to load | Verify `HELIOS_LANGUAGE` and the corresponding bundled Vosk directory. |
 | No microphone transcription | Confirm PortAudio/PyAudio and the default 16 kHz-capable input device. |
@@ -1190,9 +1683,22 @@ target-device measurements.
 
 ### Does Helios AI require internet access?
 
-The active runtime is designed to operate locally when all dependencies and
-models are already installed. Initial pip installation, Ollama model creation,
-or retrieving missing assets may require internet access.
+No for the default local route, once dependencies and models are provisioned.
+Remote LLM routes, initial pip installation, ChatGPT sign-in, Ollama model
+creation, or retrieving missing assets do require connectivity.
+
+### Does Helios remember previous conversations?
+
+No. Persistent or session conversation memory is not implemented in the current
+codebase. A programmatic caller may pass explicitly classified context to an
+individual `APIClient` request, but the voice loop does not retain facts between
+commands.
+
+### Does the ChatGPT-subscription route need an API key?
+
+No. It uses the Codex app-server and a device-code ChatGPT login. The
+OpenAI-compatible HTTP route is a separate integration and uses the
+environment variable named by `api_key_env`.
 
 ### Are RAG documents sent to Ollama?
 

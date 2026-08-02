@@ -1,3 +1,7 @@
 # Optional dependency for OpenAI-compatible remote streaming endpoints.
 # The default desktop and Jetson installs remain local-only.
 httpx>=0.27,<1
+
+# Native Codex app-server client plus its pinned ARM64/x86-64 runtime. This
+# enables ChatGPT-subscription routing; it is not installed by default.
+openai-codex==0.144.4

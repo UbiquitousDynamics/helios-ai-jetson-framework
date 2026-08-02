@@ -10,6 +10,7 @@ import pytest
 from api.budget import BudgetLedger, BudgetLimits
 from api.catalog import ModelPrice
 from api.health import HealthTracker
+from api.metrics import SafeMetricsRecorder
 from api.providers.contracts import (
     ChatMessage,
     ChatRequest,
@@ -184,6 +185,29 @@ def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     assert sleeps == [0.25]
 
 
+def test_exhausted_route_reports_total_attempt_count() -> None:
+    failures = [
+        ProviderError(
+            ErrorCategory.CONNECTIVITY,
+            "temporarily unavailable",
+            provider="first",
+            model="model",
+            retryable_same_provider=True,
+        )
+        for _ in range(2)
+    ]
+    provider = FakeProvider("first", failures)
+    runner = coordinator(provider, retry_wait=0)
+
+    with pytest.raises(ProviderError) as captured:
+        runner.run(
+            request(),
+            (ExecutionTarget(target("first"), retry_attempts=2),),
+        )
+
+    assert captured.value.attempts == 2
+
+
 def test_stream_never_retries_or_falls_back_after_speech_commit() -> None:
     first = FakeProvider("first", [interrupted_after_speech()])
     second = FakeProvider(
@@ -208,7 +232,7 @@ def test_stream_never_retries_or_falls_back_after_speech_commit() -> None:
     assert second.calls == []
 
 
-def test_sentence_streaming_ignores_reasoning_and_flushes_terminal_text() -> None:
+def test_sentence_streaming_does_not_split_at_commas() -> None:
     provider = FakeProvider(
         "first",
         [
@@ -230,15 +254,59 @@ def test_sentence_streaming_ignores_reasoning_and_flushes_terminal_text() -> Non
 
     assert result.text == "Hello, crew"
     assert "private" not in result.text
-    assert spoken == ["Hello,", "crew"]
+    assert spoken == ["Hello, crew"]
+
+
+def test_multi_sentence_delta_is_spoken_before_remote_completion() -> None:
+    spoken: list[str] = []
+
+    def stream() -> Iterable[object]:
+        yield TextDelta("Prima frase. Seconda frase.")
+        assert spoken == ["Prima frase.", "Seconda frase."]
+        yield completion("first")
+
+    provider = FakeProvider("first", [stream()])
+
+    result = coordinator(provider).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        speak=spoken.append,
+    )
+
+    assert result.text == "Prima frase. Seconda frase."
+    assert spoken == ["Prima frase.", "Seconda frase."]
+
+
+def test_unpunctuated_output_uses_soft_speech_chunk_limit() -> None:
+    spoken: list[str] = []
+
+    def stream() -> Iterable[object]:
+        yield TextDelta("alpha beta gamma delta")
+        assert spoken == ["alpha beta"]
+        yield completion("first")
+
+    result = coordinator(FakeProvider("first", [stream()])).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        speak=spoken.append,
+        speech_chunk_max_chars=12,
+    )
+
+    assert result.text == "alpha beta gamma delta"
+    assert spoken == ["alpha beta", "gamma delta"]
 
 
 def test_minimum_pre_speech_buffer_delays_the_first_sentence() -> None:
-    provider = FakeProvider(
-        "first",
-        [[TextDelta("Hi."), TextDelta(" More words."), completion("first")]],
-    )
     spoken: list[str] = []
+
+    def stream() -> Iterable[object]:
+        yield TextDelta("Hi.")
+        assert spoken == []
+        yield TextDelta(" More words.")
+        assert spoken == ["Hi.", "More words."]
+        yield completion("first")
+
+    provider = FakeProvider("first", [stream()])
 
     coordinator(provider).run(
         request(),
@@ -247,7 +315,24 @@ def test_minimum_pre_speech_buffer_delays_the_first_sentence() -> None:
         first_speech_min_chars=10,
     )
 
-    assert spoken == ["Hi. More words."]
+    assert spoken == ["Hi.", "More words."]
+
+
+def test_punctuation_only_stream_fragment_is_not_sent_to_tts() -> None:
+    provider = FakeProvider(
+        "first",
+        [[TextDelta("Ready."), TextDelta(":"), completion("first")]],
+    )
+    spoken: list[str] = []
+
+    result = coordinator(provider).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        speak=spoken.append,
+    )
+
+    assert result.text == "Ready.:"
+    assert spoken == ["Ready."]
 
 
 def test_refusal_is_terminal_and_does_not_fallback() -> None:
@@ -350,6 +435,40 @@ def test_slow_success_does_not_open_the_only_local_route() -> None:
     assert snapshot.failures == 0
 
 
+def test_success_records_attempt_timings_without_response_content() -> None:
+    provider = FakeProvider(
+        "first",
+        [[TextDelta("Ready."), completion("first")]],
+    )
+    metrics = SafeMetricsRecorder()
+    observed_times = iter([10.0, 10.1, 10.2, 10.4])
+
+    result = coordinator(
+        provider,
+        metrics=metrics,
+        clock=lambda: next(observed_times),
+    ).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        speak=lambda _text: None,
+        route_reason="network.good",
+    )
+
+    assert result.text == "Ready."
+    event = metrics.snapshot()[0]
+    assert event.event == "llm_attempt_succeeded"
+    assert event.provider == "first"
+    assert event.model == "model"
+    assert event.mode == "talk"
+    assert event.language == "en"
+    assert event.route_reason == "network.good"
+    assert event.latency_ms == pytest.approx(400)
+    assert event.first_token_ms == pytest.approx(100)
+    assert event.first_audio_ms == pytest.approx(200)
+    assert event.fallback_count == 0
+    assert "Ready" not in str(event.as_dict())
+
+
 @pytest.mark.parametrize(
     ("reason", "category"),
     [
@@ -400,6 +519,24 @@ def test_coordinator_closes_stream_iterator_after_terminal_event() -> None:
 
     assert coordinator(provider).run(request(), (ExecutionTarget(target("first")),)).text == "Done."
     assert stream.closed
+
+
+def test_coordinator_exhausts_provider_generator_after_completion() -> None:
+    state = {"exhausted": False, "generator_exit": False}
+
+    def events() -> Iterable[object]:
+        try:
+            yield TextDelta("Done.")
+            yield completion("first")
+        except GeneratorExit:
+            state["generator_exit"] = True
+            raise
+        state["exhausted"] = True
+
+    provider = FakeProvider("first", [events()])
+
+    assert coordinator(provider).run(request(), (ExecutionTarget(target("first")),)).text == "Done."
+    assert state == {"exhausted": True, "generator_exit": False}
 
 
 def priced_model() -> ModelPrice:

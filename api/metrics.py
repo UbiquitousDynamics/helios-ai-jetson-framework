@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import numbers
+import queue
 import threading
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -11,6 +13,9 @@ from decimal import Decimal
 from typing import Any, Callable, Mapping
 
 from api.providers.contracts import ErrorCategory, Usage
+
+logger = logging.getLogger(__name__)
+_STOP = object()
 
 
 def _safe_label(value: str | None, name: str) -> str | None:
@@ -140,15 +145,46 @@ class SafeMetricsRecorder:
         sink: Callable[[Mapping[str, Any]], None] | None = None,
         clock: Callable[[], datetime] | None = None,
         retain: int = 1000,
+        asynchronous: bool = False,
+        queue_size: int = 256,
     ) -> None:
         if isinstance(retain, bool) or not isinstance(retain, int) or retain < 0:
             raise ValueError("retain must be a non-negative integer")
+        if not isinstance(asynchronous, bool):
+            raise TypeError("asynchronous must be a boolean")
+        if isinstance(queue_size, bool) or not isinstance(queue_size, int) or queue_size < 1:
+            raise ValueError("queue_size must be a positive integer")
         self.enabled = enabled
         self._sink = sink
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._retain = retain
         self._events: list[MetricEvent] = []
         self._lock = threading.RLock()
+        self._closed = False
+        self._mailbox: queue.Queue[object] | None = None
+        self._worker: threading.Thread | None = None
+        if enabled and sink is not None and asynchronous:
+            self._mailbox = queue.Queue(maxsize=queue_size)
+            self._worker = threading.Thread(
+                target=self._consume,
+                name="helios-metrics",
+                daemon=True,
+            )
+            self._worker.start()
+
+    def _consume(self) -> None:
+        assert self._mailbox is not None
+        assert self._sink is not None
+        while True:
+            payload = self._mailbox.get()
+            try:
+                if payload is _STOP:
+                    return
+                self._sink(payload)  # type: ignore[arg-type]
+            except Exception:
+                logger.warning("Unable to persist an inference metric")
+            finally:
+                self._mailbox.task_done()
 
     def record(self, event: MetricEvent) -> MetricEvent:
         if not isinstance(event, MetricEvent):
@@ -162,17 +198,35 @@ class SafeMetricsRecorder:
             return event
         payload = event.as_dict()
         with self._lock:
+            if self._closed:
+                return event
             if self._retain:
                 self._events.append(event)
                 if len(self._events) > self._retain:
                     del self._events[: len(self._events) - self._retain]
-            if self._sink is not None:
+            if self._mailbox is not None:
+                try:
+                    self._mailbox.put_nowait(payload)
+                except queue.Full:
+                    logger.warning("Dropping an inference metric because the queue is full")
+            elif self._sink is not None:
                 self._sink(payload)
         return event
 
     def snapshot(self) -> tuple[MetricEvent, ...]:
         with self._lock:
             return tuple(self._events)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            mailbox = self._mailbox
+            worker = self._worker
+        if mailbox is not None and worker is not None:
+            mailbox.put(_STOP)
+            worker.join()
 
 
 __all__ = ["MetricEvent", "SafeMetricsRecorder"]

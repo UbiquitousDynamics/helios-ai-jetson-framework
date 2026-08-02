@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from api.providers.contracts import (
+    ChatMessage,
     ChatRequest,
     ContentOrigin,
     ErrorCategory,
@@ -64,8 +65,8 @@ class PrivacyGuard:
         if privacy is PrivacyLevel.LOCAL_ONLY:
             self._deny(request, "request privacy policy requires local inference")
 
-        canonical_messages = []
-        for message in request.messages:
+        canonical_messages: list[ChatMessage] | None = None
+        for index, message in enumerate(request.messages):
             try:
                 origin = ContentOrigin(message.origin)
             except (TypeError, ValueError):
@@ -98,11 +99,18 @@ class PrivacyGuard:
                 and message.redacted is not True
             ):
                 self._deny(request, "remote request requires redacted content")
-            canonical_messages.append(replace(message, origin=origin))
+            if not isinstance(message.origin, ContentOrigin):
+                if canonical_messages is None:
+                    canonical_messages = list(request.messages[:index])
+                canonical_messages.append(replace(message, origin=origin))
+            elif canonical_messages is not None:
+                canonical_messages.append(message)
+
+        messages = request.messages if canonical_messages is None else tuple(canonical_messages)
 
         return replace(
             request,
-            messages=tuple(canonical_messages),
+            messages=messages,
             privacy=privacy,
             remote_authorized=True,
         )

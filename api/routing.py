@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import threading
@@ -11,6 +12,8 @@ from enum import Enum
 
 from api.health import HealthTracker
 from api.providers.contracts import ChatProvider, ChatRequest, ContentOrigin
+
+logger = logging.getLogger(__name__)
 
 
 class RoutingPolicy(str, Enum):
@@ -41,6 +44,7 @@ class ProviderTarget:
     languages: frozenset[str] = frozenset()
     context_window: int | None = None
     max_output_tokens: int | None = None
+    min_complexity_score: int | None = None
     features: frozenset[str] = frozenset()
     priority: int = 100
     enabled: bool = True
@@ -77,6 +81,12 @@ class ProviderTarget:
             or self.max_output_tokens < 1
         ):
             raise ValueError("max_output_tokens must be a positive integer")
+        if self.min_complexity_score is not None and (
+            isinstance(self.min_complexity_score, bool)
+            or not isinstance(self.min_complexity_score, int)
+            or self.min_complexity_score < 0
+        ):
+            raise ValueError("min_complexity_score must be a non-negative integer")
         object.__setattr__(self, "modes", modes)
         object.__setattr__(self, "features", features)
         object.__setattr__(self, "languages", languages)
@@ -266,6 +276,7 @@ class RoutePlanner:
         if isinstance(input_tokens, bool) or not isinstance(input_tokens, int) or input_tokens < 0:
             raise ValueError("estimated_input_tokens must be a non-negative integer")
 
+        mode_ranks = self._mode_ranks.get(request.mode)
         eligible = [
             (index, target)
             for index, target in enumerate(self._targets)
@@ -276,7 +287,67 @@ class RoutePlanner:
                 estimated_input_tokens=input_tokens,
             )
         ]
-        mode_ranks = self._mode_ranks.get(request.mode)
+        adaptive_remotes = [
+            pair for pair in eligible if pair[1].remote and pair[1].min_complexity_score is not None
+        ]
+        local_context = None
+        score: int | None = None
+        if adaptive_remotes or selected_policy is RoutingPolicy.AUTO:
+            local_context = max(
+                (
+                    target.context_window
+                    for _, target in eligible
+                    if not target.remote and target.context_window is not None
+                ),
+                default=None,
+            )
+        if adaptive_remotes:
+            score = self.complexity_score(
+                request,
+                estimated_input_tokens=input_tokens,
+                local_context_window=local_context,
+            )
+            eligible_floors = [
+                target.min_complexity_score
+                for _, target in adaptive_remotes
+                if target.min_complexity_score is not None and target.min_complexity_score <= score
+            ]
+            selected_floor = (
+                max(eligible_floors)
+                if eligible_floors
+                else min(
+                    target.min_complexity_score
+                    for _, target in adaptive_remotes
+                    if target.min_complexity_score is not None
+                )
+            )
+            selected_pair = min(
+                (
+                    pair
+                    for pair in adaptive_remotes
+                    if pair[1].min_complexity_score == selected_floor
+                ),
+                key=lambda pair: (
+                    mode_ranks.get(pair[1].name, len(mode_ranks))
+                    if mode_ranks is not None
+                    else pair[1].priority,
+                    pair[1].priority,
+                    pair[0],
+                ),
+            )
+            tiered_names = {target.name for _, target in adaptive_remotes}
+            eligible = [
+                pair
+                for pair in eligible
+                if pair[1].name not in tiered_names or pair[1].name == selected_pair[1].name
+            ]
+            logger.info(
+                "Adaptive remote tier selection: complexity_score=%s, "
+                "minimum_score=%s, selected=%s",
+                score,
+                selected_floor,
+                selected_pair[1].name,
+            )
         eligible.sort(
             key=lambda pair: (
                 mode_ranks.get(pair[1].name, len(mode_ranks))
@@ -303,15 +374,12 @@ class RoutePlanner:
                 and not self.allow_remote_when_connectivity_unknown
             ):
                 remote = []
-            local_context = max(
-                (target.context_window for target in local if target.context_window is not None),
-                default=None,
-            )
-            score = self.complexity_score(
-                request,
-                estimated_input_tokens=input_tokens,
-                local_context_window=local_context,
-            )
+            if score is None:
+                score = self.complexity_score(
+                    request,
+                    estimated_input_tokens=input_tokens,
+                    local_context_window=local_context,
+                )
             threshold = (
                 self.auto_complexity_threshold
                 if complexity_threshold is None
@@ -410,9 +478,15 @@ class RoutePlanner:
             return False
         if not request.required_features.issubset(target.features):
             return False
-        output_tokens = request.max_output_tokens or target.max_output_tokens or 0
-        if target.max_output_tokens is not None and output_tokens > target.max_output_tokens:
-            return False
+        requested_output = request.max_output_tokens
+        if requested_output is None:
+            output_tokens = target.max_output_tokens or 0
+        elif target.max_output_tokens is None:
+            output_tokens = requested_output
+        else:
+            # Output limits are per-target caps, not minimum capabilities.
+            # Streaming applies the same clamp before provider execution.
+            output_tokens = min(requested_output, target.max_output_tokens)
         if (
             target.context_window is not None
             and estimated_input_tokens + output_tokens > target.context_window

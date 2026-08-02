@@ -214,7 +214,10 @@ class ProviderError(RuntimeError):
         retry_after_seconds: float | None = None,
         request_id: str | None = None,
         transmitted: bool | None = None,
+        attempts: int = 1,
     ) -> None:
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
+            raise ValueError("attempts must be a positive integer")
         super().__init__(safe_message)
         self.category = category
         self.provider = provider
@@ -224,6 +227,7 @@ class ProviderError(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
         self.request_id = request_id
         self.transmitted = transmitted
+        self.attempts = attempts
 
 
 class ChatProvider(Protocol):

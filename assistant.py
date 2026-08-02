@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -85,6 +86,9 @@ class VoiceAssistant:
 
         self._rag_searcher = rag_searcher
         self._rag_factory = rag_factory
+        self._rag_lock = threading.RLock()
+        self._rag_prepare_future: Future[Any] | None = None
+        self._rag_prepared = False
         self._sound_executor = sound_executor or ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="helios-sound",
@@ -113,6 +117,39 @@ class VoiceAssistant:
             for wake_word in self.profile.wake_word_aliases
         )
 
+    @staticmethod
+    def _remove_first_phrase(text: str, phrases: tuple[str, ...]) -> str:
+        for phrase in phrases:
+            match = re.search(
+                rf"(?<!\w){re.escape(phrase)}(?!\w)",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                continue
+            left = re.sub(r"[\s,;:!?.-]+$", "", text[: match.start()])
+            right = re.sub(r"^[\s,;:!?.-]+", "", text[match.end() :])
+            return " ".join(part for part in (left, right) if part).strip()
+        return text.strip()
+
+    def _without_wake_word(self, command: str) -> str:
+        ordered_aliases = (
+            self.profile.wake_word,
+            *(alias for alias in self.profile.wake_word_aliases if alias != self.profile.wake_word),
+        )
+        return self._remove_first_phrase(command, ordered_aliases)
+
+    def _think_prompt(self, command: str) -> str | None:
+        for word in self.profile.think_words:
+            match = re.match(
+                rf"^\s*{re.escape(word)}(?!\w)",
+                command,
+                flags=re.IGNORECASE,
+            )
+            if match is not None:
+                return re.sub(r"^[\s,;:!?.-]+", "", command[match.end() :]).strip()
+        return None
+
     def _contains_rag_word(self, command: str) -> bool:
         return self._contains_phrase(command, self.profile.rag_word)
 
@@ -124,14 +161,26 @@ class VoiceAssistant:
             logger.info("Ignoring command without a configured wake word")
             return None
 
-        normalized = command.lower()
+        model_prompt = self._without_wake_word(command)
+        if not model_prompt:
+            logger.info("Ignoring wake word without a command")
+            return None
+
+        normalized = model_prompt.lower()
         for question in self.profile.presentation_questions:
             if question in normalized:
                 response = self._choice(self.profile.presentation_answers)
                 self.tts.speak(response)
                 return response
 
-        return self.api_client.talk(command, context=None)
+        think_prompt = self._think_prompt(model_prompt)
+        if think_prompt is not None:
+            if not think_prompt:
+                logger.info("Ignoring think trigger without a question")
+                return None
+            return self.api_client.think(think_prompt, context=None, tts=True)
+
+        return self.api_client.talk(model_prompt, context=None)
 
     @staticmethod
     def _rag_result_text(result: Any) -> str:
@@ -161,10 +210,18 @@ class VoiceAssistant:
         if not command:
             raise RagCommandError("RAG command cannot be empty")
         try:
-            result = (searcher or self._get_rag_searcher()).run(
-                query=command,
-                top_k=self.settings.top_k,
-            )
+            if searcher is not None:
+                result = searcher.run(
+                    query=command,
+                    top_k=self.settings.top_k,
+                )
+            else:
+                with self._rag_lock:
+                    result = self._get_rag_searcher().run(
+                        query=command,
+                        top_k=self.settings.top_k,
+                    )
+                    self._rag_prepared = True
             result_text = self._rag_result_text(result).strip()
             if not result_text:
                 raise RagCommandError("The RAG search returned no text")
@@ -176,22 +233,45 @@ class VoiceAssistant:
             raise RagCommandError("Unable to answer the RAG command") from exc
 
     def _get_rag_searcher(self) -> Any:
-        if self._rag_searcher is None:
-            try:
-                if self._rag_factory is not None:
-                    self._rag_searcher = self._rag_factory()
-                else:
-                    from document.rag_system import RagSystem
+        with self._rag_lock:
+            if self._rag_searcher is None:
+                try:
+                    if self._rag_factory is not None:
+                        self._rag_searcher = self._rag_factory()
+                    else:
+                        from document.rag_system import RagSystem
 
-                    self._rag_searcher = RagSystem(
-                        txt_dir=str(self.settings.upload_folder),
-                        emb_file=str(self.settings.embeddings_file),
-                        model_name=str(self.settings.sentence_transformer_model),
-                        reindex=False,
-                    )
-            except Exception as exc:
-                raise RagCommandError("Unable to initialize the RAG searcher") from exc
-        return self._rag_searcher
+                        self._rag_searcher = RagSystem(
+                            txt_dir=str(self.settings.upload_folder),
+                            emb_file=str(self.settings.embeddings_file),
+                            model_name=str(self.settings.sentence_transformer_model),
+                            reindex=False,
+                        )
+                except Exception as exc:
+                    raise RagCommandError("Unable to initialize the RAG searcher") from exc
+            return self._rag_searcher
+
+    def _prepare_rag(self) -> None:
+        try:
+            with self._rag_lock:
+                searcher = self._get_rag_searcher()
+                prepare = getattr(searcher, "prepare", None)
+                prepared = True if not callable(prepare) else prepare() is not False
+                self._rag_prepared = prepared
+                logger.info("RAG background preparation completed (ready=%s)", prepared)
+        except Exception:
+            logger.warning("RAG background preparation failed", exc_info=True)
+
+    def prepare_rag_async(self) -> Future[Any] | None:
+        """Queue lazy RAG preparation behind the entry notification sound."""
+
+        with self._rag_lock:
+            if self._closed or self._rag_prepared:
+                return self._rag_prepare_future
+            if self._rag_prepare_future is not None and not self._rag_prepare_future.done():
+                return self._rag_prepare_future
+            self._rag_prepare_future = self._sound_executor.submit(self._prepare_rag)
+            return self._rag_prepare_future
 
     @staticmethod
     def _log_sound_failure(future: Future[Any]) -> None:
@@ -246,6 +326,7 @@ class VoiceAssistant:
         if self.state is AssistantState.COMMAND:
             if self._contains_rag_word(command):
                 self.play_sound_async(str(self.settings.wake_sound))
+                self.prepare_rag_async()
                 self.state = AssistantState.RAG
                 logger.info("Entering RAG mode")
                 return True
@@ -282,6 +363,16 @@ class VoiceAssistant:
             AssistantRuntimeError,
         )
         try:
+            prepare_remote = getattr(self.api_client, "prepare_remote_async", None)
+            if callable(prepare_remote):
+                prepare_remote()
+            prepare_recognizer = getattr(
+                self.speech_recognizer,
+                "prepare_async",
+                None,
+            )
+            if callable(prepare_recognizer):
+                prepare_recognizer()
             self.tts.speak(self.profile.welcome_message.format(wake_word=self.profile.wake_word))
             while self._running and (max_iterations is None or iterations < max_iterations):
                 iterations += 1

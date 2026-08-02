@@ -19,7 +19,7 @@ def _enabled(value: str | None) -> bool:
 @pytest.mark.remote_live
 def test_configured_remote_provider_streams_without_exposing_content() -> None:
     if not _enabled(os.environ.get("HELIOS_LLM_LIVE")):
-        pytest.skip("set HELIOS_LLM_LIVE=1 to authorize a billable live request")
+        pytest.skip("set HELIOS_LLM_LIVE=1 to authorize a live remote request")
     routing_value = os.environ.get("HELIOS_LLM_LIVE_CONFIG", "").strip()
     if not routing_value:
         pytest.skip("set HELIOS_LLM_LIVE_CONFIG to a reviewed remote-only TOML file")

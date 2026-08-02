@@ -13,10 +13,11 @@ from typing import Any, Protocol
 
 import config
 from api.budget import BudgetError, BudgetLedger, BudgetLimits
-from api.catalog import CatalogError, ModelCatalog, ModelPrice
+from api.catalog import CatalogError, ModelCatalog
 from api.health import HealthTracker
 from api.metrics import SafeMetricsRecorder
 from api.privacy import PrivacyGuard, PrivacyPolicy
+from api.provider_factory import configured_provider_factory
 from api.providers.contracts import (
     ChatMessage,
     ChatProvider,
@@ -34,7 +35,6 @@ from api.routing import (
     Connectivity,
     NoRouteError,
     ProviderRegistry,
-    ProviderTarget,
     RoutePlanner,
     RoutingPolicy,
 )
@@ -44,8 +44,24 @@ from api.streaming import (
     SpeechReplayUnsafeError,
     StreamingResponseCoordinator,
 )
+from api.target_compiler import TargetCompiler
 
 logger = logging.getLogger(__name__)
+
+_HYBRID_SYSTEM_INSTRUCTIONS = {
+    "it": (
+        "Sei Emilia, il veicolo solare dotato di intelligenza artificiale. "
+        "Rispondi sempre in italiano, direttamente e con precisione. "
+        "Non usare Markdown nella conversazione vocale. "
+        "Quando puoi fare una scelta ragionevole, falla invece di chiedere chiarimenti."
+    ),
+    "en": (
+        "You are Emilia, the solar vehicle with artificial intelligence. "
+        "Always answer in English, directly and precisely. "
+        "Do not use Markdown in voice conversation. "
+        "When you can make a reasonable choice, make it instead of asking for clarification."
+    ),
+}
 
 
 class TextToSpeech(Protocol):
@@ -151,7 +167,8 @@ class APIClient:
         model_catalog: ModelCatalog | None = None,
         budget_ledger: BudgetLedger | None = None,
         metrics: SafeMetricsRecorder | None = None,
-        connectivity: Connectivity | str | Callable[[], Connectivity | str] = Connectivity.UNKNOWN,
+        connectivity: (Connectivity | str | Callable[[], Connectivity | str] | None) = None,
+        network_monitor: Any | None = None,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
@@ -162,6 +179,26 @@ class APIClient:
         self.models = {"talk": model_talk, "think": model_think}
         self.language = language.strip().lower()
         self.llm_settings = config.LLM_SETTINGS if llm_settings is None else llm_settings
+        self._mode_settings_by_name = {
+            "talk": self.llm_settings.talk,
+            "think": self.llm_settings.think,
+        }
+        self._timeouts_by_mode = {
+            mode: self._compile_timeouts(settings)
+            for mode, settings in self._mode_settings_by_name.items()
+        }
+        if self.llm_settings.routing_file is not None:
+            instruction = _HYBRID_SYSTEM_INSTRUCTIONS.get(
+                self.language,
+                _HYBRID_SYSTEM_INSTRUCTIONS["en"],
+            )
+            self._hybrid_system_message: ChatMessage | None = ChatMessage(
+                Role.SYSTEM,
+                instruction,
+                origin=ContentOrigin.STATIC_INSTRUCTION,
+            )
+        else:
+            self._hybrid_system_message = None
         self.retry_attempts = retry_attempts
         self.retry_wait = retry_wait
         self._sleep = sleep
@@ -170,7 +207,29 @@ class APIClient:
         self._closed = False
         self._cancellation_lock = threading.Lock()
         self._active_cancellations: list[CancellationToken] = []
-        self._connectivity_source = connectivity
+        self._remote_prepare_lock = threading.Lock()
+        self._remote_prepare_thread: threading.Thread | None = None
+        self._remote_prepared = False
+        if connectivity is not None and network_monitor is not None:
+            raise ValueError("pass either connectivity or network_monitor, not both")
+        self._network_monitor = network_monitor
+        self._owns_network_monitor = False
+        if (
+            connectivity is None
+            and network_monitor is None
+            and self.llm_settings.remote_enabled
+            and self.llm_settings.network.enabled
+        ):
+            from api.connectivity import ConnectivityMonitor
+
+            self._network_monitor = ConnectivityMonitor(self.llm_settings.network)
+            self._owns_network_monitor = True
+        if self._network_monitor is not None:
+            self._connectivity_source = self._network_monitor.connectivity
+        else:
+            self._connectivity_source = (
+                Connectivity.UNKNOWN if connectivity is None else connectivity
+            )
 
         self._ollama = OllamaAdapter(
             self.host,
@@ -209,6 +268,7 @@ class APIClient:
         )
         self.catalog = model_catalog or self._load_catalog()
         self.budget = budget_ledger or self._load_budget()
+        self._owns_metrics = metrics is None
         self.metrics = metrics or self._build_metrics()
         self._coordinator = StreamingResponseCoordinator(
             self._registry,
@@ -221,10 +281,36 @@ class APIClient:
             maximum_retry_delay=max(5.0, retry_wait),
             sleep=sleep,
         )
-        self._execution_targets = {
-            "talk": self._targets_for_mode("talk"),
-            "think": self._targets_for_mode("think"),
+        ollama_remote, ollama_enabled = self._ollama_classification()
+        self._execution_targets = TargetCompiler(
+            self.llm_settings,
+            models=self.models,
+            language=self.language,
+            default_retry_attempts=self.retry_attempts,
+            registered_providers=self._registered_providers,
+            ollama_remote=ollama_remote,
+            ollama_enabled=ollama_enabled,
+            catalog=self.catalog,
+        ).compile_all()
+        self._execution_by_name = {
+            mode: {execution.route.name: execution for execution in executions}
+            for mode, executions in self._execution_targets.items()
         }
+        self._route_planners = {
+            mode: self._compile_route_planner(mode, executions)
+            for mode, executions in self._execution_targets.items()
+        }
+        if self._network_monitor is not None:
+            set_online_callback = getattr(
+                self._network_monitor,
+                "set_online_callback",
+                None,
+            )
+            if callable(set_online_callback):
+                set_online_callback(self.prepare_remote_async)
+            start_monitor = getattr(self._network_monitor, "start", None)
+            if callable(start_monitor):
+                start_monitor()
 
         if warm_up:
             self.warm_up()
@@ -269,6 +355,14 @@ class APIClient:
     def connectivity(self, value: Connectivity | str) -> None:
         self._connectivity_source = Connectivity(value)
 
+    @property
+    def network_snapshot(self) -> Any | None:
+        monitor = self._network_monitor
+        if monitor is None:
+            return None
+        snapshot = getattr(monitor, "snapshot", None)
+        return snapshot() if callable(snapshot) else None
+
     def _register_provider(
         self,
         name: str,
@@ -283,24 +377,13 @@ class APIClient:
         for provider in self.llm_settings.providers:
             if not provider.enabled or provider.name in self._registered_providers:
                 continue
-            if provider.adapter != "openai_chat_sse" or provider.api_key_env is None:
+            factory = configured_provider_factory(provider)
+            if factory is None:
                 logger.error(
                     "Provider %s uses an unsupported or incomplete adapter configuration",
                     provider.name,
                 )
                 continue
-
-            def factory(
-                settings: config.LLMProviderSettings = provider,
-            ) -> ChatProvider:
-                from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
-
-                assert settings.api_key_env is not None
-                return OpenAIChatSSEAdapter(
-                    provider=settings.name,
-                    endpoint=settings.endpoint,
-                    api_key_env=settings.api_key_env,
-                )
 
             self._registry.register(provider.name, factory, owned=True)
             self._registered_providers.add(provider.name)
@@ -346,6 +429,7 @@ class APIClient:
         return SafeMetricsRecorder(
             enabled=settings.metrics_enabled,
             sink=sink,
+            asynchronous=sink is not None,
         )
 
     def _ollama_classification(self) -> tuple[bool, bool]:
@@ -363,111 +447,46 @@ class APIClient:
             return self._ollama.identity.remote, False
         return provider.locality == "remote", provider.enabled
 
-    def _targets_for_mode(self, mode: str) -> tuple[ExecutionTarget, ...]:
-        mode_settings = self._mode_settings(mode)
-        configured_targets = {target.name: target for target in self.llm_settings.targets}
-        provider_settings = {provider.name: provider for provider in self.llm_settings.providers}
-        if not mode_settings.candidates:
-            ollama_remote, ollama_enabled = self._ollama_classification()
-            return (
-                ExecutionTarget(
-                    ProviderTarget(
-                        name=f"ollama-{mode}",
-                        provider="ollama",
-                        model=self.models[mode],
-                        remote=ollama_remote,
-                        modes=frozenset({mode}),
-                        languages=frozenset({self.language}),
-                        priority=0,
-                        enabled=ollama_enabled,
-                    ),
-                    retry_attempts=self.retry_attempts,
-                ),
-            )
-
-        executions: list[ExecutionTarget] = []
-        for priority, name in enumerate(mode_settings.candidates):
-            target = configured_targets[name]
-            provider = provider_settings.get(target.provider)
-            is_ollama = target.provider == "ollama"
-            if is_ollama:
-                remote, enabled = self._ollama_classification()
-            else:
-                remote = provider is not None and provider.locality == "remote"
-                enabled = (
-                    provider is not None
-                    and provider.enabled
-                    and provider.name in self._registered_providers
-                )
-            model = target.model_for_language(self.language)
-            price = self._price_for_target(target, provider, model) if remote else None
-            maximum_output = self._minimum_defined(
-                target.max_output_tokens,
-                mode_settings.max_output_tokens,
-                price.max_output_tokens if price is not None else None,
-            )
-            context_window = self._minimum_defined(
-                target.context_window,
-                price.context_window if price is not None else None,
-            )
-            executions.append(
-                ExecutionTarget(
-                    route=ProviderTarget(
-                        name=target.name,
-                        provider=target.provider,
-                        model=model,
-                        remote=remote,
-                        modes=frozenset({mode}),
-                        languages=frozenset(target.languages),
-                        context_window=context_window,
-                        max_output_tokens=maximum_output,
-                        priority=priority,
-                        enabled=enabled,
-                    ),
-                    retry_attempts=target.retry_attempts,
-                    max_output_tokens=maximum_output,
-                    options=dict(target.options),
-                    price=price,
-                )
-            )
-        return tuple(executions)
-
-    @staticmethod
-    def _minimum_defined(*values: int | None) -> int | None:
-        defined = tuple(value for value in values if value is not None)
-        return min(defined) if defined else None
-
-    def _price_for_target(
-        self,
-        target: config.LLMTargetSettings,
-        provider: config.LLMProviderSettings | None,
-        model: str,
-    ) -> ModelPrice | None:
-        if self.catalog is None or target.catalog_id is None or provider is None:
-            return None
-        try:
-            price = self.catalog.get(target.catalog_id)
-        except CatalogError:
-            return None
-        if price.provider != provider.name or price.model != model:
-            logger.error("Catalog identity does not match target %s", target.name)
-            return None
-        return price
-
     def _mode_settings(self, mode: str) -> config.LLMModeSettings:
-        if mode == "talk":
-            return self.llm_settings.talk
-        if mode == "think":
-            return self.llm_settings.think
-        raise ValueError(f"Unknown model mode: {mode!r}")
+        try:
+            return self._mode_settings_by_name[mode]
+        except KeyError:
+            raise ValueError(f"Unknown model mode: {mode!r}") from None
 
-    def _timeouts(self) -> Timeouts:
+    def _compile_timeouts(self, mode_settings: config.LLMModeSettings) -> Timeouts:
         values = self.llm_settings.timeouts
+        mode_first_token = mode_settings.first_visible_token_seconds
         return Timeouts(
             connect_seconds=values.connect_seconds,
-            first_token_seconds=values.first_token_seconds,
+            first_token_seconds=(
+                values.first_token_seconds if mode_first_token is None else float(mode_first_token)
+            ),
             read_seconds=values.read_seconds,
             total_seconds=values.total_seconds,
+        )
+
+    def _timeouts(self, mode: str) -> Timeouts:
+        try:
+            return self._timeouts_by_mode[mode]
+        except KeyError:
+            raise ValueError(f"Unknown model mode: {mode!r}") from None
+
+    def _compile_route_planner(
+        self,
+        mode: str,
+        executions: tuple[ExecutionTarget, ...],
+    ) -> RoutePlanner:
+        mode_settings = self._mode_settings(mode)
+        emergency = self.llm_settings.emergency_local_only
+        return RoutePlanner(
+            (execution.route for execution in executions),
+            allowlist=() if emergency else self.llm_settings.allowlist,
+            denylist=() if emergency else self.llm_settings.denylist,
+            health=self.health,
+            auto_complexity_threshold=mode_settings.complexity_threshold,
+            allow_remote_when_connectivity_unknown=(
+                self.llm_settings.unknown_connectivity == "allow_remote"
+            ),
         )
 
     def _request(
@@ -482,7 +501,9 @@ class APIClient:
         privacy: PrivacyLevel | str | None,
         request_options: Mapping[str, Any] | None,
     ) -> ChatRequest:
-        messages: list[ChatMessage] = []
+        messages: list[ChatMessage] = (
+            [self._hybrid_system_message] if self._hybrid_system_message is not None else []
+        )
         if context:
             messages.append(
                 ChatMessage(
@@ -501,7 +522,6 @@ class APIClient:
             )
         )
         selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
-        explicit_hybrid_config = self.llm_settings.routing_file is not None
         return ChatRequest(
             model=self.models[mode],
             messages=tuple(messages),
@@ -509,9 +529,11 @@ class APIClient:
             language=self.language,
             privacy=selected_privacy,
             max_output_tokens=(
-                self._mode_settings(mode).max_output_tokens if explicit_hybrid_config else None
+                self._mode_settings(mode).max_output_tokens
+                if self._hybrid_system_message is not None
+                else None
             ),
-            timeouts=self._timeouts(),
+            timeouts=self._timeouts(mode),
             options=dict(request_options or {}),
         )
 
@@ -541,22 +563,12 @@ class APIClient:
         ):
             policy = RoutingPolicy.LOCAL_FIRST
 
-        mode_settings = self._mode_settings(request.mode)
-        planner = RoutePlanner(
-            (execution.route for execution in executions),
-            policy=policy,
-            allowlist=self.llm_settings.allowlist,
-            denylist=self.llm_settings.denylist,
-            health=self.health,
-            auto_complexity_threshold=mode_settings.complexity_threshold,
-            allow_remote_when_connectivity_unknown=(
-                self.llm_settings.unknown_connectivity == "allow_remote"
-            ),
-        )
+        planner = self._route_planners[request.mode]
         try:
             routes = planner.plan(
                 request_for_planning,
                 connectivity=selected_connectivity,
+                policy=policy,
             )
         except NoRouteError:
             if privacy_error is not None:
@@ -569,8 +581,25 @@ class APIClient:
                 transmitted=False,
             ) from None
 
-        by_name = {execution.route.name: execution for execution in executions}
-        return tuple(by_name[route.name] for route in routes)
+        by_name = self._execution_by_name[request.mode]
+        planned = tuple(by_name[route.name] for route in routes)
+        planned_names = {execution.route.name for execution in planned}
+        for execution in executions:
+            if execution.route.name in planned_names:
+                continue
+            snapshot = self.health.snapshot(execution.route.health_key)
+            if not snapshot.available:
+                logger.warning(
+                    "Route %s excluded by provider health (status=%s, retry_after_seconds=%s)",
+                    execution.route.name,
+                    snapshot.status.value,
+                    (
+                        round(snapshot.retry_after_seconds, 1)
+                        if snapshot.retry_after_seconds is not None
+                        else None
+                    ),
+                )
+        return planned
 
     def warm_up(self, mode: str = "talk") -> None:
         """Explicitly load the local Ollama model; remote warm-up is forbidden."""
@@ -593,6 +622,78 @@ class APIClient:
             lambda: self._ollama.warm_up(local_target.route.model),
             operation_name=f"warm up the {mode} model",
         )
+
+    def prepare_remote_async(self) -> threading.Thread | None:
+        """Start the non-inference Codex startup/authentication path in background."""
+
+        if not self.llm_settings.remote_enabled or self.llm_settings.emergency_local_only:
+            return None
+        if self._network_monitor is not None and self.connectivity is not Connectivity.ONLINE:
+            logger.info("Skipping remote preparation while the network gate is not online")
+            return None
+        provider_names = tuple(
+            provider.name
+            for provider in self.llm_settings.providers
+            if provider.enabled
+            and provider.adapter == "codex_app_server"
+            and any(
+                execution.route.enabled
+                and execution.route.remote
+                and execution.route.provider == provider.name
+                for executions in self._execution_targets.values()
+                for execution in executions
+            )
+        )
+        if not provider_names:
+            return None
+
+        with self._remote_prepare_lock:
+            if self._closed or self._remote_prepared:
+                return self._remote_prepare_thread
+            if self._remote_prepare_thread is not None and self._remote_prepare_thread.is_alive():
+                return self._remote_prepare_thread
+
+            def prepare() -> None:
+                succeeded = True
+                for provider_name in provider_names:
+                    started_at = time.monotonic()
+                    try:
+                        provider = self._registry.get(provider_name)
+                        operation = getattr(provider, "prepare", None)
+                        if callable(operation):
+                            operation()
+                            logger.info(
+                                "Remote provider prepared without inference "
+                                "(provider=%s, startup_ms=%s)",
+                                provider_name,
+                                round((time.monotonic() - started_at) * 1_000),
+                            )
+                    except ProviderError as error:
+                        succeeded = False
+                        logger.warning(
+                            "Remote provider preparation failed "
+                            "(provider=%s, category=%s); normal fallback remains active",
+                            provider_name,
+                            error.category.value,
+                        )
+                    except Exception:
+                        succeeded = False
+                        logger.warning(
+                            "Remote provider preparation failed "
+                            "(provider=%s); normal fallback remains active",
+                            provider_name,
+                        )
+                with self._remote_prepare_lock:
+                    self._remote_prepared = succeeded
+
+            thread = threading.Thread(
+                target=prepare,
+                name="helios-remote-prepare",
+                daemon=True,
+            )
+            self._remote_prepare_thread = thread
+            thread.start()
+            return thread
 
     def _call_with_retry(
         self,
@@ -666,7 +767,7 @@ class APIClient:
             )
             executions = self._plan(request, connectivity=connectivity)
             logger.info(
-                "Executing %s request using route %s",
+                "Planning %s request with eligible routes in fallback order: %s",
                 mode,
                 ",".join(execution.route.name for execution in executions),
             )
@@ -675,6 +776,7 @@ class APIClient:
                 executions,
                 speak=self.tts.speak if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
+                speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
                 maximum_first_audio_seconds=(
                     self.llm_settings.health.maximum_talk_first_audio_ms / 1_000
                     if mode == "talk" and speak
@@ -683,6 +785,27 @@ class APIClient:
                 cancellation=active_cancellation,
                 route_reason=self.llm_settings.routing_policy,
             )
+            logger.info(
+                "Completed %s request using route %s "
+                "(provider=%s, requested_model=%s, resolved_model=%s, "
+                "attempts=%s, first_text_ms=%s, first_speech_ms=%s)",
+                mode,
+                result.target.name,
+                result.target.provider,
+                result.target.model,
+                result.metadata.resolved_model or result.target.model,
+                result.attempts,
+                (
+                    round(result.first_token_seconds * 1_000)
+                    if result.first_token_seconds is not None
+                    else None
+                ),
+                (
+                    round(result.first_audio_seconds * 1_000)
+                    if result.first_audio_seconds is not None
+                    else None
+                ),
+            )
             return result.text
         except SpeechReplayUnsafeError:
             raise APIClientError(
@@ -690,7 +813,7 @@ class APIClient:
                 "the request was not retried"
             ) from None
         except ProviderError as error:
-            attempts = getattr(error, "attempts", 1)
+            attempts = error.attempts
             if attempts > 1:
                 raise APIClientError(
                     f"Unable to stream a model response after {attempts} attempt(s)"
@@ -781,6 +904,10 @@ class APIClient:
                 return
             self._closed = True
         self.cancel_current()
+        if self._owns_network_monitor and self._network_monitor is not None:
+            close_monitor = getattr(self._network_monitor, "close", None)
+            if callable(close_monitor):
+                close_monitor()
         try:
             if self._owns_registry:
                 self._registry.close()
@@ -788,6 +915,11 @@ class APIClient:
                 self._ollama.close()
         except Exception:
             logger.warning("Unable to close a language-model provider")
+        if self._owns_metrics:
+            try:
+                self.metrics.close()
+            except Exception:
+                logger.warning("Unable to flush language-model metrics")
         if self._owns_tts and self._tts is not None:
             close = getattr(self._tts, "close", None)
             if callable(close):

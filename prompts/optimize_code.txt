@@ -1,0 +1,299 @@
+You are acting as a senior software architect and code-quality engineer.
+
+Analyze the entire project currently opened in VS Code and create a comprehensive refactoring and optimization plan.
+
+## Main objective
+
+Identify opportunities to make the codebase:
+
+* Shorter and less repetitive
+* More efficient in terms of execution time and resource usage
+* Easier to read and understand
+* Easier to maintain, test, and extend
+* Better organized from an architectural perspective
+* More consistent in naming, formatting, and coding style
+
+Do not modify the code yet. First, inspect the complete repository and produce a detailed, evidence-based plan.
+
+## Analysis process
+
+### 1. Understand the project
+
+Inspect the complete repository, including:
+
+* Source code
+* Entry points
+* Modules and packages
+* Configuration files
+* Dependency files
+* Build and deployment scripts
+* Tests
+* Documentation
+* CI/CD configuration
+* Generated files, where relevant
+
+Explain briefly:
+
+* What the project does
+* Its main components
+* How data and control flow through the system
+* The technologies, frameworks, and libraries being used
+* The most important architectural decisions currently present
+
+Do not make assumptions based only on filenames. Verify your conclusions by inspecting the actual implementation.
+
+### 2. Identify structural and architectural issues
+
+Look for:
+
+* Modules or files with too many responsibilities
+* Poor separation of concerns
+* Tight coupling between components
+* Circular or unnecessary dependencies
+* Duplicated business logic
+* Inconsistent abstractions
+* Over-engineered components
+* Under-engineered components
+* Functions or classes placed in the wrong module
+* Global state and hidden side effects
+* Configuration values hardcoded in the source code
+* Code that is difficult to test or reuse
+* Dead code, obsolete files, and unused components
+* Opportunities to simplify the folder structure
+
+### 3. Identify code-level improvements
+
+Analyze functions, methods, classes, and modules for:
+
+* Duplicate or nearly duplicate code
+* Excessively long functions
+* Deep nesting
+* Complex conditional logic
+* Unnecessary loops or intermediate variables
+* Repeated calculations
+* Unclear naming
+* Excessive comments compensating for unclear code
+* Missing comments where non-obvious decisions require explanation
+* Unnecessary classes or abstractions
+* Functions with too many parameters
+* Large classes with multiple responsibilities
+* Improper error handling
+* Broad exception handling
+* Silent failures
+* Inconsistent return types
+* Mutable default arguments
+* Unused imports, variables, parameters, and dependencies
+* Magic numbers and magic strings
+* Code that can be replaced by simpler language or standard-library features
+
+Focus on meaningful simplification. Do not recommend making code shorter when that would reduce clarity, reliability, or maintainability.
+
+### 4. Analyze performance
+
+Look for potential performance problems such as:
+
+* Unnecessary repeated operations
+* Inefficient algorithms or data structures
+* Excessive file, network, database, or hardware access
+* Blocking operations
+* Redundant serialization or data conversion
+* Memory-heavy processing
+* Objects or resources that are not released correctly
+* Repeated initialization of expensive components
+* Avoidable copying of large data structures
+* Missing batching, caching, lazy loading, or asynchronous execution where appropriate
+* Inefficient logging
+* Work performed inside loops that could be moved outside
+* Dependencies that introduce unnecessary overhead
+
+Clearly distinguish between:
+
+* Confirmed performance problems
+* Probable performance problems
+* Possible optimizations that require profiling before implementation
+
+Do not claim that an optimization will improve performance unless the code supports that conclusion.
+
+### 5. Analyze readability and maintainability
+
+Evaluate:
+
+* Naming conventions
+* Code formatting
+* Module boundaries
+* Function and class size
+* Documentation quality
+* Type annotations or type safety
+* Error messages
+* Logging quality
+* Consistency across the repository
+* Ease of onboarding for a new developer
+* Ease of adding new features without breaking existing behavior
+
+Identify areas where the code is technically correct but unnecessarily difficult to understand.
+
+### 6. Analyze dependencies
+
+Inspect project dependencies and identify:
+
+* Unused dependencies
+* Duplicate libraries serving the same purpose
+* Heavy dependencies used only for simple operations
+* Deprecated or obsolete libraries
+* Dependencies that could be replaced with standard-library functionality
+* Version inconsistencies
+* Tight coupling to a particular framework or implementation
+* Missing dependency pinning or reproducibility issues
+
+Do not propose removing a dependency until you have verified how and where it is used.
+
+### 7. Analyze tests and regression risks
+
+Inspect the existing tests and determine:
+
+* Which critical behaviors are covered
+* Which important components lack tests
+* Whether tests are too coupled to implementation details
+* Whether integration or end-to-end tests are missing
+* Which tests should be added before refactoring
+* Which parts of the codebase are especially risky to change
+* How existing behavior can be preserved during restructuring
+
+For every major refactoring recommendation, specify the tests or validation steps required before and after the change.
+
+## Required output
+
+Create a structured report with the following sections.
+
+### A. Project overview
+
+Provide a concise explanation of the project, its architecture, its main execution flow, and its key components.
+
+### B. Executive summary
+
+Summarize:
+
+* The overall quality of the codebase
+* The most important problems
+* The highest-value optimization opportunities
+* The main technical risks
+* The expected benefits of the proposed refactoring
+
+### C. Findings by priority
+
+Classify every relevant finding as:
+
+* Critical
+* High priority
+* Medium priority
+* Low priority
+
+For each finding, include:
+
+* File or module involved
+* Relevant function, class, or code section
+* Description of the problem
+* Why it matters
+* Proposed solution
+* Expected benefit
+* Risk of the change
+* Required tests or validation
+* Estimated effort: small, medium, or large
+
+Reference concrete files, functions, and code sections. Avoid generic recommendations.
+
+### D. Duplication and simplification opportunities
+
+Create a dedicated list of:
+
+* Duplicate implementations
+* Repeated patterns
+* Functions that can be merged
+* Classes or layers that may be unnecessary
+* Logic that can be extracted into reusable utilities
+* Code that can be shortened safely
+* Files or components that can potentially be removed
+
+For each item, explain how to simplify it without making the code less readable.
+
+### E. Performance optimization opportunities
+
+For every proposed performance optimization, specify:
+
+* Current behavior
+* Suspected bottleneck
+* Proposed change
+* Expected impact
+* Confidence level
+* How to benchmark or profile it
+* Possible trade-offs
+
+### F. Proposed target architecture
+
+Describe the recommended final architecture, including:
+
+* Folder and module structure
+* Responsibilities of each major component
+* Dependency direction
+* Public interfaces between components
+* Configuration management
+* Error-handling strategy
+* Logging strategy
+* Testing strategy
+
+Include a proposed folder tree when a structural reorganization would be useful.
+
+### G. Step-by-step refactoring roadmap
+
+Create an incremental implementation plan divided into phases.
+
+Each phase must:
+
+* Be small enough to review safely
+* Preserve current behavior
+* Avoid combining unrelated changes
+* Include the files involved
+* Include the expected result
+* Include the required tests
+* Include rollback considerations
+* State whether it should be a separate commit or pull request
+
+Use this general order unless the repository suggests a better one:
+
+1. Establish or improve tests and baseline behavior
+2. Remove dead code and unused dependencies
+3. Apply safe local simplifications
+4. Consolidate duplicated logic
+5. Improve module boundaries and responsibilities
+6. Introduce architectural changes
+7. Apply verified performance optimizations
+8. Update documentation and development instructions
+
+### H. Recommended first actions
+
+Conclude with the five most valuable changes to implement first.
+
+For each one, explain:
+
+* Why it should be prioritized
+* Expected benefit
+* Estimated effort
+* Main risk
+* First concrete implementation step
+
+## Important constraints
+
+* Do not modify any file during this analysis.
+* Do not propose a full rewrite unless there is strong, specific evidence that incremental refactoring would be impractical.
+* Preserve external behavior, public APIs, configuration formats, and integrations unless a change is explicitly justified.
+* Prefer simple and incremental improvements over unnecessary abstractions.
+* Do not introduce design patterns only for stylistic reasons.
+* Do not optimize code without evidence or a clear profiling plan.
+* Do not confuse fewer lines of code with better code.
+* Consider clarity and correctness more important than extreme compactness.
+* Separate factual findings from hypotheses.
+* Explicitly state when additional runtime information, tests, or profiling would be required.
+* Adapt all recommendations to the actual programming languages, frameworks, and conventions used by the repository.
+* Do not provide generic best practices without connecting them to specific parts of the project.
+
+Before completing the report, ensure that you have inspected all relevant directories and that no major subsystem has been excluded.

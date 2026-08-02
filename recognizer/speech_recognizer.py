@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -54,6 +55,9 @@ class SpeechRecognizer:
         self._clock = clock
         self._owns_audio = audio_interface is None if owns_audio is None else owns_audio
         self._closed = False
+        self._runtime_lock = threading.RLock()
+        self._prepare_lock = threading.Lock()
+        self._prepare_thread: threading.Thread | None = None
 
     @staticmethod
     def remove_consecutive_duplicates(text: str) -> str:
@@ -67,6 +71,10 @@ class SpeechRecognizer:
         return " ".join(filtered)
 
     def _ensure_runtime(self) -> None:
+        with self._runtime_lock:
+            self._ensure_runtime_unlocked()
+
+    def _ensure_runtime_unlocked(self) -> None:
         if self._closed:
             raise SpeechRecognitionError("Speech recognizer is closed")
 
@@ -104,6 +112,40 @@ class SpeechRecognizer:
         if self._audio_format is None:
             # PyAudio's paInt16 value. Injected audio adapters can ignore it.
             self._audio_format = 8
+
+    def prepare_async(self) -> threading.Thread | None:
+        """Load Vosk and initialize PyAudio without opening an input stream."""
+
+        with self._prepare_lock:
+            if self._closed:
+                return None
+            if (
+                self.model is not None
+                and self._recognizer_factory is not None
+                and self.p is not None
+                and self._audio_format is not None
+            ):
+                return self._prepare_thread
+            if self._prepare_thread is not None and self._prepare_thread.is_alive():
+                return self._prepare_thread
+
+            def prepare() -> None:
+                try:
+                    self._ensure_runtime()
+                    logger.info("Speech recognizer prepared in background")
+                except SpeechRecognitionError:
+                    # Listening retries initialization synchronously and exposes
+                    # the normal recoverable error through the runtime loop.
+                    logger.warning("Background speech-recognizer preparation failed")
+
+            thread = threading.Thread(
+                target=prepare,
+                name="helios-speech-prepare",
+                daemon=True,
+            )
+            self._prepare_thread = thread
+            thread.start()
+            return thread
 
     @staticmethod
     def _parse_result(payload: str, key: str) -> str:
@@ -195,18 +237,23 @@ class SpeechRecognizer:
     def listen(self, timeout: float | None = None) -> Iterator[str]:
         """Compatibility generator yielding only event text."""
 
-        for result in self.listen_events(timeout=timeout):
-            yield result.text
+        events = self.listen_events(timeout=timeout)
+        try:
+            for result in events:
+                yield result.text
+        finally:
+            events.close()
 
     def close(self) -> None:
-        if self._closed:
-            return
-        if self.p is not None and self._owns_audio:
-            try:
-                self.p.terminate()
-            except Exception as exc:
-                raise SpeechRecognitionError("Unable to terminate the audio interface") from exc
-        self._closed = True
+        with self._runtime_lock:
+            if self._closed:
+                return
+            if self.p is not None and self._owns_audio:
+                try:
+                    self.p.terminate()
+                except Exception as exc:
+                    raise SpeechRecognitionError("Unable to terminate the audio interface") from exc
+            self._closed = True
 
     def __enter__(self) -> SpeechRecognizer:
         return self

@@ -1,0 +1,153 @@
+schema_version = 1
+
+[router]
+policy = "remote_first"
+remote_enabled = true
+allowlist = ["openai-codex", "ollama"]
+denylist = []
+unknown_connectivity = "prefer_local"
+
+[privacy]
+default = "remote_allowed"
+allow_remote_transcripts = true
+allow_remote_context = false
+allow_remote_rag_context = false
+redaction_failure = "local_only"
+
+# ChatGPT subscription usage does not expose API prices. Disable the API-cost
+# ledger; the account's Codex usage limits still apply and trigger local fallback.
+[budget]
+enabled = false
+
+# Native app-server startup and the first ChatGPT turn are slower than a warm
+# HTTP connection, especially on Jetson. Later turns reuse the same process.
+[timeouts]
+connect_seconds = 60.0
+first_token_seconds = 120.0
+read_seconds = 60.0
+total_seconds = 240.0
+
+# Codex normally needs a few seconds before the first spoken sentence. The
+# generic 1.5-second edge-model objective would incorrectly open its circuit
+# after three successful turns and force the local fallback for 60 seconds.
+[health]
+failures_to_open = 3
+cooldown_seconds = 60.0
+maximum_cooldown_seconds = 900.0
+maximum_talk_first_audio_ms = 30000
+
+[observability]
+metrics_enabled = true
+metrics_path = "../logs/llm-metrics.jsonl"
+log_content = false
+log_headers = false
+metrics_retention_days = 14
+
+# A missing default route, carrier or usable IP excludes every remote target
+# synchronously. HTTPS path quality is refreshed in the background; stale,
+# captive, unreachable or poor-quality paths fail closed to local Ollama.
+[network]
+enabled = true
+probe_url = "https://chatgpt.com/"
+probe_interval_seconds = 3.0
+result_max_age_seconds = 6.0
+probe_timeout_seconds = 1.2
+probe_bytes = 32768
+goodput_probe_interval_seconds = 60.0
+minimum_quality_score = 0.50
+quality_hysteresis = 0.05
+target_ttfb_ms = 1200.0
+target_jitter_ms = 300.0
+minimum_goodput_kbps = 128.0
+history_size = 8
+require_wifi = false
+interface_allowlist = []
+
+[modes.talk]
+candidates = ["codex-talk-luna", "codex-talk-terra", "codex-talk-sol", "local-talk"]
+max_output_tokens = 128
+first_speech_min_chars = 0
+speech_chunk_max_chars = 80
+first_visible_token_seconds = 15.0
+
+[modes.think]
+candidates = ["codex-think-luna", "codex-think-terra", "codex-think-sol", "local-think"]
+max_output_tokens = 256
+first_speech_min_chars = 0
+speech_chunk_max_chars = 96
+first_visible_token_seconds = 30.0
+
+[providers.openai-codex]
+adapter = "codex_app_server"
+endpoint = "stdio://codex"
+locality = "remote"
+enabled = true
+internal_retries = 0
+
+[targets.codex-talk-luna]
+provider = "openai-codex"
+model = "gpt-5.6-luna"
+languages = ["it", "en"]
+retry_attempts = 1
+max_output_tokens = 128
+max_output_words = 50
+min_complexity_score = 0
+options = { reasoning_effort = "none" }
+
+[targets.codex-talk-terra]
+provider = "openai-codex"
+model = "gpt-5.6-terra"
+languages = ["it", "en"]
+retry_attempts = 1
+max_output_tokens = 128
+max_output_words = 50
+min_complexity_score = 3
+options = { reasoning_effort = "low" }
+
+[targets.codex-talk-sol]
+provider = "openai-codex"
+model = "gpt-5.6-sol"
+languages = ["it", "en"]
+retry_attempts = 1
+max_output_tokens = 128
+max_output_words = 50
+min_complexity_score = 5
+options = { reasoning_effort = "low" }
+
+[targets.codex-think-luna]
+provider = "openai-codex"
+model = "gpt-5.6-luna"
+languages = ["it", "en"]
+retry_attempts = 1
+min_complexity_score = 0
+options = { reasoning_effort = "low" }
+
+[targets.codex-think-terra]
+provider = "openai-codex"
+model = "gpt-5.6-terra"
+languages = ["it", "en"]
+retry_attempts = 1
+min_complexity_score = 3
+options = { reasoning_effort = "medium" }
+
+[targets.codex-think-sol]
+provider = "openai-codex"
+model = "gpt-5.6-sol"
+languages = ["it", "en"]
+retry_attempts = 1
+min_complexity_score = 5
+options = { reasoning_effort = "medium" }
+
+[targets.local-talk]
+provider = "ollama"
+model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
+languages = ["it", "en"]
+retry_attempts = 3
+max_output_tokens = 40
+max_output_words = 20
+
+[targets.local-think]
+provider = "ollama"
+model = "qwen3:0.6b"
+languages = ["it", "en"]
+retry_attempts = 3

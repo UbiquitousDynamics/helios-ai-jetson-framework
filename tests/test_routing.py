@@ -130,7 +130,7 @@ def test_eligibility_enforces_authorization_language_context_lists_and_health():
         RoutePlanner(targets(), policy="local_only").plan(
             make_request(max_output_tokens=500),
             connectivity="online",
-            estimated_input_tokens=100,
+            estimated_input_tokens=500,
         )
 
     health = HealthTracker(failures_to_open=1)
@@ -148,6 +148,197 @@ def test_eligibility_enforces_authorization_language_context_lists_and_health():
             targets(),
             allow_remote_when_connectivity_unknown="false",
         )
+
+
+def test_target_output_cap_is_clamped_instead_of_removing_fallback() -> None:
+    local = ProviderTarget(
+        "local",
+        "ollama",
+        "small",
+        False,
+        languages=frozenset({"en"}),
+        context_window=512,
+        max_output_tokens=40,
+    )
+    planner = RoutePlanner((local,), policy="local_only")
+
+    result = planner.plan(
+        make_request(max_output_tokens=128),
+        connectivity="online",
+        estimated_input_tokens=100,
+    )
+
+    assert result == (local,)
+
+
+def test_adaptive_remote_cascade_selects_one_tier_then_local() -> None:
+    adaptive_targets = (
+        ProviderTarget(
+            "luna",
+            "codex",
+            "gpt-5.6-luna",
+            True,
+            languages=frozenset({"en"}),
+            min_complexity_score=0,
+        ),
+        ProviderTarget(
+            "terra",
+            "codex",
+            "gpt-5.6-terra",
+            True,
+            languages=frozenset({"en"}),
+            min_complexity_score=3,
+        ),
+        ProviderTarget(
+            "sol",
+            "codex",
+            "gpt-5.6-sol",
+            True,
+            languages=frozenset({"en"}),
+            min_complexity_score=5,
+        ),
+        ProviderTarget(
+            "local",
+            "ollama",
+            "small",
+            False,
+            languages=frozenset({"en"}),
+        ),
+    )
+    planner = RoutePlanner(adaptive_targets, policy="remote_first")
+
+    simple = planner.plan(make_request(), connectivity="online")
+    medium = planner.plan(
+        make_request(options={"complex": True}),
+        connectivity="online",
+    )
+    complex_request = make_request(
+        mode="think",
+        messages=(
+            ChatMessage(
+                Role.USER,
+                "explain A and B and C and D",
+                ContentOrigin.RAW_TRANSCRIPT,
+            ),
+        ),
+        options={"complex": True},
+    )
+    complex_result = planner.plan(complex_request, connectivity="online")
+
+    assert [target.name for target in simple] == ["luna", "local"]
+    assert [target.name for target in medium] == ["terra", "local"]
+    assert [target.name for target in complex_result] == ["sol", "local"]
+
+
+def test_auto_policy_reuses_adaptive_complexity_score() -> None:
+    class CountingPlanner(RoutePlanner):
+        complexity_calls = 0
+
+        def complexity_score(
+            self,
+            request: ChatRequest,
+            *,
+            estimated_input_tokens: int | None = None,
+            local_context_window: int | None = None,
+        ) -> int:
+            self.complexity_calls += 1
+            return super().complexity_score(
+                request,
+                estimated_input_tokens=estimated_input_tokens,
+                local_context_window=local_context_window,
+            )
+
+    planner = CountingPlanner(
+        (
+            ProviderTarget(
+                "remote",
+                "codex",
+                "gpt-5.6-luna",
+                True,
+                min_complexity_score=0,
+            ),
+            ProviderTarget("local", "ollama", "small", False),
+        ),
+        policy="auto",
+    )
+
+    assert planner.plan(make_request(), connectivity="online")
+    assert planner.complexity_calls == 1
+
+
+def test_adaptive_remote_cascade_uses_next_healthy_tier() -> None:
+    health = HealthTracker(failures_to_open=1)
+    health.record_failure("codex/gpt-5.6-sol", ErrorCategory.CONNECTIVITY)
+    planner = RoutePlanner(
+        (
+            ProviderTarget(
+                "terra",
+                "codex",
+                "gpt-5.6-terra",
+                True,
+                min_complexity_score=3,
+            ),
+            ProviderTarget(
+                "sol",
+                "codex",
+                "gpt-5.6-sol",
+                True,
+                min_complexity_score=5,
+            ),
+            ProviderTarget("local", "ollama", "small", False),
+        ),
+        policy="remote_first",
+        health=health,
+    )
+    request = make_request(
+        mode="think",
+        messages=(
+            ChatMessage(
+                Role.USER,
+                "explain A and B and C and D",
+                ContentOrigin.RAW_TRANSCRIPT,
+            ),
+        ),
+        options={"complex": True},
+    )
+
+    assert [target.name for target in planner.plan(request, connectivity="online")] == [
+        "terra",
+        "local",
+    ]
+
+
+def test_adaptive_remote_cascade_tie_keeps_only_first_candidate() -> None:
+    planner = RoutePlanner(
+        (
+            ProviderTarget(
+                "first-terra",
+                "codex-a",
+                "gpt-5.6-terra",
+                True,
+                min_complexity_score=3,
+            ),
+            ProviderTarget(
+                "second-terra",
+                "codex-b",
+                "gpt-5.6-terra",
+                True,
+                min_complexity_score=3,
+            ),
+            ProviderTarget("local", "ollama", "small", False),
+        ),
+        policy="remote_first",
+        mode_candidates={
+            "talk": ("second-terra", "first-terra", "local"),
+        },
+    )
+
+    result = planner.plan(
+        make_request(options={"complex": True}),
+        connectivity="online",
+    )
+
+    assert [target.name for target in result] == ["second-terra", "local"]
 
 
 class FakeProvider:

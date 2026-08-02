@@ -107,6 +107,27 @@ def test_remote_capability_is_a_replacement_and_can_be_removed():
         guard.require_remote_authorized(request)
 
 
+def test_authorization_reuses_already_canonical_immutable_messages():
+    request = request_for(ContentOrigin.STATIC_INSTRUCTION)
+    guard = PrivacyGuard(PrivacyPolicy(remote_enabled=True))
+
+    authorized = guard.authorize_remote(request)
+
+    assert authorized.messages is request.messages
+    assert authorized.messages[0] is request.messages[0]
+
+
+def test_authorization_replaces_noncanonical_runtime_origin():
+    request = request_for(ContentOrigin.STATIC_INSTRUCTION)
+    runtime_value = replace(request.messages[0], origin="static_instruction")
+    guard = PrivacyGuard(PrivacyPolicy(remote_enabled=True))
+
+    authorized = guard.authorize_remote(replace(request, messages=(runtime_value,)))
+
+    assert authorized.messages[0] is not runtime_value
+    assert authorized.messages[0].origin is ContentOrigin.STATIC_INSTRUCTION
+
+
 def test_runtime_string_classifications_are_canonicalized_and_cannot_bypass_gates():
     guard = PrivacyGuard(PrivacyPolicy(remote_enabled=True))
     transcript = replace(
