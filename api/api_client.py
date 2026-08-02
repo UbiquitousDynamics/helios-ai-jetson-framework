@@ -13,10 +13,11 @@ from typing import Any, Protocol
 
 import config
 from api.budget import BudgetError, BudgetLedger, BudgetLimits
-from api.catalog import CatalogError, ModelCatalog, ModelPrice
+from api.catalog import CatalogError, ModelCatalog
 from api.health import HealthTracker
 from api.metrics import SafeMetricsRecorder
 from api.privacy import PrivacyGuard, PrivacyPolicy
+from api.provider_factory import configured_provider_factory
 from api.providers.contracts import (
     ChatMessage,
     ChatProvider,
@@ -34,7 +35,6 @@ from api.routing import (
     Connectivity,
     NoRouteError,
     ProviderRegistry,
-    ProviderTarget,
     RoutePlanner,
     RoutingPolicy,
 )
@@ -44,6 +44,7 @@ from api.streaming import (
     SpeechReplayUnsafeError,
     StreamingResponseCoordinator,
 )
+from api.target_compiler import TargetCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -261,10 +262,17 @@ class APIClient:
             maximum_retry_delay=max(5.0, retry_wait),
             sleep=sleep,
         )
-        self._execution_targets = {
-            "talk": self._targets_for_mode("talk"),
-            "think": self._targets_for_mode("think"),
-        }
+        ollama_remote, ollama_enabled = self._ollama_classification()
+        self._execution_targets = TargetCompiler(
+            self.llm_settings,
+            models=self.models,
+            language=self.language,
+            default_retry_attempts=self.retry_attempts,
+            registered_providers=self._registered_providers,
+            ollama_remote=ollama_remote,
+            ollama_enabled=ollama_enabled,
+            catalog=self.catalog,
+        ).compile_all()
         if self._network_monitor is not None:
             set_online_callback = getattr(
                 self._network_monitor,
@@ -342,33 +350,8 @@ class APIClient:
         for provider in self.llm_settings.providers:
             if not provider.enabled or provider.name in self._registered_providers:
                 continue
-            if provider.adapter == "openai_chat_sse" and provider.api_key_env is not None:
-
-                def factory(
-                    settings: config.LLMProviderSettings = provider,
-                ) -> ChatProvider:
-                    from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
-
-                    assert settings.api_key_env is not None
-                    return OpenAIChatSSEAdapter(
-                        provider=settings.name,
-                        endpoint=settings.endpoint,
-                        api_key_env=settings.api_key_env,
-                    )
-
-            elif provider.adapter == "codex_app_server":
-
-                def factory(
-                    settings: config.LLMProviderSettings = provider,
-                ) -> ChatProvider:
-                    from api.providers.codex_app_server import CodexAppServerAdapter
-
-                    return CodexAppServerAdapter(
-                        provider=settings.name,
-                        endpoint=settings.endpoint,
-                    )
-
-            else:
+            factory = configured_provider_factory(provider)
+            if factory is None:
                 logger.error(
                     "Provider %s uses an unsupported or incomplete adapter configuration",
                     provider.name,
@@ -435,121 +418,6 @@ class APIClient:
         if not matches:
             return self._ollama.identity.remote, False
         return provider.locality == "remote", provider.enabled
-
-    def _targets_for_mode(self, mode: str) -> tuple[ExecutionTarget, ...]:
-        mode_settings = self._mode_settings(mode)
-        configured_targets = {target.name: target for target in self.llm_settings.targets}
-        provider_settings = {provider.name: provider for provider in self.llm_settings.providers}
-        if not mode_settings.candidates:
-            ollama_remote, ollama_enabled = self._ollama_classification()
-            return (
-                ExecutionTarget(
-                    ProviderTarget(
-                        name=f"ollama-{mode}",
-                        provider="ollama",
-                        model=self.models[mode],
-                        remote=ollama_remote,
-                        modes=frozenset({mode}),
-                        languages=frozenset({self.language}),
-                        priority=0,
-                        enabled=ollama_enabled,
-                    ),
-                    retry_attempts=self.retry_attempts,
-                ),
-            )
-
-        executions: list[ExecutionTarget] = []
-        for priority, name in enumerate(mode_settings.candidates):
-            target = configured_targets[name]
-            provider = provider_settings.get(target.provider)
-            is_ollama = target.provider == "ollama"
-            if is_ollama:
-                remote, enabled = self._ollama_classification()
-            else:
-                remote = provider is not None and provider.locality == "remote"
-                enabled = (
-                    provider is not None
-                    and provider.enabled
-                    and provider.name in self._registered_providers
-                )
-            model = target.model_for_language(self.language)
-            price = self._price_for_target(target, provider, model) if remote else None
-            maximum_output = self._minimum_defined(
-                target.max_output_tokens,
-                mode_settings.max_output_tokens,
-                price.max_output_tokens if price is not None else None,
-            )
-            context_window = self._minimum_defined(
-                target.context_window,
-                price.context_window if price is not None else None,
-            )
-            executions.append(
-                ExecutionTarget(
-                    route=ProviderTarget(
-                        name=target.name,
-                        provider=target.provider,
-                        model=model,
-                        remote=remote,
-                        modes=frozenset({mode}),
-                        languages=frozenset(target.languages),
-                        context_window=context_window,
-                        max_output_tokens=maximum_output,
-                        min_complexity_score=target.min_complexity_score,
-                        priority=priority,
-                        enabled=enabled,
-                    ),
-                    retry_attempts=target.retry_attempts,
-                    max_output_tokens=maximum_output,
-                    max_output_words=target.max_output_words,
-                    options=dict(target.options),
-                    price=price,
-                )
-            )
-        if self.llm_settings.emergency_local_only and not any(
-            execution.route.provider == "ollama"
-            and not execution.route.remote
-            and execution.route.enabled
-            for execution in executions
-        ):
-            ollama_remote, ollama_enabled = self._ollama_classification()
-            if ollama_enabled and not ollama_remote:
-                executions.append(
-                    ExecutionTarget(
-                        ProviderTarget(
-                            name=f"ollama-emergency-{mode}",
-                            provider="ollama",
-                            model=self.models[mode],
-                            remote=False,
-                            modes=frozenset({mode}),
-                            languages=frozenset({self.language}),
-                            priority=len(executions),
-                        ),
-                        retry_attempts=self.retry_attempts,
-                    )
-                )
-        return tuple(executions)
-
-    @staticmethod
-    def _minimum_defined(*values: int | None) -> int | None:
-        defined = tuple(value for value in values if value is not None)
-        return min(defined) if defined else None
-
-    def _price_for_target(
-        self,
-        target: config.LLMTargetSettings,
-        provider: config.LLMProviderSettings | None,
-        model: str,
-    ) -> ModelPrice | None:
-        if self.catalog is None or target.catalog_id is None or provider is None:
-            return None
-        try:
-            price = self.catalog.get(target.catalog_id)
-        except CatalogError:
-            return None
-        if price.provider != provider.name or price.model != model:
-            logger.error("Catalog identity does not match target %s", target.name)
-            return None
-        return price
 
     def _mode_settings(self, mode: str) -> config.LLMModeSettings:
         if mode == "talk":

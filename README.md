@@ -253,6 +253,15 @@ classDiagram
         +close()
     }
 
+    class TargetCompiler {
+        +compile_all() dict
+        +compile(mode) tuple
+    }
+
+    class ProviderFactory {
+        +configured_provider_factory(settings) Callable
+    }
+
     class RagSystem {
         +read_chunks() tuple~CorpusChunk~
         +index_database(data) ndarray
@@ -280,6 +289,8 @@ classDiagram
     VoiceAssistant --> APIClient
     APIClient --> RoutePlanner
     APIClient --> ConnectivityMonitor
+    APIClient --> TargetCompiler
+    APIClient --> ProviderFactory
     APIClient --> ProviderRegistry
     VoiceAssistant --> RagSystem
     VoiceAssistant --> PiperTTS
@@ -564,6 +575,8 @@ process from blocking shutdown indefinitely.
 |-- THIRD_PARTY_NOTICES.md          Provenance and redistribution gaps
 |-- api/
 |   |-- api_client.py               Public talk/think facade and composition
+|   |-- provider_factory.py         Lazy configured-adapter construction
+|   |-- target_compiler.py          Settings-to-execution-target compilation
 |   |-- routing.py                  Eligibility, policies, complexity scoring
 |   |-- streaming.py                Retry, fallback, speech and settlement
 |   |-- connectivity.py             Linux passive gate and HTTPS quality monitor
@@ -757,6 +770,8 @@ The supporting modules separate policy from transport:
 | Module | Responsibility |
 |---|---|
 | `providers/contracts.py` | Typed messages, requests, deltas, completion metadata, usage, errors, cancellation, and capabilities |
+| `provider_factory.py` | Converts validated provider settings into lazy adapter factories without importing optional transports at startup |
+| `target_compiler.py` | Compiles talk/think candidate chains, limits, prices, language models, priorities, and emergency-local behavior into execution targets |
 | `routing.py` | Lazy registry, eligibility, policy ordering, input estimation, and adaptive tier selection |
 | `streaming.py` | Attempt loop, text buffering, speech commit, retry/fallback, health, metrics, and budget settlement |
 | `connectivity.py` | Passive Linux path inspection, active TLS/HTTPS probe, smoothing, and hysteresis |
