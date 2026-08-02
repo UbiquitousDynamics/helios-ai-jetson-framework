@@ -1564,6 +1564,9 @@ specific Jetson audio/inference image is correctly provisioned.
   their relevant boundary.
 - One Piper object is shared between direct responses and streamed chat.
 - Synthesis stays in memory and does not repeatedly write a fixed WAV file.
+- TTS fragments reuse one blocking raw PortAudio output stream while the PCM
+  format remains unchanged, avoiding per-sentence device reconstruction and
+  NumPy conversion.
 - Recognition returns on the first finalized phrase instead of always waiting
   the full timeout.
 - Remote deltas are spoken at sentence boundaries before completion; long
