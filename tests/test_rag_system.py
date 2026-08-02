@@ -176,6 +176,48 @@ def test_top_k_boundaries_and_ties_are_stable(tmp_path: Path) -> None:
             rag.search("query", matrix, top_k=invalid)  # type: ignore[arg-type]
 
 
+def test_partial_top_k_keeps_lowest_rows_at_cutoff_tie(tmp_path: Path) -> None:
+    rag = make_rag(tmp_path, "Alpha. Beta. Gamma. Delta. Epsilon.")
+    matrix = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.8, 0.6],
+            [0.8, 0.6],
+            [0.8, 0.6],
+            [0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    rag.model.encode = lambda *_args, **_kwargs: np.asarray(  # type: ignore[method-assign]
+        [[1.0, 0.0]],
+        dtype=np.float32,
+    )
+
+    assert rag.search("query", matrix, top_k=3) == [
+        (0, 1.0),
+        (1, pytest.approx(0.8)),
+        (2, pytest.approx(0.8)),
+    ]
+
+
+def test_already_normalized_encoder_output_is_reused(tmp_path: Path) -> None:
+    matrix = np.asarray([[1.0, 0.0]], dtype=np.float32)
+
+    class NormalizedEncoder:
+        def encode(self, _sentences: list[str], **_: object) -> np.ndarray:
+            return matrix
+
+    rag = make_rag(
+        tmp_path,
+        "Alpha.",
+        encoder=NormalizedEncoder(),  # type: ignore[arg-type]
+    )
+
+    encoded = rag._encode_batch(["query"])
+
+    assert encoded is matrix
+
+
 def test_local_model_identity_is_path_independent(tmp_path: Path) -> None:
     first_model = tmp_path / "first" / "same-model"
     second_model = tmp_path / "second" / "same-model"

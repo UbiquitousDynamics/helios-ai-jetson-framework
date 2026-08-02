@@ -1555,6 +1555,9 @@ specific Jetson audio/inference image is correctly provisioned.
 
 - The corpus and compressed embedding matrix are loaded once and cached.
 - Every query is encoded once.
+- Already normalized encoder output is reused without another division/copy.
+- RAG top-k selection partitions the similarity vector in linear time and
+  deterministically sorts only the selected candidates.
 - No startup RAG query is executed and discarded.
 - No constructor sends an Ollama warm-up request by default.
 - Eligible Codex startup/account validation overlaps the welcome message and
