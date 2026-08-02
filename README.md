@@ -452,21 +452,24 @@ sequenceDiagram
     Main->>VA: run()
     VA->>A: prepare_remote_async()
     A-->>R: Optionally prepare Codex in background
+    VA->>V: prepare_async()
+    V->>V: Load Vosk and initialize PyAudio in background
     VA->>P: Speak welcome message
     P->>P: Lazily load configured voice
     VA->>V: listen_once(timeout)
-    V->>V: Lazily load Vosk and initialize PyAudio
     V-->>VA: First finalized RecognitionResult
     VA->>A: Dispatch only for a conversational command
 ```
 
 The constructor establishes the dependency graph without performing network
 requests or opening audio devices. The first welcome message loads Piper, and
-the first listening cycle loads Vosk and PyAudio. The Ollama SDK client remains
-lazy until a conversational request or an explicit `warm_up()` call. If the
-current network gate admits a configured Codex route, app-server startup and
-ChatGPT account validation begin in a background thread while the welcome
-message is spoken. Preparation sends no prompt and starts no inference turn.
+the runtime begins loading Vosk and initializing PyAudio in a background thread
+at the same time. The input stream is opened only when listening begins. The
+Ollama SDK client remains lazy until a conversational request or an explicit
+`warm_up()` call. If the current network gate admits a configured Codex route,
+app-server startup and ChatGPT account validation also begin in a background
+thread while the welcome message is spoken. Preparation sends no prompt and
+starts no inference turn.
 
 The embedding model and corpus are not loaded during normal startup. RAG is
 initialized only after the user enters RAG mode and asks a question.
@@ -1170,8 +1173,8 @@ Expected behavior:
 1. logging is configured;
 2. lightweight service adapters are constructed;
 3. an eligible Codex route may prepare in the background without sending text;
-4. Piper loads and speaks the localized welcome message;
-5. Vosk/PyAudio initialize on the first listening cycle;
+4. Vosk/PyAudio prepare in the background without opening the input stream;
+5. Piper loads and speaks the localized welcome message concurrently;
 6. the assistant waits in `COMMAND` state;
 7. Ollama or RAG resources initialize only when their flow is used.
 
@@ -1556,8 +1559,9 @@ specific Jetson audio/inference image is correctly provisioned.
 - No constructor sends an Ollama warm-up request by default.
 - Eligible Codex startup/account validation overlaps the welcome message and
   never starts an inference turn.
-- Vosk, PyAudio, the Ollama client, Piper weights, and RAG are lazy at their
-  relevant boundary.
+- Vosk and PyAudio prepare concurrently with the greeting without opening the
+  microphone stream; the Ollama client, Piper weights, and RAG remain lazy at
+  their relevant boundary.
 - One Piper object is shared between direct responses and streamed chat.
 - Synthesis stays in memory and does not repeatedly write a fixed WAV file.
 - Recognition returns on the first finalized phrase instead of always waiting

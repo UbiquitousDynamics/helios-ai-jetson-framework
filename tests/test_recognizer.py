@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from recognizer.speech_recognizer import RecognitionResult, SpeechRecognizer
 
 
@@ -84,3 +86,40 @@ def test_legacy_listen_generator_yields_text() -> None:
     assert next(events) == "ciao equipaggio"
     events.close()
     assert audio.stream.closed
+
+
+def test_background_prepare_is_idempotent() -> None:
+    class BlockingRecognizer(SpeechRecognizer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def _ensure_runtime(self) -> None:
+            self.entered.set()
+            self.release.wait(timeout=1)
+
+    recognizer = BlockingRecognizer()
+
+    first = recognizer.prepare_async()
+    assert first is not None
+    assert recognizer.entered.wait(timeout=1)
+    second = recognizer.prepare_async()
+
+    assert second is first
+    recognizer.release.set()
+    first.join(timeout=1)
+    assert not first.is_alive()
+
+
+def test_prepare_does_not_open_microphone_stream() -> None:
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+        audio_format=8,
+    )
+
+    assert recognizer.prepare_async() is None
+    assert audio.open_kwargs == {}

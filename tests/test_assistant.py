@@ -62,6 +62,10 @@ class FakeRecognizer:
     def __init__(self, results: list[RecognitionResult | None]) -> None:
         self.results = iter(results)
         self.closed = False
+        self.prepare_calls = 0
+
+    def prepare_async(self) -> None:
+        self.prepare_calls += 1
 
     def listen_once(self, timeout: float) -> RecognitionResult | None:
         assert timeout > 0
@@ -218,11 +222,12 @@ def test_stop_cancels_the_active_model_stream() -> None:
 
 
 def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
-    assistant, tts, api, _sounds, _recognizer = make_assistant([])
+    assistant, tts, api, _sounds, recognizer = make_assistant([])
 
     assistant.run(max_iterations=0)
 
     assert api.prepare_calls == 1
+    assert recognizer.prepare_calls == 1
     assert tts.spoken == [
         assistant.profile.welcome_message.format(
             wake_word=assistant.profile.wake_word,

@@ -334,6 +334,13 @@ class VoiceAssistant:
             prepare_remote = getattr(self.api_client, "prepare_remote_async", None)
             if callable(prepare_remote):
                 prepare_remote()
+            prepare_recognizer = getattr(
+                self.speech_recognizer,
+                "prepare_async",
+                None,
+            )
+            if callable(prepare_recognizer):
+                prepare_recognizer()
             self.tts.speak(self.profile.welcome_message.format(wake_word=self.profile.wake_word))
             while self._running and (max_iterations is None or iterations < max_iterations):
                 iterations += 1
