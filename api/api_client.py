@@ -181,6 +181,14 @@ class APIClient:
         self.models = {"talk": model_talk, "think": model_think}
         self.language = language.strip().lower()
         self.llm_settings = config.LLM_SETTINGS if llm_settings is None else llm_settings
+        self._mode_settings_by_name = {
+            "talk": self.llm_settings.talk,
+            "think": self.llm_settings.think,
+        }
+        self._timeouts_by_mode = {
+            mode: self._compile_timeouts(settings)
+            for mode, settings in self._mode_settings_by_name.items()
+        }
         self.retry_attempts = retry_attempts
         self.retry_wait = retry_wait
         self._sleep = sleep
@@ -273,6 +281,14 @@ class APIClient:
             ollama_enabled=ollama_enabled,
             catalog=self.catalog,
         ).compile_all()
+        self._execution_by_name = {
+            mode: {execution.route.name: execution for execution in executions}
+            for mode, executions in self._execution_targets.items()
+        }
+        self._route_planners = {
+            mode: self._compile_route_planner(mode, executions)
+            for mode, executions in self._execution_targets.items()
+        }
         if self._network_monitor is not None:
             set_online_callback = getattr(
                 self._network_monitor,
@@ -420,15 +436,14 @@ class APIClient:
         return provider.locality == "remote", provider.enabled
 
     def _mode_settings(self, mode: str) -> config.LLMModeSettings:
-        if mode == "talk":
-            return self.llm_settings.talk
-        if mode == "think":
-            return self.llm_settings.think
-        raise ValueError(f"Unknown model mode: {mode!r}")
+        try:
+            return self._mode_settings_by_name[mode]
+        except KeyError:
+            raise ValueError(f"Unknown model mode: {mode!r}") from None
 
-    def _timeouts(self, mode: str) -> Timeouts:
+    def _compile_timeouts(self, mode_settings: config.LLMModeSettings) -> Timeouts:
         values = self.llm_settings.timeouts
-        mode_first_token = self._mode_settings(mode).first_visible_token_seconds
+        mode_first_token = mode_settings.first_visible_token_seconds
         return Timeouts(
             connect_seconds=values.connect_seconds,
             first_token_seconds=(
@@ -438,6 +453,30 @@ class APIClient:
             ),
             read_seconds=values.read_seconds,
             total_seconds=values.total_seconds,
+        )
+
+    def _timeouts(self, mode: str) -> Timeouts:
+        try:
+            return self._timeouts_by_mode[mode]
+        except KeyError:
+            raise ValueError(f"Unknown model mode: {mode!r}") from None
+
+    def _compile_route_planner(
+        self,
+        mode: str,
+        executions: tuple[ExecutionTarget, ...],
+    ) -> RoutePlanner:
+        mode_settings = self._mode_settings(mode)
+        emergency = self.llm_settings.emergency_local_only
+        return RoutePlanner(
+            (execution.route for execution in executions),
+            allowlist=() if emergency else self.llm_settings.allowlist,
+            denylist=() if emergency else self.llm_settings.denylist,
+            health=self.health,
+            auto_complexity_threshold=mode_settings.complexity_threshold,
+            allow_remote_when_connectivity_unknown=(
+                self.llm_settings.unknown_connectivity == "allow_remote"
+            ),
         )
 
     def _request(
@@ -523,24 +562,12 @@ class APIClient:
         ):
             policy = RoutingPolicy.LOCAL_FIRST
 
-        mode_settings = self._mode_settings(request.mode)
-        planner = RoutePlanner(
-            (execution.route for execution in executions),
-            policy=policy,
-            allowlist=(
-                () if self.llm_settings.emergency_local_only else self.llm_settings.allowlist
-            ),
-            denylist=(() if self.llm_settings.emergency_local_only else self.llm_settings.denylist),
-            health=self.health,
-            auto_complexity_threshold=mode_settings.complexity_threshold,
-            allow_remote_when_connectivity_unknown=(
-                self.llm_settings.unknown_connectivity == "allow_remote"
-            ),
-        )
+        planner = self._route_planners[request.mode]
         try:
             routes = planner.plan(
                 request_for_planning,
                 connectivity=selected_connectivity,
+                policy=policy,
             )
         except NoRouteError:
             if privacy_error is not None:
@@ -553,7 +580,7 @@ class APIClient:
                 transmitted=False,
             ) from None
 
-        by_name = {execution.route.name: execution for execution in executions}
+        by_name = self._execution_by_name[request.mode]
         planned = tuple(by_name[route.name] for route in routes)
         planned_names = {execution.route.name for execution in planned}
         for execution in executions:

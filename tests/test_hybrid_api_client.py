@@ -243,6 +243,26 @@ def test_network_monitor_blocks_remote_before_provider_execution(
     assert client.network_snapshot == {"connectivity": "offline"}
 
 
+def test_precompiled_planner_still_reads_provider_health_live(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider(
+        [[TextDelta("Remote."), completed("remote", "remote-model")]]
+    )
+    client, local, tts = make_client(tmp_path, remote)
+    planner = client._route_planners["talk"]
+
+    for _ in range(client.llm_settings.health.failures_to_open):
+        client.health.record_failure(
+            "remote/remote-model",
+            ErrorCategory.CONNECTIVITY,
+        )
+
+    assert client.talk("hello") == "Local."
+    assert client._route_planners["talk"] is planner
+    assert remote.calls == []
+    assert len(local.calls) == 1
+    assert tts.spoken == ["Local."]
+
+
 def test_unknown_context_provenance_never_leaves_the_device(tmp_path: Path) -> None:
     remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, _tts = make_client(tmp_path, remote)
