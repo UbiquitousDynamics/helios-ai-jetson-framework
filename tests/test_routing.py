@@ -230,6 +230,42 @@ def test_adaptive_remote_cascade_selects_one_tier_then_local() -> None:
     assert [target.name for target in complex_result] == ["sol", "local"]
 
 
+def test_auto_policy_reuses_adaptive_complexity_score() -> None:
+    class CountingPlanner(RoutePlanner):
+        complexity_calls = 0
+
+        def complexity_score(
+            self,
+            request: ChatRequest,
+            *,
+            estimated_input_tokens: int | None = None,
+            local_context_window: int | None = None,
+        ) -> int:
+            self.complexity_calls += 1
+            return super().complexity_score(
+                request,
+                estimated_input_tokens=estimated_input_tokens,
+                local_context_window=local_context_window,
+            )
+
+    planner = CountingPlanner(
+        (
+            ProviderTarget(
+                "remote",
+                "codex",
+                "gpt-5.6-luna",
+                True,
+                min_complexity_score=0,
+            ),
+            ProviderTarget("local", "ollama", "small", False),
+        ),
+        policy="auto",
+    )
+
+    assert planner.plan(make_request(), connectivity="online")
+    assert planner.complexity_calls == 1
+
+
 def test_adaptive_remote_cascade_uses_next_healthy_tier() -> None:
     health = HealthTracker(failures_to_open=1)
     health.record_failure("codex/gpt-5.6-sol", ErrorCategory.CONNECTIVITY)

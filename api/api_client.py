@@ -189,6 +189,18 @@ class APIClient:
             mode: self._compile_timeouts(settings)
             for mode, settings in self._mode_settings_by_name.items()
         }
+        if self.llm_settings.routing_file is not None:
+            instruction = _HYBRID_SYSTEM_INSTRUCTIONS.get(
+                self.language,
+                _HYBRID_SYSTEM_INSTRUCTIONS["en"],
+            )
+            self._hybrid_system_message: ChatMessage | None = ChatMessage(
+                Role.SYSTEM,
+                instruction,
+                origin=ContentOrigin.STATIC_INSTRUCTION,
+            )
+        else:
+            self._hybrid_system_message = None
         self.retry_attempts = retry_attempts
         self.retry_wait = retry_wait
         self._sleep = sleep
@@ -491,20 +503,11 @@ class APIClient:
         privacy: PrivacyLevel | str | None,
         request_options: Mapping[str, Any] | None,
     ) -> ChatRequest:
-        messages: list[ChatMessage] = []
-        explicit_hybrid_config = self.llm_settings.routing_file is not None
-        if explicit_hybrid_config:
-            instruction = _HYBRID_SYSTEM_INSTRUCTIONS.get(
-                self.language,
-                _HYBRID_SYSTEM_INSTRUCTIONS["en"],
-            )
-            messages.append(
-                ChatMessage(
-                    Role.SYSTEM,
-                    instruction,
-                    origin=ContentOrigin.STATIC_INSTRUCTION,
-                )
-            )
+        messages: list[ChatMessage] = (
+            [self._hybrid_system_message]
+            if self._hybrid_system_message is not None
+            else []
+        )
         if context:
             messages.append(
                 ChatMessage(
@@ -530,7 +533,9 @@ class APIClient:
             language=self.language,
             privacy=selected_privacy,
             max_output_tokens=(
-                self._mode_settings(mode).max_output_tokens if explicit_hybrid_config else None
+                self._mode_settings(mode).max_output_tokens
+                if self._hybrid_system_message is not None
+                else None
             ),
             timeouts=self._timeouts(mode),
             options=dict(request_options or {}),

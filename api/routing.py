@@ -292,7 +292,9 @@ class RoutePlanner:
             for pair in eligible
             if pair[1].remote and pair[1].min_complexity_score is not None
         ]
-        if adaptive_remotes:
+        local_context = None
+        score: int | None = None
+        if adaptive_remotes or selected_policy is RoutingPolicy.AUTO:
             local_context = max(
                 (
                     target.context_window
@@ -301,6 +303,7 @@ class RoutePlanner:
                 ),
                 default=None,
             )
+        if adaptive_remotes:
             score = self.complexity_score(
                 request,
                 estimated_input_tokens=input_tokens,
@@ -375,15 +378,12 @@ class RoutePlanner:
                 and not self.allow_remote_when_connectivity_unknown
             ):
                 remote = []
-            local_context = max(
-                (target.context_window for target in local if target.context_window is not None),
-                default=None,
-            )
-            score = self.complexity_score(
-                request,
-                estimated_input_tokens=input_tokens,
-                local_context_window=local_context,
-            )
+            if score is None:
+                score = self.complexity_score(
+                    request,
+                    estimated_input_tokens=input_tokens,
+                    local_context_window=local_context,
+                )
             threshold = (
                 self.auto_complexity_threshold
                 if complexity_threshold is None

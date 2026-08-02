@@ -206,6 +206,34 @@ def test_remote_route_receives_only_canonical_authorized_messages(
     assert request.messages[-1].content == "Emilia, answer"
 
 
+def test_static_hybrid_instruction_is_reused_between_requests(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider(
+        [
+            [TextDelta("First."), completed("remote", "remote-model")],
+            [TextDelta("Second."), completed("remote", "remote-model")],
+        ]
+    )
+    llm = hybrid_settings(tmp_path)
+    llm = replace(
+        llm,
+        targets=(replace(llm.targets[0], max_output_words=None), llm.targets[1]),
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=llm,
+        language="en",
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+    )
+
+    assert client.talk("first") == "First."
+    assert client.talk("second") == "Second."
+
+    assert remote.calls[0].messages[0] is remote.calls[1].messages[0]
+
+
 def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
     remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, tts = make_client(
