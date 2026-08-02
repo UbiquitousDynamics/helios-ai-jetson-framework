@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 import uuid
@@ -33,11 +32,10 @@ from api.providers.contracts import (
     TextDelta,
 )
 from api.routing import ProviderRegistry, ProviderTarget, RoutePlanner
+from api.speech_chunker import SpeechChunker
 
 logger = logging.getLogger(__name__)
 
-_SPEECH_MARKUP = re.compile(r"[*$#@]")
-_SENTENCE_BOUNDARY = re.compile(r"[.!?;:](?=\s|$)")
 _TERMINAL_ERRORS = frozenset(
     {
         ErrorCategory.CANCELLED,
@@ -404,44 +402,18 @@ class StreamingResponseCoordinator:
         state: _AttemptState,
     ) -> StreamingResult:
         response_parts: list[str] = []
-        speech_buffer = ""
-        generated_chars = 0
         completed: CompletionMetadata | None = None
+        speech_chunker = (
+            SpeechChunker(
+                first_speech_min_chars=first_speech_min_chars,
+                speech_chunk_max_chars=speech_chunk_max_chars,
+            )
+            if speak is not None
+            else None
+        )
 
-        def next_speech_end(*, force: bool) -> int | None:
-            if not speech_buffer:
-                return None
-            if force:
-                return len(speech_buffer)
-            if not state.speech_committed and generated_chars < first_speech_min_chars:
-                return None
-
-            boundary = _SENTENCE_BOUNDARY.search(speech_buffer)
-            if (
-                boundary is not None
-                and (
-                    speech_chunk_max_chars == 0
-                    or boundary.end() <= speech_chunk_max_chars
-                )
-            ):
-                return boundary.end()
-
-            if speech_chunk_max_chars > 0 and len(speech_buffer) >= speech_chunk_max_chars:
-                window = speech_buffer[: speech_chunk_max_chars + 1]
-                whitespace = tuple(re.finditer(r"\s+", window))
-                if whitespace and whitespace[-1].start() > 0:
-                    return whitespace[-1].start()
-
-            # Do not split a word merely to meet the soft chunk objective.
-            # If punctuation exists, it remains a safe boundary even when late.
-            return boundary.end() if boundary is not None else None
-
-        def speak_fragment(fragment: str) -> None:
-            if speak is None:
-                return
-            sentence = _SPEECH_MARKUP.sub("", fragment).strip()
-            if not sentence or not any(character.isalnum() for character in sentence):
-                return
+        def speak_fragment(sentence: str) -> None:
+            assert speak is not None
             state.speech_committed = True
             if state.first_audio_at is None:
                 state.first_audio_at = self._clock()
@@ -449,18 +421,6 @@ class StreamingResponseCoordinator:
                 speak(sentence)
             except Exception as error:
                 raise _SpeechFailure(error) from None
-
-        def flush_speech(*, force: bool = False) -> None:
-            nonlocal speech_buffer
-            while speech_buffer:
-                end = next_speech_end(force=force)
-                if end is None:
-                    return
-                fragment = speech_buffer[:end]
-                speech_buffer = speech_buffer[end:].lstrip()
-                speak_fragment(fragment)
-                if force:
-                    return
 
         iterator: Any = None
         try:
@@ -483,10 +443,9 @@ class StreamingResponseCoordinator:
                     if state.first_token_at is None:
                         state.first_token_at = self._clock()
                     response_parts.append(event.text)
-                    generated_chars += len(event.text)
-                    if speak is not None:
-                        speech_buffer += event.text
-                        flush_speech()
+                    if speech_chunker is not None:
+                        for sentence in speech_chunker.push(event.text):
+                            speak_fragment(sentence)
                 elif isinstance(event, ReasoningDelta):
                     continue
                 elif isinstance(event, Refused):
@@ -595,8 +554,9 @@ class StreamingResponseCoordinator:
                 retryable_same_provider=True,
                 transmitted=True,
             )
-        if speak is not None:
-            flush_speech(force=True)
+        if speech_chunker is not None:
+            for sentence in speech_chunker.finish():
+                speak_fragment(sentence)
         return StreamingResult(
             text=text,
             metadata=completed,
