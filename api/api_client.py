@@ -270,6 +270,7 @@ class APIClient:
         )
         self.catalog = model_catalog or self._load_catalog()
         self.budget = budget_ledger or self._load_budget()
+        self._owns_metrics = metrics is None
         self.metrics = metrics or self._build_metrics()
         self._coordinator = StreamingResponseCoordinator(
             self._registry,
@@ -430,6 +431,7 @@ class APIClient:
         return SafeMetricsRecorder(
             enabled=settings.metrics_enabled,
             sink=sink,
+            asynchronous=sink is not None,
         )
 
     def _ollama_classification(self) -> tuple[bool, bool]:
@@ -929,6 +931,11 @@ class APIClient:
                 self._ollama.close()
         except Exception:
             logger.warning("Unable to close a language-model provider")
+        if self._owns_metrics:
+            try:
+                self.metrics.close()
+            except Exception:
+                logger.warning("Unable to flush language-model metrics")
         if self._owns_tts and self._tts is not None:
             close = getattr(self._tts, "close", None)
             if callable(close):

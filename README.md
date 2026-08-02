@@ -1585,6 +1585,9 @@ specific Jetson audio/inference image is correctly provisioned.
   the full timeout.
 - Remote deltas are spoken at sentence boundaries before completion; long
   unpunctuated output uses a configurable soft whitespace boundary.
+- Content-free JSONL metrics use a bounded background queue and are flushed on
+  client shutdown, keeping filesystem writes and daily retention pruning out
+  of the conversational return path.
 - Voice requests read cached network quality and perform only a fast passive
   kernel check instead of waiting for an active probe.
 - Notification cues reuse one bounded worker instead of creating a process per
