@@ -658,9 +658,7 @@ class RagSystem:
             ]
             better = np.flatnonzero(similarities > cutoff)
             boundary = np.flatnonzero(similarities == cutoff)
-            candidates = np.concatenate(
-                (better, boundary[: requested - len(better)])
-            )
+            candidates = np.concatenate((better, boundary[: requested - len(better)]))
 
         # lexsort uses the final key as primary: descending score, then row index.
         order = np.lexsort((candidates, -similarities[candidates]))

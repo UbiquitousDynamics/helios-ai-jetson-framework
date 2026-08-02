@@ -58,26 +58,16 @@ class SpeechChunker:
             return None
         if force:
             return len(self._buffer)
-        if (
-            not self._speech_committed
-            and self._generated_chars < self.first_speech_min_chars
-        ):
+        if not self._speech_committed and self._generated_chars < self.first_speech_min_chars:
             return None
 
         boundary = _SENTENCE_BOUNDARY.search(self._buffer)
-        if (
-            boundary is not None
-            and (
-                self.speech_chunk_max_chars == 0
-                or boundary.end() <= self.speech_chunk_max_chars
-            )
+        if boundary is not None and (
+            self.speech_chunk_max_chars == 0 or boundary.end() <= self.speech_chunk_max_chars
         ):
             return boundary.end()
 
-        if (
-            self.speech_chunk_max_chars > 0
-            and len(self._buffer) >= self.speech_chunk_max_chars
-        ):
+        if self.speech_chunk_max_chars > 0 and len(self._buffer) >= self.speech_chunk_max_chars:
             window = self._buffer[: self.speech_chunk_max_chars + 1]
             whitespace = tuple(re.finditer(r"\s+", window))
             if whitespace and whitespace[-1].start() > 0:

@@ -33,9 +33,7 @@ def _client(*, persist_auth: bool = False) -> Iterator[Any]:
             "openai-codex is missing; install requirements-remote.txt first"
         ) from None
 
-    source_home = Path(
-        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-    ).expanduser()
+    source_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
     with tempfile.TemporaryDirectory(prefix="helios-codex-admin-") as temporary:
         root = Path(temporary)
         workspace = root / "workspace"
@@ -105,9 +103,7 @@ def models() -> int:
         response = client.models(include_hidden=False)
     items = field_value(response, "data", ())
     ids = sorted(
-        identifier
-        for item in items
-        if isinstance((identifier := field_value(item, "id")), str)
+        identifier for item in items if isinstance((identifier := field_value(item, "id")), str)
     )
     if not ids:
         print("No Codex models were returned for this account.", file=sys.stderr)
@@ -117,9 +113,7 @@ def models() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Manage the ChatGPT Codex session used by Helios."
-    )
+    parser = argparse.ArgumentParser(description="Manage the ChatGPT Codex session used by Helios.")
     parser.add_argument("command", choices=("login", "status", "models"))
     command = parser.parse_args().command
     try:

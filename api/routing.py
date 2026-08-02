@@ -288,9 +288,7 @@ class RoutePlanner:
             )
         ]
         adaptive_remotes = [
-            pair
-            for pair in eligible
-            if pair[1].remote and pair[1].min_complexity_score is not None
+            pair for pair in eligible if pair[1].remote and pair[1].min_complexity_score is not None
         ]
         local_context = None
         score: int | None = None
@@ -312,8 +310,7 @@ class RoutePlanner:
             eligible_floors = [
                 target.min_complexity_score
                 for _, target in adaptive_remotes
-                if target.min_complexity_score is not None
-                and target.min_complexity_score <= score
+                if target.min_complexity_score is not None and target.min_complexity_score <= score
             ]
             selected_floor = (
                 max(eligible_floors)
@@ -342,8 +339,7 @@ class RoutePlanner:
             eligible = [
                 pair
                 for pair in eligible
-                if pair[1].name not in tiered_names
-                or pair[1].name == selected_pair[1].name
+                if pair[1].name not in tiered_names or pair[1].name == selected_pair[1].name
             ]
             logger.info(
                 "Adaptive remote tier selection: complexity_score=%s, "

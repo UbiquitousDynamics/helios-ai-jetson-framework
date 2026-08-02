@@ -122,9 +122,7 @@ def test_isolated_codex_home_copies_auth_but_not_user_configuration(
 
     copy_chatgpt_auth(source, isolated)
 
-    assert (isolated / "auth.json").read_text(encoding="utf-8") == (
-        '{"auth_mode":"chatgpt"}'
-    )
+    assert (isolated / "auth.json").read_text(encoding="utf-8") == ('{"auth_mode":"chatgpt"}')
     assert not (isolated / "config.toml").exists()
     child_env = codex_child_environment(isolated)
     assert child_env["CODEX_HOME"] == str(isolated)
@@ -343,8 +341,8 @@ def test_close_does_not_wait_for_blocked_account_validation() -> None:
 
 
 def test_api_client_registers_configured_codex_adapter_lazily() -> None:
-    routing = Path(__file__).resolve().parents[1] / "examples" / (
-        "llm-routing.codex-subscription.toml"
+    routing = (
+        Path(__file__).resolve().parents[1] / "examples" / ("llm-routing.codex-subscription.toml")
     )
     client = APIClient(
         llm_settings=config.load_llm_settings(routing),

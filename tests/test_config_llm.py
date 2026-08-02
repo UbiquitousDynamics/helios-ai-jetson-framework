@@ -236,8 +236,7 @@ def test_codex_subscription_has_adaptive_remote_tiers_and_fast_speech() -> None:
     targets = {target.name: target for target in settings.targets}
 
     assert [
-        targets[name].model
-        for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol")
+        targets[name].model for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol")
     ] == ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]
     assert [
         targets[name].min_complexity_score
@@ -280,12 +279,12 @@ def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> No
             "goodput_probe_interval_seconds = 5.0\n"
         ),
         (
-            "schema_version = 1\n[targets.local]\nprovider = \"ollama\"\n"
-            "model = \"test\"\nmax_output_words = true\n"
+            'schema_version = 1\n[targets.local]\nprovider = "ollama"\n'
+            'model = "test"\nmax_output_words = true\n'
         ),
         (
-            "schema_version = 1\n[targets.remote]\nprovider = \"ollama\"\n"
-            "model = \"test\"\nmin_complexity_score = true\n"
+            'schema_version = 1\n[targets.remote]\nprovider = "ollama"\n'
+            'model = "test"\nmin_complexity_score = true\n'
         ),
         "schema_version = 1\n[timeouts]\nconnect_seconds = 1" + ("0" * 400) + "\n",
     ],

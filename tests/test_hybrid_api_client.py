@@ -272,9 +272,7 @@ def test_network_monitor_blocks_remote_before_provider_execution(
 
 
 def test_precompiled_planner_still_reads_provider_health_live(tmp_path: Path) -> None:
-    remote = FakeRemoteProvider(
-        [[TextDelta("Remote."), completed("remote", "remote-model")]]
-    )
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, tts = make_client(tmp_path, remote)
     planner = client._route_planners["talk"]
 
@@ -474,9 +472,7 @@ def test_remote_prepare_is_background_idempotent_and_sends_no_prompt(
 
 
 def test_mode_visible_token_timeout_reaches_remote_request(tmp_path: Path) -> None:
-    remote = FakeRemoteProvider(
-        [[TextDelta("Remote."), completed("remote", "remote-model")]]
-    )
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     llm = hybrid_settings(tmp_path)
     llm = replace(
         llm,
@@ -496,8 +492,8 @@ def test_mode_visible_token_timeout_reaches_remote_request(tmp_path: Path) -> No
 
 
 def test_committed_codex_profile_selects_luna_terra_and_sol() -> None:
-    routing = Path(__file__).resolve().parents[1] / "examples" / (
-        "llm-routing.codex-subscription.toml"
+    routing = (
+        Path(__file__).resolve().parents[1] / "examples" / ("llm-routing.codex-subscription.toml")
     )
     llm = config.load_llm_settings(routing)
     llm = replace(

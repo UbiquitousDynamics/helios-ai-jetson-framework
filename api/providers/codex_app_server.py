@@ -85,9 +85,7 @@ class _OfficialCodexRuntime:
         try:
             from openai_codex import ApprovalMode, Codex, CodexConfig, Sandbox
         except ImportError as exc:
-            raise RuntimeError(
-                "The optional openai-codex package is not installed"
-            ) from exc
+            raise RuntimeError("The optional openai-codex package is not installed") from exc
 
         self._approval_mode = ApprovalMode.deny_all
         self._sandbox = Sandbox.read_only
@@ -96,9 +94,7 @@ class _OfficialCodexRuntime:
         self._working_directory = root / "workspace"
         self._working_directory.mkdir(mode=0o700)
         self._codex_home = root / "codex-home"
-        source_home = Path(
-            os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-        ).expanduser()
+        source_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
         copy_chatgpt_auth(source_home, self._codex_home)
         config = CodexConfig(
             cwd=str(self._working_directory),
@@ -268,9 +264,7 @@ class CodexAppServerAdapter:
             supports_system_messages=True,
             supports_streaming_usage=True,
             supports_reasoning=True,
-            features=frozenset(
-                {"reasoning", "streaming", "streaming_usage", "system_messages"}
-            ),
+            features=frozenset({"reasoning", "streaming", "streaming_usage", "system_messages"}),
         )
         self._runtime = runtime
         self._runtime_factory = runtime_factory or _OfficialCodexRuntime
@@ -555,8 +549,11 @@ class CodexAppServerAdapter:
                 return
 
             method, payload = _notification_parts(value)
-            if method in {"item/agentMessage/delta", "item/reasoning/textDelta",
-                          "item/reasoning/summaryTextDelta"}:
+            if method in {
+                "item/agentMessage/delta",
+                "item/reasoning/textDelta",
+                "item/reasoning/summaryTextDelta",
+            }:
                 delta = field_value(payload, "delta")
                 if not isinstance(delta, str) or not delta:
                     continue

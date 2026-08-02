@@ -106,11 +106,7 @@ class PrivacyGuard:
             elif canonical_messages is not None:
                 canonical_messages.append(message)
 
-        messages = (
-            request.messages
-            if canonical_messages is None
-            else tuple(canonical_messages)
-        )
+        messages = request.messages if canonical_messages is None else tuple(canonical_messages)
 
         return replace(
             request,

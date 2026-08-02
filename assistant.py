@@ -135,11 +135,7 @@ class VoiceAssistant:
     def _without_wake_word(self, command: str) -> str:
         ordered_aliases = (
             self.profile.wake_word,
-            *(
-                alias
-                for alias in self.profile.wake_word_aliases
-                if alias != self.profile.wake_word
-            ),
+            *(alias for alias in self.profile.wake_word_aliases if alias != self.profile.wake_word),
         )
         return self._remove_first_phrase(command, ordered_aliases)
 
@@ -272,10 +268,7 @@ class VoiceAssistant:
         with self._rag_lock:
             if self._closed or self._rag_prepared:
                 return self._rag_prepare_future
-            if (
-                self._rag_prepare_future is not None
-                and not self._rag_prepare_future.done()
-            ):
+            if self._rag_prepare_future is not None and not self._rag_prepare_future.done():
                 return self._rag_prepare_future
             self._rag_prepare_future = self._sound_executor.submit(self._prepare_rag)
             return self._rag_prepare_future

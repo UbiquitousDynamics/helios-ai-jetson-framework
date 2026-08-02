@@ -26,11 +26,7 @@ def write_network_fixture(
     route_path = root / "route"
     route_path.write_text(
         "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\n"
-        + (
-            f"{interface} 00000000 0101A8C0 0003 0 0 100 00000000 0 0 0\n"
-            if route
-            else ""
-        ),
+        + (f"{interface} 00000000 0101A8C0 0003 0 0 100 00000000 0 0 0\n" if route else ""),
         encoding="ascii",
     )
     ipv6_route = root / "ipv6_route"
@@ -98,10 +94,7 @@ def test_passive_gate_can_require_wifi_or_an_explicit_interface(tmp_path: Path) 
 
     assert inspector.inspect().online
     assert not inspector.inspect(require_wifi=True).online
-    assert (
-        inspector.inspect(interface_allowlist=("wlan0",)).reason
-        == "no_default_route"
-    )
+    assert inspector.inspect(interface_allowlist=("wlan0",)).reason == "no_default_route"
 
 
 @dataclass

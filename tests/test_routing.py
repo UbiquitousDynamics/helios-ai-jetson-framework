@@ -302,9 +302,10 @@ def test_adaptive_remote_cascade_uses_next_healthy_tier() -> None:
         options={"complex": True},
     )
 
-    assert [
-        target.name for target in planner.plan(request, connectivity="online")
-    ] == ["terra", "local"]
+    assert [target.name for target in planner.plan(request, connectivity="online")] == [
+        "terra",
+        "local",
+    ]
 
 
 def test_adaptive_remote_cascade_tie_keeps_only_first_candidate() -> None:

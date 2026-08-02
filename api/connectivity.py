@@ -203,11 +203,7 @@ class LinuxNetworkInspector:
         if ipv6_content:
             for line in ipv6_content.splitlines():
                 fields = line.split()
-                if (
-                    len(fields) < 10
-                    or fields[0] != "0" * 32
-                    or fields[1] != "00"
-                ):
+                if len(fields) < 10 or fields[0] != "0" * 32 or fields[1] != "00":
                     continue
                 try:
                     metric = int(fields[5], 16)
@@ -334,11 +330,7 @@ def tls_http_probe(
             raw_socket = None
             tls_done = clock()
             method = "GET" if measure_payload else "HEAD"
-            range_header = (
-                f"Range: bytes=0-{maximum_bytes - 1}\r\n"
-                if measure_payload
-                else ""
-            )
+            range_header = f"Range: bytes=0-{maximum_bytes - 1}\r\n" if measure_payload else ""
             request = (
                 f"{method} {path} HTTP/1.1\r\n"
                 f"Host: {host}\r\n"
@@ -370,9 +362,7 @@ def tls_http_probe(
                 received += len(chunk)
             finished = clock()
             transfer_seconds = (
-                max(0.001, finished - payload_started)
-                if payload_started is not None
-                else None
+                max(0.001, finished - payload_started) if payload_started is not None else None
             )
             goodput = (
                 received * 8 / transfer_seconds / 1_000
@@ -551,8 +541,7 @@ class ConnectivityMonitor:
             now = self._clock()
             measure_payload = (
                 self._last_goodput_probe_at is None
-                or now - self._last_goodput_probe_at
-                >= self.settings.goodput_probe_interval_seconds
+                or now - self._last_goodput_probe_at >= self.settings.goodput_probe_interval_seconds
             )
             result = self._probe(
                 self.settings.probe_url,
@@ -611,11 +600,7 @@ class ConnectivityMonitor:
                     if was_online
                     else self.settings.quality_hysteresis
                 )
-                state = (
-                    Connectivity.ONLINE
-                    if score >= threshold
-                    else Connectivity.OFFLINE
-                )
+                state = Connectivity.ONLINE if score >= threshold else Connectivity.OFFLINE
                 snapshot = NetworkQualitySnapshot(
                     state,
                     interface=link.interface,

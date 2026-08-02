@@ -167,9 +167,7 @@ class APIClient:
         model_catalog: ModelCatalog | None = None,
         budget_ledger: BudgetLedger | None = None,
         metrics: SafeMetricsRecorder | None = None,
-        connectivity: (
-            Connectivity | str | Callable[[], Connectivity | str] | None
-        ) = None,
+        connectivity: (Connectivity | str | Callable[[], Connectivity | str] | None) = None,
         network_monitor: Any | None = None,
     ) -> None:
         if retry_attempts < 1:
@@ -461,9 +459,7 @@ class APIClient:
         return Timeouts(
             connect_seconds=values.connect_seconds,
             first_token_seconds=(
-                values.first_token_seconds
-                if mode_first_token is None
-                else float(mode_first_token)
+                values.first_token_seconds if mode_first_token is None else float(mode_first_token)
             ),
             read_seconds=values.read_seconds,
             total_seconds=values.total_seconds,
@@ -506,9 +502,7 @@ class APIClient:
         request_options: Mapping[str, Any] | None,
     ) -> ChatRequest:
         messages: list[ChatMessage] = (
-            [self._hybrid_system_message]
-            if self._hybrid_system_message is not None
-            else []
+            [self._hybrid_system_message] if self._hybrid_system_message is not None else []
         )
         if context:
             messages.append(
@@ -596,8 +590,7 @@ class APIClient:
             snapshot = self.health.snapshot(execution.route.health_key)
             if not snapshot.available:
                 logger.warning(
-                    "Route %s excluded by provider health "
-                    "(status=%s, retry_after_seconds=%s)",
+                    "Route %s excluded by provider health (status=%s, retry_after_seconds=%s)",
                     execution.route.name,
                     snapshot.status.value,
                     (
@@ -633,15 +626,9 @@ class APIClient:
     def prepare_remote_async(self) -> threading.Thread | None:
         """Start the non-inference Codex startup/authentication path in background."""
 
-        if (
-            not self.llm_settings.remote_enabled
-            or self.llm_settings.emergency_local_only
-        ):
+        if not self.llm_settings.remote_enabled or self.llm_settings.emergency_local_only:
             return None
-        if (
-            self._network_monitor is not None
-            and self.connectivity is not Connectivity.ONLINE
-        ):
+        if self._network_monitor is not None and self.connectivity is not Connectivity.ONLINE:
             logger.info("Skipping remote preparation while the network gate is not online")
             return None
         provider_names = tuple(
@@ -663,10 +650,7 @@ class APIClient:
         with self._remote_prepare_lock:
             if self._closed or self._remote_prepared:
                 return self._remote_prepare_thread
-            if (
-                self._remote_prepare_thread is not None
-                and self._remote_prepare_thread.is_alive()
-            ):
+            if self._remote_prepare_thread is not None and self._remote_prepare_thread.is_alive():
                 return self._remote_prepare_thread
 
             def prepare() -> None:

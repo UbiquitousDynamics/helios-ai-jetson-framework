@@ -221,9 +221,7 @@ class LLMNetworkSettings:
         if len(set(self.interface_allowlist)) != len(self.interface_allowlist):
             raise ConfigurationError("network interface_allowlist entries must be unique")
         if any(
-            not interface
-            or len(interface) > 64
-            or re.search(r"[^A-Za-z0-9_.:-]", interface)
+            not interface or len(interface) > 64 or re.search(r"[^A-Za-z0-9_.:-]", interface)
             for interface in self.interface_allowlist
         ):
             raise ConfigurationError("network interface_allowlist contains an invalid name")

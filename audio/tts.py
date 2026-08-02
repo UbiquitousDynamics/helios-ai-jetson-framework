@@ -56,9 +56,7 @@ class SoundDeviceBackend:
             try:
                 import sounddevice as sd
             except ImportError as exc:  # pragma: no cover - deployment dependency
-                raise AudioPlaybackError(
-                    "sounddevice is required for TTS playback"
-                ) from exc
+                raise AudioPlaybackError("sounddevice is required for TTS playback") from exc
             self._sounddevice = sd
         return self._sounddevice
 

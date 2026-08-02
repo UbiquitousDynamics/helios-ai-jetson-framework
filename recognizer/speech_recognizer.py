@@ -252,9 +252,7 @@ class SpeechRecognizer:
                 try:
                     self.p.terminate()
                 except Exception as exc:
-                    raise SpeechRecognitionError(
-                        "Unable to terminate the audio interface"
-                    ) from exc
+                    raise SpeechRecognitionError("Unable to terminate the audio interface") from exc
             self._closed = True
 
     def __enter__(self) -> SpeechRecognizer:
