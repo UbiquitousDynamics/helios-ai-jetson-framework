@@ -243,6 +243,26 @@ def test_collector_reads_jetson_nano_gpu_clock_and_input_power_from_sysfs(
     assert snapshot.power_mw == pytest.approx(2875.0)
 
 
+def test_collector_reads_input_power_from_i2c_device_hwmon(tmp_path: Path) -> None:
+    sys_root = tmp_path / "sys"
+    hwmon_root = sys_root / "bus" / "i2c" / "devices" / "1-0040" / "hwmon" / "hwmon2"
+    hwmon_root.mkdir(parents=True)
+    (hwmon_root / "in3_label").write_text("VIN_SYS_5V0\n", encoding="ascii")
+    (hwmon_root / "power3_input").write_text("4125000\n", encoding="ascii")
+
+    snapshot = ResourceCollector(
+        disk_path=tmp_path,
+        proc_root=tmp_path / "missing-proc",
+        thermal_root=tmp_path / "missing-thermal",
+        sys_root=sys_root,
+        system="Linux",
+        tegrastats_command=(),
+        clock=lambda: FIXED_TIME,
+    ).collect()
+
+    assert snapshot.power_mw == pytest.approx(4125.0)
+
+
 def test_windows_style_fallback_skips_tegrastats_and_returns_disk_only(tmp_path: Path) -> None:
     called = False
 

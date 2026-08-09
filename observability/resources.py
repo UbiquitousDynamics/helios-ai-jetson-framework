@@ -546,6 +546,10 @@ class ResourceCollector:
                 for pattern in (
                     "bus/i2c/drivers/ina3221*/**/rail_name_*",
                     "bus/i2c/drivers/ina3221*/**/in*_label",
+                    "bus/i2c/devices/*/iio:device*/rail_name_*",
+                    "bus/i2c/devices/*/iio_device/rail_name_*",
+                    "bus/i2c/devices/*/hwmon/hwmon*/in*_label",
+                    "class/hwmon/hwmon*/in*_label",
                 )
                 for path in self.sys_root.glob(pattern)
             )
@@ -558,16 +562,27 @@ class ResourceCollector:
                 continue
             if label not in {"VDD_IN", "VIN_SYS_5V0", "SYS5V"}:
                 continue
-            channel_match = re.search(r"(\d+)$", label_path.name)
+            channel_match = re.fullmatch(r"rail_name_(\d+)", label_path.name)
+            legacy_channel = channel_match is not None
+            if channel_match is None:
+                channel_match = re.fullmatch(r"in(\d+)_label", label_path.name)
             if channel_match is None:
                 continue
             channel = channel_match.group(1)
-            direct_power = self._read_measurement_file(
-                label_path.parent / f"in_power{channel}_input"
-            )
-            if direct_power is not None:
-                # The legacy INA3221 IIO driver reports milliwatts.
-                return direct_power
+            if legacy_channel:
+                direct_power = self._read_measurement_file(
+                    label_path.parent / f"in_power{channel}_input"
+                )
+                if direct_power is not None:
+                    # The legacy INA3221 IIO driver reports milliwatts.
+                    return direct_power
+            else:
+                direct_power_uw = self._read_measurement_file(
+                    label_path.parent / f"power{channel}_input"
+                )
+                if direct_power_uw is not None:
+                    # Linux hwmon power inputs are expressed in microwatts.
+                    return direct_power_uw / 1_000.0
             voltage_mv = self._read_measurement_file(label_path.parent / f"in{channel}_input")
             current_ma = self._read_measurement_file(label_path.parent / f"curr{channel}_input")
             if voltage_mv is not None and current_ma is not None:
