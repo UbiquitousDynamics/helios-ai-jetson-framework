@@ -77,6 +77,11 @@ The interface contains Overview, Routing, Latency, Network, and Jetson sections.
 Filters cover time window, `talk`/`think` mode, local/remote locality, provider,
 model, route, success/failure outcome, and network-quality tier. A filter affects
 the related summary, distribution, latency, network, and resource queries.
+Missing numeric values render as `—`; a measured zero remains zero. If one
+request fails, the update banner names the unavailable API resource instead of
+silently converting missing data to zero. Overview can derive an observed
+health/locality summary from successful provider samples when the live health
+resource is temporarily unavailable.
 
 ### Read-only API
 
@@ -240,8 +245,8 @@ wait for network measurement and observability does not increase probe cadence.
 | CPU/GPU utilization | percent 0–100 | `/proc/stat` deltas and, when available, `tegrastats` |
 | RAM/swap used and utilization | MiB / percent | `/proc/meminfo` or `tegrastats` fallback |
 | CPU/GPU temperature | degrees Celsius | thermal sysfs or `tegrastats` |
-| Power | watts | Jetson `VDD_IN` or `POM_5V_IN` reading from `tegrastats` |
-| CPU/GPU frequency | MHz | Active-core/GR3D `tegrastats` readings when present |
+| Power | watts | Jetson `tegrastats`, with an INA3221 sysfs fallback for `VDD_IN`, `POM_5V_IN`, `VIN_SYS_5V0`, or `SYS5V` |
+| CPU/GPU frequency | MHz | Active-core/GR3D `tegrastats`; GPU devfreq `cur_freq` is the fallback when GR3D frequency is absent |
 | Throttled | boolean | A supported sanitized throttle state when present |
 | KPI storage used | MiB | Filesystem/SQLite storage accounting |
 
@@ -272,6 +277,10 @@ wait for network measurement and observability does not increase probe cadence.
 No KPI-specific package installation is required. Install Helios normally for
 the target platform. Python provides SQLite and the HTTP server; dashboard assets
 are committed under `observability/static/`. The feature works offline.
+
+The dashboard accepts empty API query strings consistently on Python 3.10.0,
+including the version present on early JetPack images. SQLite migrations avoid
+syntax that requires a newer SQLite runtime than those deployments provide.
 
 The source-checkout installation and Jetson backend rules in the main README
 remain unchanged. In particular, do not replace JetPack-compatible Torch or ONNX
@@ -482,15 +491,21 @@ not be published without an operational privacy review.
 
 ## Jetson resource availability
 
-Resource collection is best-effort and requires no root access.
+Resource collection is best-effort and Helios itself must not run as root.
 
 - Linux CPU and memory values use readable `/proc` files.
 - Thermal values use readable thermal sysfs zones when labels identify CPU or
   GPU sensors.
-- If `tegrastats` is on `PATH`, the sampler invokes a bounded single-shot command
-  and parses recognized RAM, swap, CPU, GR3D, temperature, power, clock, and
-  throttle fields. Output varies across JetPack releases, so unknown fields are
-  ignored.
+- If `tegrastats` is on `PATH`, the sampler first requests a bounded single-shot
+  sample. Older releases that do not implement `--count` fall back to a briefly
+  bounded streaming invocation. Recognized RAM, swap, CPU, GR3D, temperature,
+  power, clock, and throttle fields are parsed; unknown fields are ignored.
+- When GR3D utilization is available without its clock, the sampler reads the
+  GPU devfreq `cur_freq` sysfs attribute and converts hertz to megahertz.
+- When `tegrastats` omits power, the sampler looks for the main-input INA3221
+  rail under legacy IIO and current hwmon sysfs layouts. Supported labels are
+  `VDD_IN`, `POM_5V_IN`, `VIN_SYS_5V0`, and `SYS5V`; legacy IIO values are
+  milliwatts and hwmon microwatts are converted to milliwatts.
 - Disk usage uses the cross-platform standard-library filesystem API.
 - On Windows, ordinary Linux, containers, or Jetson images without a supported
   source, unavailable fields remain null while available disk or `/proc` values
@@ -498,7 +513,10 @@ Resource collection is best-effort and requires no root access.
 
 Missing `tegrastats`, an unsupported line format, missing sysfs files, permission
 errors, timeouts, and command failures do not stop the sampler or the assistant.
-Do not run Helios as root merely to fill a dashboard field.
+Some Jetson images expose INA3221 attributes as root-readable even though jtop
+can display them through its privileged service. Prefer narrowly scoped
+udev/system-service permissions or leave power unavailable. Do not run Helios
+as root merely to fill a dashboard field.
 
 ## Performance and benchmark method
 
@@ -554,7 +572,10 @@ They verify behavior, not target-device performance.
 | Non-loopback bind is rejected | Set explicit LAN opt-in and a valid token environment-variable name/value, or use SSH forwarding with the loopback defaults. |
 | Browser receives `401` | Enter HTTP Basic username `helios` and use the configured dashboard token as the password. Bearer remains available to API clients; both schemes protect static assets and API routes. |
 | Export is refused | Ensure `HELIOS_KPI_EXPORT_ENABLED=true` and keep `--limit` at or below `HELIOS_KPI_MAX_EXPORT_ROWS`. |
-| CPU/GPU/power fields are blank | Check whether the relevant `/proc`, thermal sysfs, or `tegrastats` source is available to the normal service user. Blank is expected on unsupported platforms. |
+| GPU displays `0%` | Confirm `GR3D_FREQ 0%` in a raw `tegrastats` sample. Zero is valid idle utilization; it is not the missing-value sentinel. |
+| GPU frequency is blank | Check for a readable GPU devfreq `cur_freq` attribute. The sampler uses it only when the same `tegrastats` sample omits GR3D frequency. |
+| Power is blank but jtop displays it | Locate the INA3221 main-input rail and verify that the normal Helios user can read both its label and power attribute. jtop may obtain the value through a privileged service; do not run Helios as root. |
+| Other CPU/GPU/resource fields are blank | Check whether the relevant `/proc`, thermal sysfs, or `tegrastats` source is available to the normal service user. Blank is expected on unsupported or unreadable sources. |
 | Drops increase | Increase the queue only within the device memory budget, reduce resource frequency, or diagnose storage latency. The recorder intentionally drops instead of blocking inference. |
 | Database remains large after pruning | Inspect status, allow maintenance/checkpoint to run, reduce retention/size settings, or stop writers and use the explicit clear command if deletion is intended. |
 

@@ -1255,6 +1255,16 @@ unavailable, it falls back to the historical `first_audio_ms`/
 call wall time; `stt_ms` remains unavailable unless the STT engine exposes a
 separate compute duration.
 
+On Jetson, resource sampling combines `tegrastats` with read-only sysfs
+fallbacks. GPU frequency can come from devfreq, and input power can come from
+an INA3221 rail named `VDD_IN`, `POM_5V_IN`, `VIN_SYS_5V0`, or `SYS5V` when the
+normal Helios user has permission to read it. A measured `0%` is valid idle GPU
+utilization; `—` means the source is absent, unsupported, or unreadable. Older
+JetPack `tegrastats` versions without `--count` and the Python 3.10.0 query
+parser shipped by early JetPack images are supported. Do not run the assistant
+as root merely to populate an optional dashboard field; grant narrowly scoped
+read access or leave the field unavailable.
+
 Run the content-free synthetic KPI benchmark with:
 
 ```bash
