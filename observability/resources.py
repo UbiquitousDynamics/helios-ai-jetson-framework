@@ -560,7 +560,7 @@ class ResourceCollector:
                 label = label_path.read_text(encoding="ascii").strip().upper()
             except (OSError, UnicodeError):
                 continue
-            if label not in {"VDD_IN", "VIN_SYS_5V0", "SYS5V"}:
+            if label not in {"VDD_IN", "POM_5V_IN", "VIN_SYS_5V0", "SYS5V"}:
                 continue
             channel_match = re.fullmatch(r"rail_name_(\d+)", label_path.name)
             legacy_channel = channel_match is not None

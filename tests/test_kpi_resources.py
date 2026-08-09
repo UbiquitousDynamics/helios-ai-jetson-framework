@@ -219,7 +219,7 @@ def test_collector_reads_jetson_nano_gpu_clock_and_input_power_from_sysfs(
         / "iio-device0"
     )
     power_root.mkdir(parents=True)
-    (power_root / "rail_name_0").write_text("VDD_IN\n", encoding="ascii")
+    (power_root / "rail_name_0").write_text("POM_5V_IN\n", encoding="ascii")
     (power_root / "in_power0_input").write_text("2875\n", encoding="ascii")
 
     snapshot = ResourceCollector(
