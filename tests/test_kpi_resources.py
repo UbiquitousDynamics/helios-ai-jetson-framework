@@ -136,6 +136,39 @@ def test_collector_combines_proc_tegrastats_thermal_and_disk(tmp_path: Path) -> 
     assert second.disk_total_bytes is not None
 
 
+def test_collector_supports_tegrastats_without_count_option(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if "--count" in command:
+            return subprocess.CompletedProcess(command, 2, stdout="", stderr="unsupported")
+        raise subprocess.TimeoutExpired(
+            command,
+            kwargs["timeout"],
+            output=(
+                b"RAM 100/1000MB CPU [10%@1020] GR3D_FREQ 35%@510 GPU@48C POM_5V_IN 4200/4000\n"
+            ),
+        )
+
+    snapshot = ResourceCollector(
+        disk_path=tmp_path,
+        proc_root=tmp_path / "missing-proc",
+        thermal_root=tmp_path / "missing-thermal",
+        system="Linux",
+        tegrastats_command=("tegrastats", "--interval", "100", "--count", "1"),
+        runner=runner,
+        clock=lambda: FIXED_TIME,
+    ).collect()
+
+    assert len(commands) == 2
+    assert "--count" in commands[0]
+    assert "--count" not in commands[1]
+    assert snapshot.gpu_percent == pytest.approx(35.0)
+    assert snapshot.gpu_frequency_mhz == pytest.approx(510.0)
+    assert snapshot.power_mw == pytest.approx(4200.0)
+
+
 def test_windows_style_fallback_skips_tegrastats_and_returns_disk_only(tmp_path: Path) -> None:
     called = False
 

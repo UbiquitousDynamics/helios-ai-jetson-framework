@@ -30,6 +30,9 @@ function pathValue(source, paths) {
 }
 
 function formatNumber(value, suffix = "", digits = 1) {
+  if (value === null || value === undefined || value === "") {
+    return "â€”";
+  }
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     return "—";
@@ -38,8 +41,11 @@ function formatNumber(value, suffix = "", digits = 1) {
 }
 
 function formatInteger(value) {
+  if (value === null || value === undefined || value === "") {
+    return "â€”";
+  }
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : "0";
+  return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : "â€”";
 }
 
 function formatRate(value) {
@@ -148,6 +154,31 @@ function displayValue(value) {
     return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2);
   }
   return String(value);
+}
+
+function statisticsWithSamples(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(source).filter(([, statistics]) => {
+      if (!statistics || typeof statistics !== "object" || Array.isArray(statistics)) {
+        return false;
+      }
+      return Number(statistics.count) > 0;
+    }),
+  );
+}
+
+function groupedStatisticsWithSamples(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([name, statistics]) => [name, statisticsWithSamples(statistics)])
+      .filter(([, statistics]) => Object.keys(statistics).length > 0),
+  );
 }
 
 function renderTable(id, sources, emptyId) {
@@ -422,7 +453,14 @@ function renderOverview(health, summary, network, resources, providers) {
     .map((item) => {
       const provider = pathValue(item, ["provider"]);
       const model = pathValue(item, ["model"]);
-      const state = pathValue(item, ["circuit_state", "circuit.state"]) || "unknown";
+      let state = pathValue(item, ["circuit_state", "circuit.state"]);
+      if (!state) {
+        const attempts = Number(pathValue(item, ["attempt_count"]));
+        const failures = Number(pathValue(item, ["failure_count"]));
+        state = Number.isFinite(attempts) && attempts > 0
+          ? (failures === 0 ? "successful" : "failures observed")
+          : "not observed";
+      }
       const identity = [provider, model].filter(Boolean).join("/") || "provider";
       return `${identity} · ${state}`;
     })
@@ -555,9 +593,23 @@ function render(data) {
     { statistics: pathValue(latency, ["statistics"]) || {} },
     { histogram: pathValue(latency, ["histogram"]) || [] },
   ]);
-  renderTable("latency-breakdown", [pathValue(latency, ["breakdown"]) || {}]);
+  renderTable("latency-breakdown", [
+    statisticsWithSamples(pathValue(latency, ["breakdown"]) || {}),
+  ]);
   renderTable("network-table", [network]);
-  renderTable("resource-table", [resources]);
+  renderTable("resource-table", [
+    { current: pathValue(resources, ["current"]) || {} },
+    { metrics: statisticsWithSamples(pathValue(resources, ["metrics"]) || {}) },
+    {
+      by_locality: groupedStatisticsWithSamples(
+        pathValue(resources, ["by_locality"]) || {},
+      ),
+    },
+    {
+      sample_count: pathValue(resources, ["sample_count"]),
+      throttled_sample_count: pathValue(resources, ["throttled_sample_count"]),
+    },
+  ]);
 
   const hasData = [
     summary,

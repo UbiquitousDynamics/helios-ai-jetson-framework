@@ -376,6 +376,64 @@ def test_filters_timeseries_provider_network_and_resource_queries(tmp_path: Path
     store.close()
 
 
+def test_routing_counts_once_and_network_series_uses_probe_observations(tmp_path: Path) -> None:
+    now = _now()
+    store = SQLiteKPIStore(tmp_path / "kpi.sqlite3", maintenance_interval_seconds=10_000)
+    common = {
+        "timestamp": now,
+        "mode": "talk",
+        "network_state": "offline",
+        "network_quality_tier": "offline",
+        "network_forced_local": True,
+        "complexity_score": 2,
+    }
+    store.write_batch(
+        [
+            {
+                **common,
+                "event": "llm_route_decided",
+                "route": "local-talk",
+                "locality": "local",
+                "outcome": "selected",
+            },
+            {
+                **common,
+                "event": "llm_route_candidate_rejected",
+                "route": "remote-talk",
+                "locality": "remote",
+                "outcome": "rejected",
+                "rejection_reason": "network_offline",
+            },
+            {
+                **common,
+                "event": "llm_request_succeeded",
+                "route": "local-talk",
+                "locality": "local",
+                "outcome": "succeeded",
+            },
+            {
+                "event": "network_probe_completed",
+                "timestamp": now - timedelta(seconds=1),
+                "network_state": "online",
+                "network_quality_tier": "excellent",
+                "network_quality_score": 0.95,
+                "probe_success": True,
+            },
+        ]
+    )
+
+    service = KPIQueryService(store)
+    routing = service.routing()
+    network = service.network()
+    store.close()
+
+    assert routing["network_forced_local_count"] == 1
+    assert routing["complexity_scores"] == {"2": 1}
+    assert network["current"]["network_state"] == "online"
+    assert network["quality_tiers"] == {"excellent": 1}
+    assert len(network["series"]) == 1
+
+
 def test_real_query_service_serves_every_dashboard_route(tmp_path: Path) -> None:
     now = _now()
     store = SQLiteKPIStore(tmp_path / "kpi.sqlite3", maintenance_interval_seconds=10_000)

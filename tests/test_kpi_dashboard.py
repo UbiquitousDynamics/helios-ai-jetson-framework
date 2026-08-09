@@ -294,6 +294,9 @@ def test_security_headers_and_exact_static_allowlist() -> None:
         b"circuit.state",
     ):
         assert canonical_key in javascript
+    assert b'value === null || value === undefined || value === ""' in javascript
+    assert b"statisticsWithSamples" in javascript
+    assert b"groupedStatisticsWithSamples" in javascript
     assert b"drawMultiLineChart(" in javascript
     assert b'pathValue(latency, ["breakdown"])' in javascript
     for latency_series in (
@@ -337,6 +340,37 @@ def test_health_endpoint_merges_cached_runtime_provider_state() -> None:
     assert payload["local_available"] is True
     assert payload["remote_available"] is False
     assert payload["providers"][0]["circuit_state"] == "available"
+
+
+def test_health_endpoint_keeps_runtime_state_when_storage_status_fails() -> None:
+    class BrokenHealthQuery:
+        def query(self, resource: str, parameters: Mapping[str, object]) -> object:
+            assert resource == "health"
+            assert not parameters
+            raise RuntimeError("storage unavailable")
+
+    service = ObservabilityService(config.KPISettings())
+    service.query_service = BrokenHealthQuery()  # type: ignore[assignment]
+    service.set_runtime_health_provider(
+        lambda: {
+            "status": "healthy",
+            "local_available": True,
+            "remote_available": True,
+            "providers": [],
+        }
+    )
+    try:
+        with running_server(service) as server:
+            status, _headers, body = request(server, "/api/v1/kpi/health")
+    finally:
+        service.close()
+
+    payload = json_body(body)
+    assert status == 200
+    assert payload["storage_available"] is False
+    assert payload["status"] == "healthy"
+    assert payload["local_available"] is True
+    assert payload["remote_available"] is True
 
 
 def test_empty_query_response_is_stable_and_dashboard_usable() -> None:

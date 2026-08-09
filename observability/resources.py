@@ -418,6 +418,15 @@ class ResourceCollector:
         command = self._command()
         if command is None:
             return ResourceSnapshot(timestamp=observed_at)
+
+        def output_text(value: object) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return value if isinstance(value, str) else ""
+
+        def parsed(value: object) -> ResourceSnapshot:
+            return parse_tegrastats(output_text(value), timestamp=observed_at)
+
         try:
             completed = self._runner(
                 list(command),
@@ -426,14 +435,29 @@ class ResourceCollector:
                 timeout=self._timeout_seconds,
                 check=False,
             )
-            if getattr(completed, "returncode", 1) != 0:
+            if getattr(completed, "returncode", 1) == 0:
+                return parsed(getattr(completed, "stdout", ""))
+
+            # JetPack releases that ship an older tegrastats do not implement
+            # ``--count``. Run the streaming form briefly and retain the sample
+            # captured before subprocess.run terminates it at the deadline.
+            legacy_command = list(command)
+            try:
+                count_index = legacy_command.index("--count")
+            except ValueError:
                 return ResourceSnapshot(timestamp=observed_at)
-            output = getattr(completed, "stdout", "")
-            if isinstance(output, bytes):
-                output = output.decode("utf-8", errors="replace")
-            if not isinstance(output, str):
-                return ResourceSnapshot(timestamp=observed_at)
-            return parse_tegrastats(output, timestamp=observed_at)
+            del legacy_command[count_index : count_index + 2]
+            try:
+                legacy = self._runner(
+                    legacy_command,
+                    capture_output=True,
+                    text=True,
+                    timeout=min(self._timeout_seconds, 0.5),
+                    check=False,
+                )
+                return parsed(getattr(legacy, "stdout", ""))
+            except subprocess.TimeoutExpired as error:
+                return parsed(error.stdout)
         except Exception:
             return ResourceSnapshot(timestamp=observed_at)
 

@@ -861,7 +861,9 @@ class KPIQueryService:
             source = record.get("fallback_from") or "unknown"
             destination = record.get("fallback_to") or "unknown"
             paths[f"{source}->{destination}"] += _weight(record)
-        forced_local = sum(1 for record in raw if record.get("network_forced_local") is True)
+        forced_local = sum(
+            _weight(record) for record in selected if record.get("network_forced_local") is True
+        )
         result = {
             "locality": _distribution(selected, "locality"),
             "routes": _distribution(selected, "route"),
@@ -870,7 +872,7 @@ class KPIQueryService:
             "rejection_reasons": _distribution(rejected, "rejection_reason"),
             "fallback_paths": dict(sorted(paths.items())),
             "fallback_causes": _distribution(fallback_records, "fallback_cause"),
-            "complexity_scores": _distribution(raw, "complexity_score"),
+            "complexity_scores": _distribution(selected, "complexity_score"),
             "network_forced_local_count": forced_local,
         }
         if self._truncated(raw, rollups):
@@ -977,9 +979,15 @@ class KPIQueryService:
             if record.get("network_state") is not None
             or record.get("network_quality_score") is not None
         ]
-        latest = max(
-            network_raw, key=lambda record: int(record.get("timestamp_ms", 0)), default=None
-        )
+        observations = [
+            record
+            for record in network_raw
+            if _event_name(record) in {"network_probe_completed", "network_state_changed"}
+        ]
+        # Older databases may contain only route-level network annotations.
+        # Prefer real connectivity observations, but keep that data usable.
+        samples = observations or network_raw
+        latest = max(samples, key=lambda record: int(record.get("timestamp_ms", 0)), default=None)
         transitions = sum(
             _weight(record)
             for record in [*raw, *rollups]
@@ -1034,7 +1042,7 @@ class KPIQueryService:
                 )
             }
         series = []
-        for record in _downsample(network_raw, points):
+        for record in _downsample(samples, points):
             series.append(
                 {
                     "timestamp_ms": record.get("timestamp_ms"),
@@ -1050,12 +1058,12 @@ class KPIQueryService:
             "current": current,
             "series": series,
             "transition_count": transitions,
-            "states": _distribution([*network_raw, *rollups], "network_state"),
-            "quality_tiers": _distribution([*network_raw, *rollups], "network_quality_tier"),
-            "quality_score": _statistics(_metric_values(network_raw, "network_quality_score")),
-            "ttfb_ms": _statistics(_metric_values(network_raw, "ttfb_ms")),
-            "goodput_kbps": _statistics(_metric_values(network_raw, "goodput_kbps")),
-            "probe_success_ratio": _statistics(_metric_values(network_raw, "probe_success_ratio")),
+            "states": _distribution(samples, "network_state"),
+            "quality_tiers": _distribution(samples, "network_quality_tier"),
+            "quality_score": _statistics(_metric_values(samples, "network_quality_score")),
+            "ttfb_ms": _statistics(_metric_values(samples, "ttfb_ms")),
+            "goodput_kbps": _statistics(_metric_values(samples, "goodput_kbps")),
+            "probe_success_ratio": _statistics(_metric_values(samples, "probe_success_ratio")),
             "routing_decisions_by_quality_tier": _distribution(
                 [
                     record

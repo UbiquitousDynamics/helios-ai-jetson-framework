@@ -208,11 +208,25 @@ class ObservabilityService:
         return {**unavailable, **dict(result)}
 
     def query(self, resource: str, parameters: Mapping[str, object]) -> object:
-        result = (
-            self.query_service.query(resource, parameters) if self.query_service is not None else {}
-        )
-        if resource != "health" or not isinstance(result, Mapping):
-            return result
+        if resource != "health":
+            return (
+                self.query_service.query(resource, parameters)
+                if self.query_service is not None
+                else {}
+            )
+        try:
+            result = (
+                self.query_service.query(resource, parameters)
+                if self.query_service is not None
+                else {}
+            )
+        except Exception:
+            # Runtime provider health remains useful even when the storage
+            # status read is temporarily unavailable.
+            logger.warning("KPI storage health snapshot is unavailable")
+            result = {"storage_available": False}
+        if not isinstance(result, Mapping):
+            result = {"storage_available": False}
         return {
             **dict(result),
             **self._runtime_health(),
