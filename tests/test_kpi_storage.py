@@ -197,6 +197,36 @@ def test_dropped_metric_count_survives_rollup_compaction(tmp_path: Path) -> None
     assert sum(row["count"] for row in rollups) == 11
 
 
+def test_writes_and_rollup_merges_use_sqlite_322_compatible_sql(tmp_path: Path) -> None:
+    now = _now()
+    old = now - timedelta(days=10)
+    statements: list[str] = []
+    store = SQLiteKPIStore(
+        tmp_path / "kpi.sqlite3",
+        raw_retention_days=7,
+        rollup_retention_days=90,
+        maintenance_interval_seconds=10_000,
+    )
+    store._writer.set_trace_callback(statements.append)
+
+    for count in (3, 5):
+        assert store.write(
+            MetricEvent(
+                "metrics_events_dropped",
+                timestamp=old,
+                count=count,
+                dropped_count=count,
+            )
+        )
+        store.maintain(now=now)
+
+    rollups = store.query_rollups(event_types=("metrics_events_dropped",))
+    store.close()
+
+    assert sum(row["count"] for row in rollups) == 8
+    assert all("ON CONFLICT" not in statement.upper() for statement in statements)
+
+
 def test_batch_writer_supports_concurrent_short_lived_readers(tmp_path: Path) -> None:
     store = SQLiteKPIStore(tmp_path / "kpi.sqlite3", maintenance_interval_seconds=10_000)
     began = threading.Event()

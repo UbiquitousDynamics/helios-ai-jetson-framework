@@ -888,13 +888,15 @@ class SQLiteKPIStore:
         return len(sanitized)
 
     def _write_meta_locked(self, key: str, value: str) -> None:
-        self._writer.execute(
-            """
-            INSERT INTO kpi_meta(key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
-            """,
-            (key, value),
+        cursor = self._writer.execute(
+            "UPDATE kpi_meta SET value = ? WHERE key = ?",
+            (value, key),
         )
+        if cursor.rowcount == 0:
+            self._writer.execute(
+                "INSERT INTO kpi_meta(key, value) VALUES (?, ?)",
+                (key, value),
+            )
 
     @staticmethod
     def _bounded_limit(limit: int, maximum: int = MAX_QUERY_LIMIT) -> int:
@@ -1058,18 +1060,27 @@ class SQLiteKPIStore:
             (interval_ms, interval_ms, self.rollup_interval_seconds, cutoff_ms),
         ).fetchall()
         if rows:
-            columns = (
-                "bucket_ms, interval_seconds, event, " + ", ".join(_DIMENSION_FIELDS) + ", count"
+            key_columns = (
+                "bucket_ms",
+                "interval_seconds",
+                "event",
+                *_DIMENSION_FIELDS,
             )
-            conflict = "bucket_ms, interval_seconds, event, " + ", ".join(_DIMENSION_FIELDS)
+            columns = ", ".join((*key_columns, "count"))
             placeholders = ", ".join("?" for _ in range(4 + len(_DIMENSION_FIELDS)))
+            row_values = [tuple(row) for row in rows]
+
+            # SQLite on older Jetson releases predates UPSERT ... DO UPDATE
+            # (introduced in 3.24). Seed missing rows at zero, then increment
+            # every row inside the surrounding transaction.
             self._writer.executemany(
-                f"""
-                INSERT INTO kpi_rollup_counts ({columns}) VALUES ({placeholders})
-                ON CONFLICT ({conflict}) DO UPDATE
-                SET count = count + excluded.count
-                """,
-                (tuple(row) for row in rows),
+                f"INSERT OR IGNORE INTO kpi_rollup_counts ({columns}) VALUES ({placeholders})",
+                (row[:-1] + (0,) for row in row_values),
+            )
+            where = " AND ".join(f"{column} = ?" for column in key_columns)
+            self._writer.executemany(
+                f"UPDATE kpi_rollup_counts SET count = count + ? WHERE {where}",
+                ((row[-1], *row[:-1]) for row in row_values),
             )
         cursor = self._writer.execute(
             f"DELETE FROM kpi_events WHERE timestamp_ms {operator} ?", (cutoff_ms,)
