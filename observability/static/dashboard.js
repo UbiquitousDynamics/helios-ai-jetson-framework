@@ -31,7 +31,7 @@ function pathValue(source, paths) {
 
 function formatNumber(value, suffix = "", digits = 1) {
   if (value === null || value === undefined || value === "") {
-    return "â€”";
+    return "—";
   }
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -42,10 +42,10 @@ function formatNumber(value, suffix = "", digits = 1) {
 
 function formatInteger(value) {
   if (value === null || value === undefined || value === "") {
-    return "â€”";
+    return "—";
   }
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : "â€”";
+  return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : "—";
 }
 
 function formatRate(value) {
