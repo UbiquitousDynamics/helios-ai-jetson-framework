@@ -5,9 +5,9 @@ app-server runs locally over stdio and reuses the ChatGPT sign-in stored by
 Codex. This route does not use `OPENAI_API_KEY`, does not call the billable
 OpenAI API-key endpoint, and falls back to Ollama when Codex cannot run.
 
-This is an optional remote route. The prompt still leaves the Jetson and is
-processed by OpenAI under the terms and usage limits of the signed-in ChatGPT
-account.
+This is the repository's default route, with Ollama fallback. The prompt still
+leaves the Jetson and is processed by OpenAI under the terms and usage limits
+of the signed-in ChatGPT account.
 
 ## What Helios enforces
 
@@ -67,14 +67,12 @@ unset OPENAI_API_KEY
 unset CODEX_API_KEY
 ```
 
-## Enable the OpenClaw-style route
+## Start the default OpenClaw-style route
 
-Use the committed configuration:
+No routing exports are required with the repository defaults:
 
 ```bash
-export HELIOS_LLM_CONFIG="$PWD/examples/llm-routing.codex-subscription.toml"
-export HELIOS_LLM_REMOTE_ENABLED=true
-python main.py
+python3 scripts/run_jetson.py
 ```
 
 The example is `remote_first`:

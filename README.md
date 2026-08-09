@@ -139,8 +139,8 @@ flowchart LR
     Intro -->|No| LLMRouter{Hybrid LLM router}
     LLMRouter --> Gates{Privacy, network,<br/>health, budget}
     Gates -->|Local route| Ollama[Local Ollama model]
-    Gates -->|API opt-in| Remote[OpenAI-compatible SSE]
-    Gates -->|Subscription opt-in| Codex[Codex app-server]
+    Gates -->|API route| Remote[OpenAI-compatible SSE]
+    Gates -->|Subscription route| Codex[Codex app-server]
     Ollama --> Stream[Normalized text deltas]
     Remote --> Stream
     Codex --> Stream
@@ -301,10 +301,9 @@ classDiagram
 
 ## Hybrid inference and data flow
 
-The default behavior remains fully local. Remote transmission is possible only
-after a valid routing file and an independent environment switch both enable
-it. The same provider-neutral request then travels through a sequence of
-fail-closed checks:
+The repository defaults to the Codex/ChatGPT-subscription profile with
+`remote_first` routing and local Ollama fallback. Remote transmission still
+passes through the same sequence of fail-closed checks:
 
 ```mermaid
 flowchart TD
@@ -1035,17 +1034,18 @@ empty value to send logs to stderr instead of a file:
 HELIOS_LOG_LEVEL=DEBUG HELIOS_LOG_FILE=- python3 scripts/run_jetson.py
 ```
 
-Optional hybrid routing uses a versioned TOML file:
+Hybrid routing uses a versioned TOML file. These overrides force offline mode:
 
 ```bash
 export HELIOS_LLM_CONFIG=examples/llm-routing.offline.toml
 export HELIOS_LLM_REMOTE_ENABLED=false
 ```
 
-Remote operation is opt-in and fails closed. The repository includes offline,
-free-tier-first, paid-first, and local-first escalation examples. The committed
-catalog is intentionally stale and must be replaced with reviewed current
-provider data. See
+The default is `examples/llm-routing.codex-subscription.toml` with remote
+routing enabled. The repository also includes offline, free-tier-first,
+paid-first, and local-first escalation examples. The committed catalog is
+intentionally stale and must be replaced with reviewed current provider data.
+See
 [`docs/HYBRID_LLM_OPERATIONS.md`](docs/HYBRID_LLM_OPERATIONS.md) for the full
 configuration, credential, privacy, budget, live-test, benchmark, rollout, and
 human-review checklist.
@@ -1821,9 +1821,10 @@ target-device measurements.
 
 ### Does Helios AI require internet access?
 
-No for the default local route, once dependencies and models are provisioned.
-Remote LLM routes, initial pip installation, ChatGPT sign-in, Ollama model
-creation, or retrieving missing assets do require connectivity.
+Helios retains an Ollama fallback that works without internet once dependencies
+and models are provisioned. The default Codex route, initial pip installation,
+ChatGPT sign-in, Ollama model creation, and retrieval of missing assets require
+connectivity.
 
 ### Does Helios remember previous conversations?
 

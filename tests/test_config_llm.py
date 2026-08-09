@@ -113,28 +113,37 @@ def test_invalid_environment_log_level_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_remote_file_still_requires_the_independent_environment_gate(
+def test_remote_file_uses_its_enabled_default_and_environment_can_disable_it(
     tmp_path: Path,
 ) -> None:
     routing_path = tmp_path / "routing.toml"
     routing_path.write_text(VALID_ROUTING, encoding="utf-8")
 
-    disabled = config.Settings.from_env(
+    enabled = config.Settings.from_env(
         tmp_path,
         environ={"HELIOS_LLM_CONFIG": str(routing_path)},
     )
-    enabled = config.Settings.from_env(
+    disabled = config.Settings.from_env(
         tmp_path,
         environ={
             "HELIOS_LLM_CONFIG": str(routing_path),
-            "HELIOS_LLM_REMOTE_ENABLED": "true",
+            "HELIOS_LLM_REMOTE_ENABLED": "false",
         },
     )
 
-    assert not disabled.llm.remote_enabled
-    assert disabled.llm.routing_policy == "local_only"
     assert enabled.llm.remote_enabled
     assert enabled.llm.routing_policy == "remote_first"
+    assert not disabled.llm.remote_enabled
+    assert disabled.llm.routing_policy == "local_only"
+
+
+def test_repository_defaults_to_codex_remote_first_with_local_fallback() -> None:
+    settings = config.Settings.from_env(PROJECT_ROOT, environ={})
+
+    assert settings.llm.routing_file == (PROJECT_ROOT / config.DEFAULT_LLM_CONFIG).resolve()
+    assert settings.llm.remote_enabled
+    assert settings.llm.routing_policy == "remote_first"
+    assert settings.llm.talk.candidates[-1] == "local-talk"
 
 
 def test_invalid_routing_file_fails_closed_without_exposing_content(

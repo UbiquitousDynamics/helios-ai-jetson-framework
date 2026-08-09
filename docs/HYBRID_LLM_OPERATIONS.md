@@ -4,11 +4,11 @@ This document separates what the repository now enforces in code from the
 deployment decisions that require credentials, current provider facts, legal
 review, a target Jetson, or a representative network.
 
-The safe default remains unchanged: if no `HELIOS_LLM_CONFIG` is set, Helios
-uses the existing local Ollama models. An invalid routing file, invalid
-environment override, stale catalog, unavailable budget ledger, missing
-credential, privacy denial, or unavailable remote provider cannot silently
-turn remote transmission on.
+The repository defaults to `examples/llm-routing.codex-subscription.toml` with
+remote-first routing and local Ollama fallback. An invalid routing file,
+invalid environment override, unavailable ChatGPT session, privacy denial,
+connectivity failure, or unavailable remote provider falls back or fails
+closed according to the validated policy.
 
 ## What is implemented
 
@@ -57,7 +57,7 @@ Remote transmission requires every gate below to pass:
 
 1. A valid routing TOML was loaded.
 2. `router.remote_enabled` is true.
-3. `HELIOS_LLM_REMOTE_ENABLED` is independently set to `true`.
+3. `HELIOS_LLM_REMOTE_ENABLED` is not explicitly set to `false`.
 4. `HELIOS_LLM_EMERGENCY_LOCAL_ONLY` is false.
 5. The selected policy and candidate chain permit a remote target.
 6. The provider and target are enabled and allowed.
@@ -235,8 +235,9 @@ $env:HELIOS_LLM_CONFIG = "C:\ProgramData\Helios\llm-routing.toml"
 $env:HELIOS_LLM_REMOTE_ENABLED = "true"
 ```
 
-Both switches are required. Setting only `router.remote_enabled = true` or only
-`HELIOS_LLM_REMOTE_ENABLED=true` cannot enable remote transmission.
+The validated TOML value is the default. `HELIOS_LLM_REMOTE_ENABLED=false`
+overrides it and disables remote transmission; setting it to `true` can enable
+only a valid profile whose router also permits remote operation.
 
 The routing file stores only the environment-variable name:
 
@@ -458,7 +459,7 @@ approval. The current extractive RAG path should remain local.
 
 Recommended rollout:
 
-1. Ship this code with no `HELIOS_LLM_CONFIG`.
+1. Validate the bundled Codex-subscription profile and its Ollama fallback.
 2. Validate the offline example and all existing Ollama behavior.
 3. Configure a remote provider in staging with `remote_only` and a tiny budget.
 4. Run the live certification and failure injection.
@@ -476,5 +477,6 @@ Restart the process so all remote provider instances and transports close. No
 configuration file or code rollback is required. Even a configured remote-only
 mode receives an emergency local Ollama route, and emergency mode ignores
 normal route allow/deny filters. This requires an available loopback or
-explicitly trusted-LAN Ollama host. Removing `HELIOS_LLM_CONFIG` also restores
-the original Ollama-only behavior.
+explicitly trusted-LAN Ollama host. Unsetting `HELIOS_LLM_CONFIG` selects the
+repository's remote-first default, so use `HELIOS_LLM_REMOTE_ENABLED=false` or
+select `examples/llm-routing.offline.toml` for persistent Ollama-only behavior.

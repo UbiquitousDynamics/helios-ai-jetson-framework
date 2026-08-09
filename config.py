@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_LLM_CONFIG = Path("examples/llm-routing.codex-subscription.toml")
 logger = logging.getLogger(__name__)
 
 
@@ -1473,11 +1474,11 @@ def _llm_from_env(
     )
 
     requested_remote = _bool_from_env(
-        environ.get("HELIOS_LLM_REMOTE_ENABLED", "false"),
+        environ.get("HELIOS_LLM_REMOTE_ENABLED", str(base.remote_enabled)),
         "HELIOS_LLM_REMOTE_ENABLED",
     )
-    # Remote enablement requires a validated routing file. Environment variables
-    # can always disable remote operation, but cannot create a route by themselves.
+    # Remote enablement requires a validated routing file. The file defines its
+    # default, while the environment can explicitly disable or re-enable it.
     remote_enabled = requested_remote and base.routing_file is not None and not emergency
 
     requested_policy = environ.get("HELIOS_LLM_POLICY", base.routing_policy).strip()
@@ -1614,14 +1615,20 @@ class Settings:
     ) -> Settings:
         """Build settings from deployment overrides.
 
-        A missing or invalid hybrid-routing file always fails closed to local
-        inference. Secret values are never accepted from the routing file.
+        The bundled Codex-subscription profile is selected by default when it is
+        present. A missing explicit or invalid hybrid-routing file always fails
+        closed to local inference. Secret values are never accepted from it.
         """
 
         env = os.environ if environ is None else environ
         root = Path(project_root).expanduser().resolve()
         llm = LLMSettings()
-        routing_value = env.get("HELIOS_LLM_CONFIG", "").strip()
+        routing_override = env.get("HELIOS_LLM_CONFIG")
+        if routing_override is None:
+            default_routing_path = root / DEFAULT_LLM_CONFIG
+            routing_value = str(DEFAULT_LLM_CONFIG) if default_routing_path.is_file() else ""
+        else:
+            routing_value = routing_override.strip()
         configuration_valid = True
         if routing_value:
             routing_path = Path(routing_value).expanduser()
