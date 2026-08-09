@@ -132,6 +132,9 @@ flowchart LR
     Mic --> Vosk[Vosk SpeechRecognizer]
     Vosk --> Event[RecognitionResult]
     Event --> Router{VoiceAssistant state}
+    Event --> Barge{Barge-in enabled<br/>and TTS speaking?}
+    Barge -->|User speech| Cancel[Interrupt playback<br/>and model stream]
+    Cancel --> Command
 
     Router -->|Wake word| Command[COMMAND path]
     Command --> Intro{Presentation question?}
@@ -169,6 +172,8 @@ The application uses a small composition-root architecture:
 - `main.py` configures logging and owns the top-level application lifecycle.
 - `VoiceAssistant` coordinates state without implementing hardware details.
 - `SpeechRecognizer` isolates PyAudio and Vosk.
+- `BargeInDetector` identifies sustained PCM energy or non-empty Vosk events,
+  with an injected pure echo-suppression policy.
 - `APIClient` preserves the public `talk()`/`think()` API while provider
   adapters, connectivity, routing, streaming safety, privacy, health, budget,
   and metrics remain internal.
@@ -204,6 +209,7 @@ classDiagram
         +Path project_root
         +str language
         +float listen_timeout
+        +bool barge_in_enabled
         +str ollama_host
         +int top_k
         +LanguageProfile profile
@@ -507,13 +513,50 @@ sequenceDiagram
 ```
 
 Only finalized recognition results are executed. Partial phrases are available
-through `listen_events()` for other consumers, but they do not trigger commands
-in `VoiceAssistant`.
+through `listen_events()` and, when opt-in barge-in is active during playback,
+can stop the current response early. The finalized interruption utterance is
+then executed as an immediate follow-up without another wake word; partial text
+is never sent to a model as a normal idle command.
 
 Provider failures are retried or routed to the next target only while doing so
 is safe. Once speech has started, a failed stream is not replayed because doing
 so could duplicate audio already heard by the user. TTS failures are preserved
 as TTS errors rather than being relabeled as network failures.
+
+### Interruptible conversation (opt-in)
+
+Set `HELIOS_BARGE_IN_ENABLED=true` to let Helios monitor Vosk events while Piper
+is speaking. The default remains `false` until thresholds are calibrated on the
+target microphone, speaker, enclosure, and playback level.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant VA as VoiceAssistant
+    participant STT as Vosk
+    participant API as APIClient
+    participant TTS as PiperTTS
+
+    VA->>API: Run response on injected executor
+    API->>TTS: Speak streamed fragment
+    par Playback
+        TTS-->>User: Response audio
+    and Barge-in monitoring
+        User->>STT: Begin follow-up while audio plays
+        STT-->>VA: Partial/final RecognitionResult
+    end
+    VA->>TTS: interrupt()
+    VA->>API: cancel_current()
+    Note over API: Cancellation is terminal; no retry/fallback
+    STT-->>VA: Finalized follow-up
+    VA->>API: Process follow-up without another wake word
+```
+
+Playback uses 100 ms output chunks, allowing another thread to stop between
+writes and leaving the stream reusable for the next response. The detector uses
+a conservative software echo gate; see
+[`docs/BARGE_IN_DESIGN.md`](docs/BARGE_IN_DESIGN.md) for calibration guidance,
+rejected AEC alternatives, and the cancellation/budget contract.
 
 ### RAG query
 
@@ -1007,6 +1050,7 @@ Core overrides:
 ```bash
 export HELIOS_LANGUAGE=it
 export HELIOS_OLLAMA_HOST=http://localhost:11434
+export HELIOS_BARGE_IN_ENABLED=false
 export HELIOS_LOG_LEVEL=INFO
 export HELIOS_LOG_FILE=app.log
 ```
@@ -1016,6 +1060,7 @@ PowerShell:
 ```powershell
 $env:HELIOS_LANGUAGE = "it"
 $env:HELIOS_OLLAMA_HOST = "http://localhost:11434"
+$env:HELIOS_BARGE_IN_ENABLED = "false"
 $env:HELIOS_LOG_LEVEL = "INFO"
 $env:HELIOS_LOG_FILE = "app.log"
 ```
@@ -1183,6 +1228,7 @@ after the remote issue has been reviewed.
 | `language` | `"it"` | Selects Vosk, Piper, prompts, trigger, and chat model |
 | `name` | `"emilia"` | Compatibility assistant identity |
 | `listen_timeout` | `6.5` seconds | Maximum duration of one recognition call |
+| `barge_in_enabled` | `false` | Enables interruptible listen-while-speaking turns; overridden by `HELIOS_BARGE_IN_ENABLED` |
 | `log_level` | `INFO` | Root logging level; overridden by `HELIOS_LOG_LEVEL` |
 | `log_file_name` | `app.log` | Append-only log; overridden by `HELIOS_LOG_FILE` |
 | `ollama_host` | `http://localhost:11434` | Host passed to the Ollama SDK |
@@ -1777,6 +1823,10 @@ target-device measurements.
   default and local-only unless LAN access and authentication are explicit.
 - There is no persistent conversation memory; separate commands do not
   automatically share names, preferences, or prior dialogue.
+- Barge-in is opt-in and uses a conservative software echo gate. Its thresholds
+  and 200-300 ms interruption target require calibration and measurement on the
+  deployed microphone, speaker, enclosure, and audio level; hardware AEC is not
+  assumed.
 - The first RAG build can be expensive on constrained hardware.
 - Retrieval quality needs a language-specific gold-question set before changing
   the embedding model or splitter.

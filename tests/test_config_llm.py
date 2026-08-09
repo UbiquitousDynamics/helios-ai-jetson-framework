@@ -113,6 +113,23 @@ def test_invalid_environment_log_level_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_barge_in_is_opt_in_and_strictly_parsed(tmp_path: Path) -> None:
+    defaults = config.Settings.from_env(tmp_path, environ={})
+    enabled = config.Settings.from_env(
+        tmp_path,
+        environ={"HELIOS_BARGE_IN_ENABLED": "true"},
+    )
+
+    assert not defaults.barge_in_enabled
+    assert enabled.barge_in_enabled
+
+    with pytest.raises(config.ConfigurationError, match="HELIOS_BARGE_IN_ENABLED"):
+        config.Settings.from_env(
+            tmp_path,
+            environ={"HELIOS_BARGE_IN_ENABLED": "sometimes"},
+        )
+
+
 def test_remote_file_uses_its_enabled_default_and_environment_can_disable_it(
     tmp_path: Path,
 ) -> None:

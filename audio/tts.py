@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 class AudioBackend(Protocol):
+    """Minimum playback contract.
+
+    Backends may additionally provide ``play_interruptibly``. Keeping that
+    method optional preserves compatibility with simple injected backends.
+    """
+
     def play(
         self,
         frames: bytes,
@@ -51,6 +57,8 @@ class SpeechTiming:
 
 class SoundDeviceBackend:
     """Persistent blocking sounddevice stream used by the production runtime."""
+
+    _PLAYBACK_CHUNK_MS = 100
 
     _DTYPE_BY_WIDTH = {
         1: "uint8",
@@ -129,6 +137,62 @@ class SoundDeviceBackend:
                     pass
                 raise AudioPlaybackError("Unable to play synthesized audio") from exc
 
+    def play_interruptibly(
+        self,
+        frames: bytes,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+        interrupt_event: threading.Event,
+    ) -> int:
+        """Play PCM in bounded chunks and return the number of frames written."""
+
+        try:
+            dtype = self._DTYPE_BY_WIDTH[sample_width]
+        except KeyError:
+            raise AudioPlaybackError(
+                f"Unsupported PCM sample width: {sample_width} byte(s)"
+            ) from None
+
+        bytes_per_frame = channels * sample_width
+        chunk_frame_count = max(1, sample_rate * self._PLAYBACK_CHUNK_MS // 1_000)
+        chunk_size = chunk_frame_count * bytes_per_frame
+        frames_written = 0
+
+        with self._lock:
+            stream = None
+            started = False
+            try:
+                stream = self._get_stream(sample_rate, channels, dtype)
+                if interrupt_event.is_set():
+                    return 0
+                stream.start()
+                started = True
+                for offset in range(0, len(frames), chunk_size):
+                    if interrupt_event.is_set():
+                        break
+                    chunk = frames[offset : offset + chunk_size]
+                    underflowed = stream.write(chunk)
+                    frames_written += len(chunk) // bytes_per_frame
+                    if underflowed:
+                        logger.warning("Audio output underflow while playing TTS")
+                stream.stop()
+                started = False
+                return frames_written
+            except AudioPlaybackError:
+                raise
+            except Exception as exc:
+                if started and stream is not None:
+                    try:
+                        stream.stop()
+                    except Exception:
+                        pass
+                try:
+                    self._close_stream()
+                except Exception:
+                    pass
+                raise AudioPlaybackError("Unable to play synthesized audio") from exc
+
     def close(self) -> None:
         with self._lock:
             try:
@@ -152,6 +216,49 @@ class PiperTTS:
         self._voice = voice
         self._audio_backend = audio_backend or SoundDeviceBackend()
         self._clock = clock
+        self._playback_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._active_interrupt: threading.Event | None = None
+        self._last_playback_frame_count = 0
+        self._last_playback_total_frames = 0
+
+    @property
+    def last_playback_frame_count(self) -> int:
+        """Number of PCM frames submitted by the most recent playback."""
+
+        with self._state_lock:
+            return self._last_playback_frame_count
+
+    @property
+    def last_playback_total_frames(self) -> int:
+        """Total PCM frames available to the most recent playback."""
+
+        with self._state_lock:
+            return self._last_playback_total_frames
+
+    @property
+    def last_playback_was_interrupted(self) -> bool:
+        """Whether the most recent playback ended before its full buffer."""
+
+        with self._state_lock:
+            return self._last_playback_frame_count < self._last_playback_total_frames
+
+    @property
+    def is_speaking(self) -> bool:
+        """Whether an audio buffer is currently being played."""
+
+        with self._state_lock:
+            return self._active_interrupt is not None
+
+    def interrupt(self) -> bool:
+        """Request that the current playback stop, returning whether one was active."""
+
+        with self._state_lock:
+            interrupt_event = self._active_interrupt
+            if interrupt_event is None:
+                return False
+            interrupt_event.set()
+            return True
 
     @property
     def voice(self) -> Any:
@@ -224,14 +331,49 @@ class PiperTTS:
                 frame_count = wav_file.getnframes()
                 frames = wav_file.readframes(frame_count)
             audio_duration_ms = frame_count / sample_rate * 1_000
-            audio_started_at = self._clock()
-            self._audio_backend.play(
-                frames,
-                sample_rate,
-                channels,
-                sample_width,
-            )
-            playback_ms = (self._clock() - audio_started_at) * 1_000
+            with self._playback_lock:
+                interrupt_event = threading.Event()
+                with self._state_lock:
+                    self._active_interrupt = interrupt_event
+                    self._last_playback_frame_count = 0
+                    self._last_playback_total_frames = frame_count
+                audio_started_at = self._clock()
+                try:
+                    play_interruptibly = getattr(
+                        self._audio_backend,
+                        "play_interruptibly",
+                        None,
+                    )
+                    if callable(play_interruptibly):
+                        frames_written = play_interruptibly(
+                            frames,
+                            sample_rate,
+                            channels,
+                            sample_width,
+                            interrupt_event,
+                        )
+                        if frames_written is None:
+                            frames_written = frame_count
+                    elif interrupt_event.is_set():
+                        frames_written = 0
+                    else:
+                        self._audio_backend.play(
+                            frames,
+                            sample_rate,
+                            channels,
+                            sample_width,
+                        )
+                        frames_written = frame_count
+                finally:
+                    with self._state_lock:
+                        if self._active_interrupt is interrupt_event:
+                            self._active_interrupt = None
+                with self._state_lock:
+                    self._last_playback_frame_count = min(
+                        max(0, int(frames_written)),
+                        frame_count,
+                    )
+                playback_ms = (self._clock() - audio_started_at) * 1_000
             return playback_ms, audio_duration_ms, audio_started_at
         except AudioPlaybackError:
             raise

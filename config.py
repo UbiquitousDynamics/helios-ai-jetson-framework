@@ -1575,6 +1575,7 @@ class Settings:
     language: str = "it"
     name: str = "emilia"
     listen_timeout: float = 6.5
+    barge_in_enabled: bool = False
     log_level: int = logging.INFO
     log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     log_file_name: str | None = "app.log"
@@ -1658,6 +1659,10 @@ class Settings:
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
+            barge_in_enabled=_bool_from_env(
+                env.get("HELIOS_BARGE_IN_ENABLED", "false"),
+                "HELIOS_BARGE_IN_ENABLED",
+            ),
             log_level=_log_level_from_env(env.get("HELIOS_LOG_LEVEL", "INFO")),
             log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),

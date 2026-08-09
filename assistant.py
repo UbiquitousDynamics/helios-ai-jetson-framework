@@ -17,6 +17,8 @@ from api.api_client import APIClient, APIClientError
 from api.metrics import record_safely
 from audio.sound_player import SoundPlaybackError, SoundPlayer
 from audio.tts import PiperTTS, TTSError
+from recognizer.barge_in_detector import BargeInDetector
+from recognizer.echo_suppression_policy import ConservativeEchoSuppressionPolicy
 from recognizer.speech_recognizer import (
     RecognitionResult,
     SpeechRecognitionError,
@@ -24,6 +26,9 @@ from recognizer.speech_recognizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+_BARGE_IN_LISTEN_SLICE_SECONDS = 0.25
+_TTS_START_POLL_SECONDS = 0.01
 
 
 class AssistantState(Enum):
@@ -52,6 +57,7 @@ class VoiceAssistant:
         speech_recognizer: Any | None = None,
         rag_searcher: Any | None = None,
         rag_factory: Callable[[], Any] | None = None,
+        barge_in_detector: Any | None = None,
         sound_executor: Any | None = None,
         choice: Callable[[tuple[str, ...]], str] = random.choice,
         sleep: Callable[[float], None] = time.sleep,
@@ -89,6 +95,15 @@ class VoiceAssistant:
             if speech_recognizer is not None
             else SpeechRecognizer(self.profile.vosk_model)
         )
+        if barge_in_detector is not None:
+            self._barge_in_detector = barge_in_detector
+        elif settings.barge_in_enabled:
+            self._barge_in_detector = BargeInDetector(
+                recognition_event_energy=0.08,
+                suppression_policy=ConservativeEchoSuppressionPolicy(),
+            )
+        else:
+            self._barge_in_detector = None
 
         self._rag_searcher = rag_searcher
         self._rag_factory = rag_factory
@@ -215,6 +230,19 @@ class VoiceAssistant:
         if not model_prompt:
             logger.info("Ignoring wake word without a command")
             return None
+
+        return self._process_model_prompt(
+            model_prompt,
+            pipeline_started_at=pipeline_started_at,
+        )
+
+    def _process_model_prompt(
+        self,
+        model_prompt: str,
+        *,
+        pipeline_started_at: float | None = None,
+    ) -> str | None:
+        """Process an already-authorized conversational prompt."""
 
         normalized = model_prompt.lower()
         for question in self.profile.presentation_questions:
@@ -433,6 +461,122 @@ class VoiceAssistant:
         )
         return result
 
+    @staticmethod
+    def _coerce_recognition_result(result: Any) -> RecognitionResult:
+        if isinstance(result, str):
+            return RecognitionResult(result.strip(), is_final=True)
+        return RecognitionResult(
+            str(getattr(result, "text", "")).strip(),
+            bool(getattr(result, "is_final", True)),
+        )
+
+    def _interrupt_current_response(self) -> None:
+        interrupt = getattr(self.tts, "interrupt", None)
+        if callable(interrupt):
+            interrupt()
+        cancel = getattr(self.api_client, "cancel_current", None)
+        if callable(cancel):
+            cancel()
+
+    def _tts_is_speaking(self) -> bool:
+        speaking = getattr(self.tts, "is_speaking", None)
+        if speaking is None:
+            # Compatibility with injected TTS implementations that predate the
+            # interruptible playback contract.
+            return True
+        return bool(speaking() if callable(speaking) else speaking)
+
+    def _listen_for_barge_in(self, response_future: Future[Any]) -> str | None:
+        detector = self._barge_in_detector
+        listen_events = getattr(self.speech_recognizer, "listen_events", None)
+        if detector is None or not callable(listen_events):
+            return None
+
+        playback_started_at: float | None = None
+        while not response_future.done():
+            if not self._tts_is_speaking():
+                playback_started_at = None
+                self._sleep(_TTS_START_POLL_SECONDS)
+                continue
+            if playback_started_at is None:
+                detector.reset()
+                playback_started_at = self._clock()
+
+            timeout = min(self.settings.listen_timeout, _BARGE_IN_LISTEN_SLICE_SECONDS)
+            events = listen_events(timeout=timeout)
+            detected = False
+            latest_text = ""
+            try:
+                for raw_result in events:
+                    result = self._coerce_recognition_result(raw_result)
+                    if not result.text:
+                        continue
+                    latest_text = result.text
+                    if not detected:
+                        detected = detector.process_recognition(
+                            result,
+                            elapsed_since_tts_start=max(
+                                0.0,
+                                self._clock() - playback_started_at,
+                            ),
+                        )
+                        if detected:
+                            logger.info("Barge-in detected; interrupting the active response")
+                            self._interrupt_current_response()
+                    if detected and result.is_final:
+                        return result.text
+            finally:
+                close_events = getattr(events, "close", None)
+                if callable(close_events):
+                    close_events()
+            if detected:
+                # Vosk normally emits FinalResult when the bounded slice closes.
+                # Keep the latest partial as a fallback for injected recognizers.
+                return latest_text or None
+        return None
+
+    def _process_command_with_barge_in(
+        self,
+        command: str,
+        *,
+        pipeline_started_at: float,
+    ) -> str | None:
+        def execute_initial() -> str | None:
+            return self.process_command(
+                command,
+                pipeline_started_at=pipeline_started_at,
+            )
+
+        response_future = self._sound_executor.submit(execute_initial)
+        while True:
+            follow_up = self._listen_for_barge_in(response_future)
+            if follow_up is None:
+                return response_future.result()
+
+            # Cancellation is an expected terminal outcome after barge-in. Wait
+            # for the worker to unwind so its active token and speech queue are
+            # cleared before starting the next turn on the same executor.
+            try:
+                response_future.result()
+            except Exception:
+                logger.debug("Interrupted response finished with cancellation", exc_info=True)
+
+            model_prompt = follow_up.strip()
+            if self.contains_wake_word(model_prompt):
+                model_prompt = self._without_wake_word(model_prompt)
+            if not model_prompt:
+                return None
+
+            follow_up_started_at = self._clock()
+
+            def execute_follow_up(prompt: str = model_prompt) -> str | None:
+                return self._process_model_prompt(
+                    prompt,
+                    pipeline_started_at=follow_up_started_at,
+                )
+
+            response_future = self._sound_executor.submit(execute_follow_up)
+
     def run_once(self) -> bool:
         """Process at most one finalized utterance.
 
@@ -474,7 +618,13 @@ class VoiceAssistant:
                     wake_word_count=1,
                 )
                 try:
-                    self.process_command(command, pipeline_started_at=finalized_at)
+                    if self.settings.barge_in_enabled:
+                        self._process_command_with_barge_in(
+                            command,
+                            pipeline_started_at=finalized_at,
+                        )
+                    else:
+                        self.process_command(command, pipeline_started_at=finalized_at)
                 except Exception:
                     record_safely(
                         self.metrics,
