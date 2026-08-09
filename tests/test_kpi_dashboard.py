@@ -283,6 +283,7 @@ def test_security_headers_and_exact_static_allowlist() -> None:
     page = html.decode("utf-8")
     for visible_section in ("Overview", "Routing", "Latency", "Network", "Jetson"):
         assert visible_section in page
+    assert "Local versus remote routing decisions" in page
     assert b"No metrics have been recorded yet" in html
     assert b"innerHTML" not in javascript
     assert b"https://" not in html
@@ -305,6 +306,12 @@ def test_security_headers_and_exact_static_allowlist() -> None:
         b'{ metric: "actual_first_audio_ms", points: 180 }',
     ):
         assert latency_series in javascript
+    assert b"observedAvailability" in javascript
+    assert b"observedSuccesses" in javascript
+    assert b"failures.push(names[index])" in javascript
+    assert b'unavailable: ${failures.join(", ")}' in javascript
+    assert b'Rejected Candidates' in javascript
+    assert b'(success_rate|probe_success_ratio)' in javascript
     assert css
 
 

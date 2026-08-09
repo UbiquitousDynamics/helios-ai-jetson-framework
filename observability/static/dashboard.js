@@ -143,15 +143,25 @@ function displayLabel(value) {
   return String(value)
     .replaceAll("_", " ")
     .replaceAll(".", " · ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .replace(/^Rejection Reasons/, "Rejected Candidates");
 }
 
-function displayValue(value) {
+function displayValue(value, name = "") {
   if (typeof value === "boolean") {
     return value ? "Yes" : "No";
   }
   if (typeof value === "number") {
-    return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2);
+    if (/(^|\.)timestamp(_ms)?$/.test(name)) {
+      const timestamp = name.endsWith("_ms") ? value : value * 1000;
+      return new Date(timestamp).toLocaleString();
+    }
+    if (/(^|\.)(success_rate|probe_success_ratio)$/.test(name)) {
+      return formatRate(value);
+    }
+    return Number.isInteger(value)
+      ? value.toLocaleString("en-US")
+      : value.toLocaleString("en-US", { maximumFractionDigits: 2 });
   }
   return String(value);
 }
@@ -196,7 +206,7 @@ function renderTable(id, sources, emptyId) {
     const label = document.createElement("td");
     const measurement = document.createElement("td");
     label.textContent = displayLabel(name);
-    measurement.textContent = displayValue(value);
+    measurement.textContent = displayValue(value, name);
     row.append(label, measurement);
     body.append(row);
   }
@@ -430,9 +440,36 @@ function drawRoutingChart(payload) {
 }
 
 function renderOverview(health, summary, network, resources, providers) {
-  const healthValue = pathValue(health, ["status", "assistant.status", "health"]);
-  const local = pathValue(health, ["local.available", "local_available"]);
-  const remote = pathValue(health, ["remote.available", "remote_available"]);
+  const aggregateProviders = Array.isArray(providers.providers) ? providers.providers : [];
+  const observedAvailability = (locality) => {
+    const rows = aggregateProviders.filter((item) => item.locality === locality);
+    if (!rows.length) {
+      return null;
+    }
+    return rows.some((item) => Number(item.success_count) > 0);
+  };
+  const reportedHealth = pathValue(health, ["status", "assistant.status", "health"]);
+  const hasRuntimeHealth = reportedHealth
+    && String(reportedHealth).toLowerCase() !== "unknown";
+  const local = hasRuntimeHealth
+    ? pathValue(health, ["local.available", "local_available"])
+    : observedAvailability("local");
+  const remote = hasRuntimeHealth
+    ? pathValue(health, ["remote.available", "remote_available"])
+    : observedAvailability("remote");
+  const observedAttempts = aggregateProviders.reduce(
+    (total, item) => total + (Number(item.attempt_count) || 0),
+    0,
+  );
+  const observedSuccesses = aggregateProviders.reduce(
+    (total, item) => total + (Number(item.success_count) || 0),
+    0,
+  );
+  const healthValue = (hasRuntimeHealth ? reportedHealth : null) || (
+    observedAttempts > 0
+      ? (observedSuccesses === observedAttempts ? "healthy" : "degraded")
+      : null
+  );
   const networkState = pathValue(network, [
     "current.network_state",
     "network_state",
@@ -446,7 +483,6 @@ function renderOverview(health, summary, network, resources, providers) {
     "quality_score",
   ]);
   const runtimeProviders = Array.isArray(health.providers) ? health.providers : [];
-  const aggregateProviders = Array.isArray(providers.providers) ? providers.providers : [];
   const providerRows = runtimeProviders.length ? runtimeProviders : aggregateProviders;
   const providerState = providerRows
     .slice(0, 3)
@@ -665,19 +701,24 @@ async function refresh() {
   const names = Object.keys(calls);
   const results = await Promise.allSettled(Object.values(calls));
   const data = {};
-  let failures = 0;
+  const failures = [];
   results.forEach((result, index) => {
     if (result.status === "fulfilled") {
       data[names[index]] = result.value;
     } else if (result.reason && result.reason.name !== "AbortError") {
-      failures += 1;
+      failures.push(names[index]);
     }
   });
   if (Object.keys(data).length) {
     render(data);
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    setText("last-updated", failures ? `Updated ${timestamp} · ${failures} endpoint(s) unavailable` : `Updated ${timestamp}`);
-  } else if (failures) {
+    setText(
+      "last-updated",
+      failures.length
+        ? `Updated ${timestamp} · unavailable: ${failures.join(", ")}`
+        : `Updated ${timestamp}`,
+    );
+  } else if (failures.length) {
     setText("last-updated", "Dashboard data is temporarily unavailable");
     const indicator = element("live-indicator");
     if (indicator) {

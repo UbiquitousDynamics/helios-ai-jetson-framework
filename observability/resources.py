@@ -427,21 +427,12 @@ class ResourceCollector:
         def parsed(value: object) -> ResourceSnapshot:
             return parse_tegrastats(output_text(value), timestamp=observed_at)
 
-        try:
-            completed = self._runner(
-                list(command),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_seconds,
-                check=False,
-            )
-            if getattr(completed, "returncode", 1) == 0:
-                return parsed(getattr(completed, "stdout", ""))
+        def parsed_if_available(value: object) -> ResourceSnapshot | None:
+            snapshot = parsed(value)
+            return snapshot if snapshot.tegrastats_available else None
 
-            # JetPack releases that ship an older tegrastats do not implement
-            # ``--count``. Run the streaming form briefly and retain the sample
-            # captured before subprocess.run terminates it at the deadline.
-            legacy_command = list(command)
+        def collect_legacy(command_with_count: Sequence[str]) -> ResourceSnapshot:
+            legacy_command = list(command_with_count)
             try:
                 count_index = legacy_command.index("--count")
             except ValueError:
@@ -458,6 +449,31 @@ class ResourceCollector:
                 return parsed(getattr(legacy, "stdout", ""))
             except subprocess.TimeoutExpired as error:
                 return parsed(error.stdout)
+
+        try:
+            try:
+                completed = self._runner(
+                    list(command),
+                    capture_output=True,
+                    text=True,
+                    timeout=self._timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                # Some releases accept the unknown option but keep streaming.
+                # Preserve a complete sample if one was emitted; otherwise retry
+                # without ``--count`` below.
+                snapshot = parsed_if_available(error.stdout)
+                return snapshot if snapshot is not None else collect_legacy(command)
+            if getattr(completed, "returncode", 1) == 0:
+                snapshot = parsed_if_available(getattr(completed, "stdout", ""))
+                if snapshot is not None:
+                    return snapshot
+
+            # JetPack releases that ship an older tegrastats do not implement
+            # ``--count``. Run the streaming form briefly and retain the sample
+            # captured before subprocess.run terminates it at the deadline.
+            return collect_legacy(command)
         except Exception:
             return ResourceSnapshot(timestamp=observed_at)
 

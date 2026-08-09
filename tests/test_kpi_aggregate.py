@@ -358,6 +358,7 @@ def test_filters_timeseries_provider_network_and_resource_queries(tmp_path: Path
 
     assert filtered["request_count"] == 1
     assert series["points"][0]["metrics"]["requests"]["mean"] == 1.0
+    assert providers[0]["locality"] == "remote"
     assert providers[0]["circuit"]["state"] == "cooldown"
     assert network["current"]["network_quality_score"] == 0.85
     assert network["remote_success_by_quality_tier"]["good"]["success_rate"] == 1.0

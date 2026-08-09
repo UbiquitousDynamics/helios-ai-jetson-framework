@@ -917,6 +917,11 @@ class KPIQueryService:
         for (provider, model), records in sorted(groups.items()):
             count = sum(_weight(record) for record in records)
             successes = sum(_weight(record) for record in records if _succeeded(record))
+            localities = {
+                str(record.get("locality"))
+                for record in records
+                if record.get("locality") in {"local", "remote"}
+            }
             raw_group = [
                 record
                 for record in raw_attempts
@@ -937,6 +942,7 @@ class KPIQueryService:
                 {
                     "provider": provider,
                     "model": model,
+                    "locality": next(iter(localities)) if len(localities) == 1 else None,
                     "attempt_count": count,
                     "success_count": successes,
                     "failure_count": count - successes,
