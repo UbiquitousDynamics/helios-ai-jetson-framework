@@ -310,8 +310,8 @@ def test_security_headers_and_exact_static_allowlist() -> None:
     assert b"observedSuccesses" in javascript
     assert b"failures.push(names[index])" in javascript
     assert b'unavailable: ${failures.join(", ")}' in javascript
-    assert b'Rejected Candidates' in javascript
-    assert b'(success_rate|probe_success_ratio)' in javascript
+    assert b"Rejected Candidates" in javascript
+    assert b"(success_rate|probe_success_ratio)" in javascript
     assert css
 
 

@@ -209,15 +209,7 @@ def test_collector_reads_jetson_nano_gpu_clock_and_input_power_from_sysfs(
     gpu_root = sys_root / "devices" / "57000000.gpu" / "devfreq" / "57000000.gpu"
     gpu_root.mkdir(parents=True)
     (gpu_root / "cur_freq").write_text("921600000\n", encoding="ascii")
-    power_root = (
-        sys_root
-        / "bus"
-        / "i2c"
-        / "drivers"
-        / "ina3221x"
-        / "6-0040"
-        / "iio-device0"
-    )
+    power_root = sys_root / "bus" / "i2c" / "drivers" / "ina3221x" / "6-0040" / "iio-device0"
     power_root.mkdir(parents=True)
     (power_root / "rail_name_0").write_text("POM_5V_IN\n", encoding="ascii")
     (power_root / "in_power0_input").write_text("2875\n", encoding="ascii")
