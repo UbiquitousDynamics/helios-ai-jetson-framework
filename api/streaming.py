@@ -182,6 +182,7 @@ class StreamingResponseCoordinator:
         targets: tuple[ExecutionTarget, ...],
         *,
         speak: Callable[[str], Any] | None = None,
+        before_first_speech: Callable[[], Any] | None = None,
         first_speech_min_chars: int = 0,
         speech_chunk_max_chars: int = 0,
         maximum_first_audio_seconds: float | None = None,
@@ -206,6 +207,8 @@ class StreamingResponseCoordinator:
             raise ValueError("first_speech_min_chars cannot be negative")
         if speech_chunk_max_chars < 0:
             raise ValueError("speech_chunk_max_chars cannot be negative")
+        if before_first_speech is not None and not callable(before_first_speech):
+            raise TypeError("before_first_speech must be callable")
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
             raise ValueError("maximum_first_audio_seconds must be positive")
 
@@ -277,6 +280,7 @@ class StreamingResponseCoordinator:
                         execution=execution,
                         request=routed_request,
                         speak=speak,
+                        before_first_speech=before_first_speech,
                         first_speech_min_chars=first_speech_min_chars,
                         speech_chunk_max_chars=speech_chunk_max_chars,
                         cancellation=cancellation,
@@ -520,6 +524,7 @@ class StreamingResponseCoordinator:
         execution: ExecutionTarget,
         request: ChatRequest,
         speak: Callable[[str], Any] | None,
+        before_first_speech: Callable[[], Any] | None,
         first_speech_min_chars: int,
         speech_chunk_max_chars: int,
         cancellation: CancellationToken | None,
@@ -538,6 +543,21 @@ class StreamingResponseCoordinator:
 
         def speak_fragment(sentence: str) -> None:
             assert speak is not None
+            self._raise_if_cancelled(
+                cancellation,
+                execution.route,
+                transmitted=True,
+            )
+            if not state.speech_committed and before_first_speech is not None:
+                try:
+                    before_first_speech()
+                except Exception as error:
+                    raise _SpeechFailure(error) from None
+                self._raise_if_cancelled(
+                    cancellation,
+                    execution.route,
+                    transmitted=True,
+                )
             state.speech_committed = True
             if state.first_audio_at is None:
                 state.first_audio_at = self._clock()
@@ -545,6 +565,11 @@ class StreamingResponseCoordinator:
                 timing = speak(sentence)
             except Exception as error:
                 raise _SpeechFailure(error) from None
+            self._raise_if_cancelled(
+                cancellation,
+                execution.route,
+                transmitted=True,
+            )
             if timing is None:
                 return
             try:
@@ -570,6 +595,11 @@ class StreamingResponseCoordinator:
             events = provider.stream(request, cancellation=cancellation)
             iterator = iter(events)
             for event in iterator:
+                self._raise_if_cancelled(
+                    cancellation,
+                    execution.route,
+                    transmitted=True,
+                )
                 if completed is not None:
                     raise ProviderError(
                         ErrorCategory.MALFORMED_RESPONSE,
@@ -637,6 +667,11 @@ class StreamingResponseCoordinator:
                 except Exception:
                     pass
 
+        self._raise_if_cancelled(
+            cancellation,
+            execution.route,
+            transmitted=True,
+        )
         if completed is None:
             raise ProviderError(
                 ErrorCategory.MALFORMED_RESPONSE,
@@ -813,6 +848,8 @@ class StreamingResponseCoordinator:
     def _raise_if_cancelled(
         cancellation: CancellationToken | None,
         target: ProviderTarget,
+        *,
+        transmitted: bool = False,
     ) -> None:
         if cancellation is None:
             return
@@ -830,7 +867,7 @@ class StreamingResponseCoordinator:
                 provider=target.provider,
                 model=target.model,
                 retryable_same_provider=False,
-                transmitted=False,
+                transmitted=transmitted,
             ) from None
         if cancelled:
             raise ProviderError(
@@ -839,7 +876,7 @@ class StreamingResponseCoordinator:
                 provider=target.provider,
                 model=target.model,
                 retryable_same_provider=False,
-                transmitted=False,
+                transmitted=transmitted,
             )
 
     def _reserve(

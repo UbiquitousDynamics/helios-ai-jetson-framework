@@ -46,6 +46,7 @@ class CancellableAPI:
         self.cancel_calls = 0
         self._lock = threading.Lock()
         self._active: threading.Event | None = None
+        self.response_finished = threading.Event()
 
     def talk(self, message: str, context: str | None = None) -> str:
         assert context is None
@@ -63,6 +64,7 @@ class CancellableAPI:
             with self._lock:
                 if self._active is cancellation:
                     self._active = None
+            self.response_finished.set()
 
     def cancel_current(self) -> None:
         self.cancel_calls += 1
@@ -76,19 +78,29 @@ class CancellableAPI:
 
 
 class BargeInRecognizer:
-    def __init__(self) -> None:
+    def __init__(self, api: CancellableAPI) -> None:
+        self.api = api
         self._barge_events_emitted = False
 
     def listen_once(self, timeout: float) -> RecognitionResult:
         assert timeout > 0
         return RecognitionResult("Emilia, prima domanda", is_final=True)
 
-    def listen_events(self, timeout: float):
-        assert 0 < timeout <= 0.25
+    def listen_events(
+        self,
+        timeout: float | None,
+        *,
+        stop_event: object,
+    ):
+        assert timeout is None
         if self._barge_events_emitted:
             return
         self._barge_events_emitted = True
         yield RecognitionResult("nuova", is_final=False)
+        assert self.api.response_finished.wait(timeout=1)
+        # Cancelling the first response must not stop/flush the microphone
+        # before the user finishes the interruption utterance.
+        assert getattr(stop_event, "is_set")() is False
         yield RecognitionResult("nuova domanda", is_final=True)
 
     def close(self) -> None:
@@ -118,16 +130,18 @@ def test_barge_in_interrupts_audio_and_stream_then_processes_follow_up() -> None
             tts=tts,
             sound_player=SilentSoundPlayer(),
             api_client=api,
-            speech_recognizer=BargeInRecognizer(),
+            speech_recognizer=BargeInRecognizer(api),
             barge_in_detector=BargeInDetector(),
             sound_executor=executor,
         )
 
         assert assistant.run_once()
+        assert tts.interrupt_calls == 1
+        assert api.cancel_calls == 1
         assistant.close()
 
-    assert tts.interrupt_calls == 1
-    assert api.cancel_calls == 1
+    assert tts.interrupt_calls == 2
+    assert api.cancel_calls == 2
     assert api.messages == ["prima domanda", "nuova domanda"]
     assert tts.spoken == [
         "response for prima domanda",

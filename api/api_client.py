@@ -413,7 +413,12 @@ class APIClient:
         for provider in self.llm_settings.providers:
             if not provider.enabled or provider.name in self._registered_providers:
                 continue
-            factory = configured_provider_factory(provider)
+            factory = configured_provider_factory(
+                provider,
+                allow_remote_context=self.llm_settings.privacy.allow_remote_context,
+                context_idle_timeout_seconds=(self.llm_settings.context_idle_timeout_seconds),
+                context_max_turns=self.llm_settings.context_max_turns,
+            )
             if factory is None:
                 logger.error(
                     "Provider %s uses an unsupported or incomplete adapter configuration",
@@ -981,6 +986,7 @@ class APIClient:
         request_options: Mapping[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
+        before_first_speech: Callable[[], Any] | None = None,
     ) -> str:
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
@@ -1150,6 +1156,7 @@ class APIClient:
                 request,
                 executions,
                 speak=self._speech_callable() if speak else None,
+                before_first_speech=before_first_speech if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
                 speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
                 maximum_first_audio_seconds=(
@@ -1328,6 +1335,7 @@ class APIClient:
         request_options: Mapping[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
+        before_first_speech: Callable[[], Any] | None = None,
     ) -> str:
         """Stream a conversational response and speak sentences as they arrive."""
 
@@ -1344,6 +1352,7 @@ class APIClient:
             request_options=request_options,
             cancellation=cancellation,
             pipeline_started_at=pipeline_started_at,
+            before_first_speech=before_first_speech,
         )
 
     def think(
@@ -1360,6 +1369,7 @@ class APIClient:
         request_options: Mapping[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
+        before_first_speech: Callable[[], Any] | None = None,
     ) -> str:
         """Stream a reasoning response and optionally speak it."""
 
@@ -1376,6 +1386,7 @@ class APIClient:
             request_options=request_options,
             cancellation=cancellation,
             pipeline_started_at=pipeline_started_at,
+            before_first_speech=before_first_speech,
         )
 
     def cancel_current(self) -> None:

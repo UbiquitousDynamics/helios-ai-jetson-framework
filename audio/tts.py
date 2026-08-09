@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -216,11 +216,25 @@ class PiperTTS:
         self._voice = voice
         self._audio_backend = audio_backend or SoundDeviceBackend()
         self._clock = clock
+        self._close_lock = threading.Lock()
+        self._speech_lock = threading.RLock()
+        self._synthesis_lock = threading.RLock()
         self._playback_lock = threading.Lock()
         self._state_lock = threading.Lock()
+        self._cache_lock = threading.Lock()
+        self._preloaded_waves: dict[str, bytes] = {}
+        self._active_speech_interrupt: threading.Event | None = None
         self._active_interrupt: threading.Event | None = None
+        self._active_playback_started_at: float | None = None
+        self._last_playback_started_at: float | None = None
+        self._last_playback_ended_at: float | None = None
         self._last_playback_frame_count = 0
         self._last_playback_total_frames = 0
+        self._closed = False
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise TTSError("Piper TTS is closed")
 
     @property
     def last_playback_frame_count(self) -> int:
@@ -250,45 +264,78 @@ class PiperTTS:
         with self._state_lock:
             return self._active_interrupt is not None
 
-    def interrupt(self) -> bool:
-        """Request that the current playback stop, returning whether one was active."""
+    @property
+    def active_playback_started_at(self) -> float | None:
+        """Monotonic start time of the active buffer, if any."""
 
         with self._state_lock:
-            interrupt_event = self._active_interrupt
-            if interrupt_event is None:
+            return self._active_playback_started_at
+
+    @property
+    def last_playback_window(self) -> tuple[float, float | None] | None:
+        """Most recent monotonic playback start/end times."""
+
+        with self._state_lock:
+            started_at = self._last_playback_started_at
+            ended_at = self._last_playback_ended_at
+        if started_at is None:
+            return None
+        return started_at, ended_at
+
+    def interrupt(self) -> bool:
+        """Cancel current synthesis/playback, returning whether speech was active."""
+
+        with self._state_lock:
+            events = {
+                event
+                for event in (self._active_speech_interrupt, self._active_interrupt)
+                if event is not None
+            }
+            if not events:
                 return False
-            interrupt_event.set()
+            for event in events:
+                event.set()
             return True
 
     @property
     def voice(self) -> Any:
-        if self._voice is None:
-            try:
-                from piper.voice import PiperVoice
-            except ModuleNotFoundError as exc:  # pragma: no cover - deployment dependency
-                if exc.name == "piper":
+        with self._synthesis_lock:
+            self._ensure_open()
+            if self._voice is None:
+                try:
+                    from piper.voice import PiperVoice
+                except ModuleNotFoundError as exc:  # pragma: no cover - deployment dependency
+                    if exc.name == "piper":
+                        raise AudioSynthesisError(
+                            "The 'piper-tts' package is required for speech synthesis"
+                        ) from exc
                     raise AudioSynthesisError(
-                        "The 'piper-tts' package is required for speech synthesis"
+                        f"Unable to import Piper because dependency {exc.name!r} is missing: {exc}"
                     ) from exc
-                raise AudioSynthesisError(
-                    f"Unable to import Piper because dependency {exc.name!r} is missing: {exc}"
-                ) from exc
-            except ImportError as exc:  # pragma: no cover - deployment dependency
-                raise AudioSynthesisError(
-                    f"Unable to import Piper or one of its native dependencies: {exc}"
-                ) from exc
-            try:
-                self._voice = PiperVoice.load(str(self.voice_model))
-            except Exception as exc:
-                raise AudioSynthesisError(
-                    f"Unable to load Piper voice model: {self.voice_model}"
-                ) from exc
-            logger.info("Loaded Piper voice model %s", self.voice_model)
-        return self._voice
+                except ImportError as exc:  # pragma: no cover - deployment dependency
+                    raise AudioSynthesisError(
+                        f"Unable to import Piper or one of its native dependencies: {exc}"
+                    ) from exc
+                try:
+                    self._voice = PiperVoice.load(str(self.voice_model))
+                except Exception as exc:
+                    raise AudioSynthesisError(
+                        f"Unable to load Piper voice model: {self.voice_model}"
+                    ) from exc
+                logger.info("Loaded Piper voice model %s", self.voice_model)
+            return self._voice
 
     def synthesize_wave(self, text: str) -> io.BytesIO:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
+
+        self._ensure_open()
+        with self._synthesis_lock:
+            self._ensure_open()
+            return self._synthesize_wave_unlocked(text)
+
+    def _synthesize_wave_unlocked(self, text: str) -> io.BytesIO:
+        """Synthesize one WAV while the Piper voice is exclusively owned."""
 
         output = io.BytesIO()
         try:
@@ -322,8 +369,56 @@ class PiperTTS:
         output.seek(0)
         return output
 
-    def _play_wave(self, source: Any) -> tuple[float, float, float]:
+    def preload_phrases(self, phrases: Iterable[str]) -> tuple[str, ...]:
+        """Synthesize short phrases into memory before latency-sensitive use."""
+
+        loaded: list[str] = []
+        for value in phrases:
+            phrase = str(value).strip()
+            if not phrase:
+                raise ValueError("preloaded phrases cannot be empty")
+            with self._cache_lock:
+                if phrase in self._preloaded_waves:
+                    loaded.append(phrase)
+                    continue
+            wave_bytes = self.synthesize_wave(phrase).getvalue()
+            with self._close_lock:
+                self._ensure_open()
+                with self._cache_lock:
+                    self._preloaded_waves.setdefault(phrase, wave_bytes)
+            loaded.append(phrase)
+        return tuple(loaded)
+
+    def has_preloaded_phrase(self, phrase: str) -> bool:
+        """Return whether a phrase can be played without running Piper."""
+
+        with self._cache_lock:
+            return phrase in self._preloaded_waves
+
+    def speak_preloaded(
+        self,
+        phrase: str,
+        *,
+        cancellation: threading.Event | None = None,
+    ) -> bool:
+        """Play a cached phrase, returning false instead of synthesizing on demand."""
+
+        self._ensure_open()
+        with self._cache_lock:
+            wave_bytes = self._preloaded_waves.get(phrase)
+        if wave_bytes is None or (cancellation is not None and cancellation.is_set()):
+            return False
+        self._play_wave(io.BytesIO(wave_bytes), interrupt_event=cancellation)
+        return True
+
+    def _play_wave(
+        self,
+        source: Any,
+        *,
+        interrupt_event: threading.Event | None = None,
+    ) -> tuple[float, float, float]:
         try:
+            self._ensure_open()
             with wave.open(source, "rb") as wav_file:
                 sample_rate = wav_file.getframerate()
                 channels = wav_file.getnchannels()
@@ -332,12 +427,16 @@ class PiperTTS:
                 frames = wav_file.readframes(frame_count)
             audio_duration_ms = frame_count / sample_rate * 1_000
             with self._playback_lock:
-                interrupt_event = threading.Event()
+                self._ensure_open()
+                playback_interrupt = interrupt_event or threading.Event()
+                audio_started_at = self._clock()
                 with self._state_lock:
-                    self._active_interrupt = interrupt_event
+                    self._active_interrupt = playback_interrupt
+                    self._active_playback_started_at = audio_started_at
+                    self._last_playback_started_at = audio_started_at
+                    self._last_playback_ended_at = None
                     self._last_playback_frame_count = 0
                     self._last_playback_total_frames = frame_count
-                audio_started_at = self._clock()
                 try:
                     play_interruptibly = getattr(
                         self._audio_backend,
@@ -350,11 +449,11 @@ class PiperTTS:
                             sample_rate,
                             channels,
                             sample_width,
-                            interrupt_event,
+                            playback_interrupt,
                         )
                         if frames_written is None:
                             frames_written = frame_count
-                    elif interrupt_event.is_set():
+                    elif playback_interrupt.is_set():
                         frames_written = 0
                     else:
                         self._audio_backend.play(
@@ -365,15 +464,18 @@ class PiperTTS:
                         )
                         frames_written = frame_count
                 finally:
+                    playback_ended_at = self._clock()
                     with self._state_lock:
-                        if self._active_interrupt is interrupt_event:
+                        if self._active_interrupt is playback_interrupt:
                             self._active_interrupt = None
+                            self._active_playback_started_at = None
+                            self._last_playback_ended_at = playback_ended_at
                 with self._state_lock:
                     self._last_playback_frame_count = min(
                         max(0, int(frames_written)),
                         frame_count,
                     )
-                playback_ms = (self._clock() - audio_started_at) * 1_000
+                playback_ms = (playback_ended_at - audio_started_at) * 1_000
             return playback_ms, audio_duration_ms, audio_started_at
         except AudioPlaybackError:
             raise
@@ -386,17 +488,30 @@ class PiperTTS:
         if text and text.strip() and not any(character.isalnum() for character in text):
             logger.debug("Skipping punctuation-only speech fragment")
             return
-        logger.debug("Synthesizing %s character(s) of speech", len(text))
-        synthesis_started_at = self._clock()
-        output = self.synthesize_wave(text)
-        synthesis_ms = (self._clock() - synthesis_started_at) * 1_000
-        playback_ms, audio_duration_ms, audio_started_at = self._play_wave(output)
-        return SpeechTiming(
-            synthesis_ms=synthesis_ms,
-            playback_ms=playback_ms,
-            audio_duration_ms=audio_duration_ms,
-            audio_started_at=audio_started_at,
-        )
+        with self._speech_lock:
+            self._ensure_open()
+            speech_interrupt = threading.Event()
+            with self._state_lock:
+                self._active_speech_interrupt = speech_interrupt
+            try:
+                logger.debug("Synthesizing %s character(s) of speech", len(text))
+                synthesis_started_at = self._clock()
+                output = self.synthesize_wave(text)
+                synthesis_ms = (self._clock() - synthesis_started_at) * 1_000
+                playback_ms, audio_duration_ms, audio_started_at = self._play_wave(
+                    output,
+                    interrupt_event=speech_interrupt,
+                )
+                return SpeechTiming(
+                    synthesis_ms=synthesis_ms,
+                    playback_ms=playback_ms,
+                    audio_duration_ms=audio_duration_ms,
+                    audio_started_at=audio_started_at,
+                )
+            finally:
+                with self._state_lock:
+                    if self._active_speech_interrupt is speech_interrupt:
+                        self._active_speech_interrupt = None
 
     def speak(self, text: str) -> None:
         """Speak text while retaining the historical ``None`` return value."""
@@ -412,9 +527,19 @@ class PiperTTS:
         self._play_wave(str(path))
 
     def close(self) -> None:
-        close = getattr(self._audio_backend, "close", None)
-        if callable(close):
-            close()
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self.interrupt()
+        # Wait for every operation that could synthesize, populate the cache,
+        # or touch the backend before terminal teardown.
+        with self._speech_lock, self._synthesis_lock, self._playback_lock:
+            with self._cache_lock:
+                self._preloaded_waves.clear()
+            close = getattr(self._audio_backend, "close", None)
+            if callable(close):
+                close()
 
     def __enter__(self) -> PiperTTS:
         return self

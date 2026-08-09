@@ -31,6 +31,7 @@ from api.providers.contracts import (
 )
 from api.routing import ProviderRegistry, ProviderTarget
 from api.streaming import (
+    CancellationController,
     ExecutionTarget,
     SpeechReplayUnsafeError,
     StreamingResponseCoordinator,
@@ -63,10 +64,17 @@ def request() -> ChatRequest:
 
 
 class FakeProvider:
-    def __init__(self, name: str, streams: list[object]) -> None:
+    def __init__(
+        self,
+        name: str,
+        streams: list[object],
+        *,
+        expected_cancellation: object | None = None,
+    ) -> None:
         self.name = name
         self.streams = iter(streams)
         self.calls: list[ChatRequest] = []
+        self.expected_cancellation = expected_cancellation
 
     @property
     def identity(self) -> ProviderIdentity:
@@ -82,7 +90,7 @@ class FakeProvider:
         *,
         cancellation: object | None = None,
     ) -> Iterable[object]:
-        assert cancellation is None
+        assert cancellation is self.expected_cancellation
         self.calls.append(chat_request)
         stream = next(self.streams)
         if isinstance(stream, Exception):
@@ -275,6 +283,63 @@ def test_multi_sentence_delta_is_spoken_before_remote_completion() -> None:
 
     assert result.text == "Prima frase. Seconda frase."
     assert spoken == ["Prima frase.", "Seconda frase."]
+
+
+def test_before_first_speech_runs_once_immediately_before_first_fragment() -> None:
+    provider = FakeProvider(
+        "first",
+        [[TextDelta("First sentence. Second sentence."), completion("first")]],
+    )
+    events: list[str] = []
+
+    result = coordinator(provider).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        before_first_speech=lambda: events.append("before"),
+        speak=lambda text: events.append(f"speak:{text}"),
+    )
+
+    assert result.text == "First sentence. Second sentence."
+    assert events == [
+        "before",
+        "speak:First sentence.",
+        "speak:Second sentence.",
+    ]
+
+
+def test_cancellation_after_first_fragment_discards_queued_sentence_and_is_terminal() -> None:
+    cancellation = CancellationController()
+    first = FakeProvider(
+        "first",
+        [[TextDelta("First sentence. Second sentence."), completion("first")]],
+        expected_cancellation=cancellation,
+    )
+    fallback = FakeProvider(
+        "fallback",
+        [[TextDelta("Duplicate."), completion("fallback")]],
+        expected_cancellation=cancellation,
+    )
+    spoken: list[str] = []
+
+    def cancel_after_speech(text: str) -> None:
+        spoken.append(text)
+        cancellation.cancel()
+
+    with pytest.raises(SpeechReplayUnsafeError) as captured:
+        coordinator(first, fallback, retry_wait=0).run(
+            request(),
+            (
+                ExecutionTarget(target("first"), retry_attempts=3),
+                ExecutionTarget(target("fallback")),
+            ),
+            speak=cancel_after_speech,
+            cancellation=cancellation,
+        )
+
+    assert captured.value.error.category is ErrorCategory.CANCELLED
+    assert spoken == ["First sentence."]
+    assert len(first.calls) == 1
+    assert fallback.calls == []
 
 
 def test_unpunctuated_output_uses_soft_speech_chunk_limit() -> None:

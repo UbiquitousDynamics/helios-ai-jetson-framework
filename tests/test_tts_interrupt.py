@@ -3,7 +3,9 @@ from __future__ import annotations
 import threading
 import wave
 
-from audio.tts import PiperTTS, SoundDeviceBackend
+import pytest
+
+from audio.tts import PiperTTS, SoundDeviceBackend, TTSError
 
 
 FRAME_COUNT = 16_000
@@ -46,6 +48,32 @@ class ControllableBackend:
             frames_written = total_frames
         self.frames_written.append(frames_written)
         return frames_written
+
+
+class RecordingBlockingVoice:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def synthesize(self, _text: str, wav_file: wave.Wave_write) -> None:
+        self.started.set()
+        assert self.release.wait(timeout=1)
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16_000)
+        wav_file.writeframes(b"\x01\x00" * FRAME_COUNT)
+
+
+class NonInterruptibleRecordingBackend:
+    def __init__(self) -> None:
+        self.play_calls = 0
+        self.close_calls = 0
+
+    def play(self, *_args: object) -> None:
+        self.play_calls += 1
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class InterruptingRawOutputStream:
@@ -119,6 +147,47 @@ def test_interrupt_while_idle_does_not_cancel_future_playback() -> None:
 
     assert backend.frames_written == [FRAME_COUNT]
     assert tts.last_playback_was_interrupted is False
+
+
+def test_interrupt_during_synthesis_prevents_the_buffer_from_playing() -> None:
+    voice = RecordingBlockingVoice()
+    backend = NonInterruptibleRecordingBackend()
+    tts = PiperTTS("unused.onnx", voice=voice, audio_backend=backend)
+    errors: list[BaseException] = []
+
+    def speak() -> None:
+        try:
+            tts.speak("hello")
+        except BaseException as error:  # pragma: no cover - diagnostic guard
+            errors.append(error)
+
+    speech = threading.Thread(target=speak)
+    speech.start()
+    assert voice.started.wait(timeout=1)
+
+    assert tts.interrupt() is True
+    voice.release.set()
+    speech.join(timeout=1)
+
+    assert not speech.is_alive()
+    assert errors == []
+    assert backend.play_calls == 0
+    assert tts.last_playback_frame_count == 0
+    assert tts.last_playback_total_frames == FRAME_COUNT
+
+
+def test_close_is_idempotent_and_rejects_future_operations() -> None:
+    backend = NonInterruptibleRecordingBackend()
+    tts = PiperTTS("unused.onnx", voice=LongVoice(), audio_backend=backend)
+
+    tts.close()
+    tts.close()
+
+    assert backend.close_calls == 1
+    with pytest.raises(TTSError, match="closed"):
+        tts.speak("hello")
+    with pytest.raises(TTSError, match="closed"):
+        tts.preload_phrases(("Sure.",))
 
 
 def test_sounddevice_backend_stops_between_chunks_and_recovers() -> None:

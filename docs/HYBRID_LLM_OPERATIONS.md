@@ -281,7 +281,9 @@ Supported environment overrides are:
 | `HELIOS_LLM_EMERGENCY_LOCAL_ONLY` | Immediate local-only kill switch |
 | `HELIOS_LLM_POLICY` | Policy override |
 | `HELIOS_LLM_ALLOW_REMOTE_TRANSCRIPTS` | Transcript egress gate |
-| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | History/tool-context egress gate |
+| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | History/tool-context egress gate and opt-in ephemeral Codex thread reuse |
+| `HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS` | Inactivity reset for reused Codex threads; default `900` |
+| `HELIOS_LLM_CONTEXT_MAX_TURNS` | Completed Codex-turn cap per reused thread; default `20` |
 | `HELIOS_LLM_ALLOW_REMOTE_RAG` | Local-document egress gate |
 | `HELIOS_LLM_CATALOG` | Current catalog path |
 | `HELIOS_LLM_DAILY_BUDGET_USD` | Daily hard limit |
@@ -293,6 +295,12 @@ Supported environment overrides are:
 
 Environment variables can disable remote operation without a file. They cannot
 construct a remote route by themselves.
+
+Codex continuity is in-process and ephemeral. A local Ollama answer does not
+touch, increment, inject into, or backfill the remote thread. Failed or cancelled
+Codex attempts discard the saved thread id. See
+[`REMOTE_CONTEXT_DESIGN.md`](REMOTE_CONTEXT_DESIGN.md) for the lifecycle and
+privacy boundary.
 
 `observability.metrics_retention_days` is implemented as daily pruning of the
 content-free JSONL metrics file. The `log_content` and `log_headers` settings are

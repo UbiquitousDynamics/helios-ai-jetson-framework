@@ -12,6 +12,10 @@ ProviderFactory = Callable[[], ChatProvider]
 
 def configured_provider_factory(
     settings: config.LLMProviderSettings,
+    *,
+    allow_remote_context: bool = False,
+    context_idle_timeout_seconds: float = 900.0,
+    context_max_turns: int = 20,
 ) -> ProviderFactory | None:
     """Return a lazy adapter factory, or ``None`` for externally handled types."""
 
@@ -36,6 +40,9 @@ def configured_provider_factory(
             return CodexAppServerAdapter(
                 provider=settings.name,
                 endpoint=settings.endpoint,
+                allow_remote_context=allow_remote_context,
+                context_idle_timeout_seconds=context_idle_timeout_seconds,
+                context_max_turns=context_max_turns,
             )
 
         return codex_app_server_factory

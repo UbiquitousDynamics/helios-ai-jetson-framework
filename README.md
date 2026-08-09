@@ -332,10 +332,12 @@ flowchart TD
     Local --> Plan
 ```
 
-No persistent conversation-memory subsystem exists in the current codebase.
-Each voice command is independent unless an in-process caller explicitly passes
-context to `APIClient`. Codex also creates a fresh ephemeral thread for every
-turn.
+No durable local conversation-memory subsystem exists. Voice commands remain
+independent unless a caller explicitly supplies context. The Codex route can
+optionally reuse an in-memory, ephemeral app-server thread during one Helios run
+when `HELIOS_LLM_ALLOW_REMOTE_CONTEXT=true`; it resets after an idle timeout or
+turn cap and is never persisted across restarts. The default remains one fresh
+ephemeral Codex thread per turn.
 
 ### Routing and model selection
 
@@ -512,11 +514,12 @@ sequenceDiagram
     end
 ```
 
-Only finalized recognition results are executed. Partial phrases are available
-through `listen_events()` and, when opt-in barge-in is active during playback,
-can stop the current response early. The finalized interruption utterance is
-then executed as an immediate follow-up without another wake word; partial text
-is never sent to a model as a normal idle command.
+Only finalized recognition results are executed. Partial phrases and measured
+PCM energy are available through `listen_events()` and, when opt-in barge-in is
+active, can stop the current response early. One continuous microphone/Vosk
+session then flushes the finalized interruption utterance, which is executed as
+an immediate follow-up without another wake word. Partial text is never sent to
+a model as a normal idle command.
 
 Provider failures are retried or routed to the next target only while doing so
 is safe. Once speech has started, a failed stream is not replayed because doing
@@ -525,9 +528,15 @@ as TTS errors rather than being relabeled as network failures.
 
 ### Interruptible conversation (opt-in)
 
-Set `HELIOS_BARGE_IN_ENABLED=true` to let Helios monitor Vosk events while Piper
-is speaking. The default remains `false` until thresholds are calibrated on the
-target microphone, speaker, enclosure, and playback level.
+Set `HELIOS_BARGE_IN_ENABLED=true` to keep one Vosk capture session open while a
+response is generated and Piper is speaking. Detection is armed only for actual
+playback and its short echo tail. The same opt-in flow pre-synthesizes short
+language-specific backchannels before the first command and plays one after a
+configurable 700 ms silent gap. A fast real fragment cancels the cue before it
+starts; a cue already playing is stopped through its own cancellation event and
+joined before real speech. The default remains `false` until thresholds and
+timing are calibrated on the target microphone, speaker, enclosure, and playback
+level.
 
 ```mermaid
 sequenceDiagram
@@ -537,7 +546,7 @@ sequenceDiagram
     participant API as APIClient
     participant TTS as PiperTTS
 
-    VA->>API: Run response on injected executor
+    VA->>API: Run response on two-worker conversation executor
     API->>TTS: Speak streamed fragment
     par Playback
         TTS-->>User: Response audio
@@ -553,10 +562,12 @@ sequenceDiagram
 ```
 
 Playback uses 100 ms output chunks, allowing another thread to stop between
-writes and leaving the stream reusable for the next response. The detector uses
-a conservative software echo gate; see
+writes and leaving the stream reusable for the next response. Backchannels are
+cached WAVs rather than on-demand synthesis. The detector uses measured PCM RMS
+and a conservative software echo gate; see
 [`docs/BARGE_IN_DESIGN.md`](docs/BARGE_IN_DESIGN.md) for calibration guidance,
-rejected AEC alternatives, and the cancellation/budget contract.
+the scripted first-audio benchmark, rejected AEC alternatives, and the
+cancellation/budget contract.
 
 ### RAG query
 
@@ -1051,6 +1062,7 @@ Core overrides:
 export HELIOS_LANGUAGE=it
 export HELIOS_OLLAMA_HOST=http://localhost:11434
 export HELIOS_BARGE_IN_ENABLED=false
+export HELIOS_BACKCHANNEL_DELAY_SECONDS=0.7
 export HELIOS_LOG_LEVEL=INFO
 export HELIOS_LOG_FILE=app.log
 ```
@@ -1061,6 +1073,7 @@ PowerShell:
 $env:HELIOS_LANGUAGE = "it"
 $env:HELIOS_OLLAMA_HOST = "http://localhost:11434"
 $env:HELIOS_BARGE_IN_ENABLED = "false"
+$env:HELIOS_BACKCHANNEL_DELAY_SECONDS = "0.7"
 $env:HELIOS_LOG_LEVEL = "INFO"
 $env:HELIOS_LOG_FILE = "app.log"
 ```
@@ -1109,7 +1122,9 @@ All implemented LLM environment overrides are:
 | `HELIOS_LLM_EMERGENCY_LOCAL_ONLY` | Force local-only operation after restart |
 | `HELIOS_LLM_POLICY` | Override `local_only`, `remote_only`, `local_first`, `remote_first`, or `auto` |
 | `HELIOS_LLM_ALLOW_REMOTE_TRANSCRIPTS` | Permit raw transcript origin remotely |
-| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | Permit conversation/tool context remotely |
+| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | Opt into in-process ephemeral Codex thread reuse and permit conversation/tool context remotely |
+| `HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS` | Reset a reused Codex thread after inactivity; default `900` |
+| `HELIOS_LLM_CONTEXT_MAX_TURNS` | Reset before the turn after this many completed Codex turns; default `20` |
 | `HELIOS_LLM_ALLOW_REMOTE_RAG` | Permit local-document content remotely |
 | `HELIOS_LLM_CATALOG` | Override the strict model catalog path |
 | `HELIOS_LLM_DAILY_BUDGET_USD` | Override the daily USD limit |
@@ -1229,6 +1244,10 @@ after the remote issue has been reviewed.
 | `name` | `"emilia"` | Compatibility assistant identity |
 | `listen_timeout` | `6.5` seconds | Maximum duration of one recognition call |
 | `barge_in_enabled` | `false` | Enables interruptible listen-while-speaking turns; overridden by `HELIOS_BARGE_IN_ENABLED` |
+| `barge_in_event_energy` | `0.08` | Legacy-event detection energy; overridden by `HELIOS_BARGE_IN_EVENT_ENERGY` |
+| `barge_in_expected_echo_energy` | `0.04` | Calibrated Piper leakage RMS; overridden by `HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY` |
+| `barge_in_minimum_interrupt_energy` | `0.06` | Conservative interruption floor; overridden by `HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY` |
+| `backchannel_delay_seconds` | `0.7` seconds | Silent-gap threshold for a cached cue; overridden by `HELIOS_BACKCHANNEL_DELAY_SECONDS` |
 | `log_level` | `INFO` | Root logging level; overridden by `HELIOS_LOG_LEVEL` |
 | `log_file_name` | `app.log` | Append-only log; overridden by `HELIOS_LOG_FILE` |
 | `ollama_host` | `http://localhost:11434` | Host passed to the Ollama SDK |
@@ -1821,12 +1840,14 @@ target-device measurements.
 - The active voice loop is single-session and exposes no control or conversation
   API. The optional dashboard is a separate read-only KPI API, disabled by
   default and local-only unless LAN access and authentication are explicit.
-- There is no persistent conversation memory; separate commands do not
-  automatically share names, preferences, or prior dialogue.
+- There is no durable local conversation memory. Opt-in Codex continuity is
+  ephemeral, remote-only, bounded to one running app-server process, and loses
+  its history on timeout, cap, failed/cancelled remote turn, or restart.
 - Barge-in is opt-in and uses a conservative software echo gate. Its thresholds
   and 200-300 ms interruption target require calibration and measurement on the
   deployed microphone, speaker, enclosure, and audio level; hardware AEC is not
-  assumed.
+  assumed. The documented first-audio numbers use a fake timed stream, not
+  Jetson/Piper hardware.
 - The first RAG build can be expensive on constrained hardware.
 - Retrieval quality needs a language-specific gold-question set before changing
   the embedding model or splitter.

@@ -9,6 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import config
+import pytest
 from api.api_client import APIClient, APIClientError
 from api.budget import BudgetLedger, BudgetLimits
 from api.catalog import ModelPrice
@@ -22,6 +23,7 @@ from api.providers.contracts import (
     ProviderError,
     ProviderIdentity,
     Role,
+    TextDelta,
 )
 from api.routing import Connectivity, ProviderRegistry, ProviderTarget
 from api.streaming import (
@@ -279,3 +281,100 @@ def test_cancelled_request_without_usage_settles_full_reservation(
     snapshot = ledger.snapshot()
     assert snapshot.outstanding_usd == 0
     assert snapshot.daily_usd == Decimal(reservation["reserved_usd"])
+
+
+def test_coordinator_checkpoint_marks_an_in_stream_cancel_as_transmitted(
+    tmp_path: Path,
+) -> None:
+    cancellation = CancellationController()
+
+    class CancellingProvider(BlockingCancellationProvider):
+        def stream(
+            self,
+            request: ChatRequest,
+            *,
+            cancellation: object | None = None,
+        ) -> Iterable[object]:
+            assert cancellation is not None
+            self.calls.append(request)
+            getattr(cancellation, "cancel")()
+            yield TextDelta("must stay unspoken")
+
+    provider = CancellingProvider("first")
+    registry = ProviderRegistry()
+    registry.register_instance("first", provider)
+    ledger_path = tmp_path / "usage.jsonl"
+    ledger = BudgetLedger(
+        ledger_path,
+        BudgetLimits(
+            per_request_usd=Decimal("1"),
+            daily_usd=Decimal("1"),
+            monthly_usd=Decimal("1"),
+        ),
+    )
+    coordinator = StreamingResponseCoordinator(
+        registry,
+        budget=ledger,
+        require_priced_remote=True,
+        retry_wait=0,
+    )
+
+    with pytest.raises(ProviderError) as captured:
+        coordinator.run(
+            replace(_request(), model="model"),
+            (
+                ExecutionTarget(
+                    _target("first"),
+                    max_output_tokens=32,
+                    price=_price("first"),
+                ),
+            ),
+            cancellation=cancellation,
+        )
+
+    assert captured.value.category is ErrorCategory.CANCELLED
+    assert captured.value.transmitted is True
+    records = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+    reservation = next(record for record in records if record["event"] == "reserve")
+    settlement = next(record for record in records if record["event"] == "settle")
+    assert settlement["conservative"] is True
+    assert settlement["charged_usd"] == reservation["reserved_usd"]
+
+
+def test_silent_provider_cancel_at_eof_is_terminal_without_retry_or_fallback() -> None:
+    cancellation = CancellationController()
+
+    class SilentCancellingProvider(BlockingCancellationProvider):
+        def stream(
+            self,
+            request: ChatRequest,
+            *,
+            cancellation: object | None = None,
+        ) -> Iterable[object]:
+            assert cancellation is not None
+            self.calls.append(request)
+            getattr(cancellation, "cancel")()
+            if False:  # pragma: no cover - retain the generator contract
+                yield TextDelta("unreachable")
+
+    provider = SilentCancellingProvider("first")
+    fallback = BlockingCancellationProvider("fallback")
+    registry = ProviderRegistry()
+    registry.register_instance("first", provider)
+    registry.register_instance("fallback", fallback)
+    coordinator = StreamingResponseCoordinator(registry, retry_wait=0)
+
+    with pytest.raises(ProviderError) as captured:
+        coordinator.run(
+            replace(_request(), model="model"),
+            (
+                ExecutionTarget(_target("first"), retry_attempts=3),
+                ExecutionTarget(_target("fallback")),
+            ),
+            cancellation=cancellation,
+        )
+
+    assert captured.value.category is ErrorCategory.CANCELLED
+    assert captured.value.transmitted is True
+    assert len(provider.calls) == 1
+    assert fallback.calls == []

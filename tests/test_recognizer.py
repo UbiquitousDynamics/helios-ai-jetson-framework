@@ -53,6 +53,27 @@ class FinalRecognizer:
         return '{"partial": ""}'
 
 
+class PendingRecognizer:
+    instances: list[PendingRecognizer] = []
+
+    def __init__(self, _model: object, _rate: int) -> None:
+        self.final_result_calls = 0
+        self.instances.append(self)
+
+    def AcceptWaveform(self, _data: bytes) -> bool:
+        return False
+
+    def Result(self) -> str:
+        return '{"text": ""}'
+
+    def PartialResult(self) -> str:
+        return '{"partial": "nuova nuova domanda"}'
+
+    def FinalResult(self) -> str:
+        self.final_result_calls += 1
+        return '{"text": "nuova nuova domanda completa"}'
+
+
 def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
     audio = FakeAudio()
     recognizer = SpeechRecognizer(
@@ -72,6 +93,103 @@ def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
     recognizer.close()
     recognizer.close()
     assert audio.terminated
+
+
+def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
+    stop_event = threading.Event()
+
+    class StoppingStream(FakeStream):
+        def __init__(self) -> None:
+            super().__init__()
+            self.read_calls = 0
+
+        def read(self, chunk: int, *, exception_on_overflow: bool) -> bytes:
+            self.read_calls += 1
+            data = super().read(chunk, exception_on_overflow=exception_on_overflow)
+            stop_event.set()
+            return data
+
+    audio = FakeAudio()
+    audio.stream = StoppingStream()
+    PendingRecognizer.instances.clear()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=PendingRecognizer,
+    )
+
+    results = list(recognizer.listen_events(stop_event=stop_event))
+
+    assert results == [
+        RecognitionResult("nuova domanda", is_final=False),
+        RecognitionResult("nuova domanda completa", is_final=True),
+    ]
+    assert audio.stream.read_calls == 1
+    assert len(PendingRecognizer.instances) == 1
+    assert PendingRecognizer.instances[0].final_result_calls == 1
+    assert audio.stream.started
+    assert audio.stream.stopped
+    assert audio.stream.closed
+
+
+def test_stop_event_promotes_last_partial_when_vosk_flush_is_empty() -> None:
+    stop_event = threading.Event()
+
+    class EmptyFlushRecognizer(PendingRecognizer):
+        def FinalResult(self) -> str:
+            self.final_result_calls += 1
+            return '{"text": ""}'
+
+    class StoppingStream(FakeStream):
+        def read(self, chunk: int, *, exception_on_overflow: bool) -> bytes:
+            data = super().read(chunk, exception_on_overflow=exception_on_overflow)
+            stop_event.set()
+            return data
+
+    audio = FakeAudio()
+    audio.stream = StoppingStream()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=EmptyFlushRecognizer,
+    )
+
+    assert list(recognizer.listen_events(stop_event=stop_event)) == [
+        RecognitionResult("nuova domanda", is_final=False),
+        RecognitionResult("nuova domanda", is_final=True),
+    ]
+
+
+def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
+    class EmptyFlushRecognizer(PendingRecognizer):
+        def FinalResult(self) -> str:
+            return '{"text": ""}'
+
+    observed = iter([0.0, 0.0, 1.0])
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=FakeAudio(),
+        recognizer_factory=EmptyFlushRecognizer,
+        clock=lambda: next(observed),
+    )
+
+    assert list(recognizer.listen_events(timeout=0.5)) == [
+        RecognitionResult("nuova domanda", is_final=False)
+    ]
+
+
+def test_pre_set_stop_event_does_not_open_microphone_stream() -> None:
+    stop_event = threading.Event()
+    stop_event.set()
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+    )
+
+    assert list(recognizer.listen_events(stop_event=stop_event)) == []
+    assert audio.open_kwargs == {}
 
 
 def test_legacy_listen_generator_yields_text() -> None:

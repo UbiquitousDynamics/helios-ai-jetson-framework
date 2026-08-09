@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import Future
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 import config
 from api.api_client import APIClient
 from api.metrics import SafeMetricsRecorder
-from assistant import AssistantState, VoiceAssistant
+from assistant import AssistantState, VoiceAssistant, _BargeInCaptureStop
 from audio.tts import PiperTTS
 from recognizer.speech_recognizer import RecognitionResult
 
@@ -284,6 +285,185 @@ def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
             wake_word=assistant.profile.wake_word,
         )
     ]
+
+
+def test_run_finishes_backchannel_preload_before_first_listen() -> None:
+    events: list[str] = []
+
+    class PreloadingTTS(FakeTTS):
+        def speak(self, text: str) -> None:
+            del text
+            events.append("welcome")
+
+        def preload_phrases(self, phrases: tuple[str, ...]) -> None:
+            assert phrases == ("Certo.", "Un momento.", "Vediamo.")
+            events.append("preload")
+
+    class OrderingRecognizer(FakeRecognizer):
+        def listen_once(self, timeout: float) -> RecognitionResult | None:
+            events.append("listen")
+            return super().listen_once(timeout)
+
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            language="it",
+            barge_in_enabled=True,
+        ),
+        tts=PreloadingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=OrderingRecognizer([None]),
+        barge_in_detector=object(),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assistant.run(max_iterations=1)
+
+    assert events == ["welcome", "preload", "listen"]
+
+
+def test_close_cancels_in_flight_response_before_joining_owned_executor() -> None:
+    class BlockingAPI(FakeAPI):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def talk(self, message: str, context: str | None = None) -> str:
+            assert message == "domanda"
+            assert context is None
+            self.started.set()
+            assert self.release.wait(timeout=2)
+            return "cancelled response"
+
+        def cancel_current(self) -> None:
+            super().cancel_current()
+            self.release.set()
+
+    api = BlockingAPI()
+    conversation_executor = ThreadPoolExecutor(max_workers=2)
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            language="it",
+            barge_in_enabled=True,
+        ),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=FakeRecognizer([RecognitionResult("Emilia, domanda", is_final=True)]),
+        barge_in_detector=object(),
+        conversation_executor=conversation_executor,
+    )
+    runner = threading.Thread(target=assistant.run_once)
+    runner.start()
+    assert api.started.wait(timeout=1)
+
+    assistant.close()
+    runner.join(timeout=1)
+
+    assert not runner.is_alive()
+    assert api.cancelled is True
+    assert api.closed is True
+    assert conversation_executor.submit(lambda: "caller-owned").result() == "caller-owned"
+    conversation_executor.shutdown(wait=True)
+
+
+def test_echo_epoch_tracks_active_playback_and_only_a_short_completed_tail() -> None:
+    tts = FakeTTS()
+    tts.active_playback_started_at = 10.0
+    tts.last_playback_window = (10.0, None)
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assert assistant._tts_echo_epoch_start(10.5) == 10.0
+
+    tts.active_playback_started_at = None
+    tts.last_playback_window = (10.0, 10.5)
+    assert assistant._tts_echo_epoch_start(10.7) == 10.0
+    assert assistant._tts_echo_epoch_start(10.76) is None
+    assistant.close()
+
+
+def test_barge_in_detector_is_not_consulted_before_playback() -> None:
+    class IdleTTS(FakeTTS):
+        is_speaking = False
+        active_playback_started_at = None
+        last_playback_window = None
+
+    class EventRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            assert getattr(stop_event, "is_set")() is False
+            yield RecognitionResult("correzione", is_final=True, frame_energy=0.5)
+
+    class CountingDetector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def reset(self) -> None:
+            pass
+
+        def process_recognition(self, *_args: object, **_kwargs: object) -> bool:
+            self.calls += 1
+            return True
+
+    detector = CountingDetector()
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=IdleTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=EventRecognizer([]),
+        barge_in_detector=detector,
+        sound_executor=ImmediateExecutor(),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert detector.calls == 0
+    assert api.cancelled is False
+    response.set_result("answer")
+    assistant.close()
+
+
+def test_post_barge_deadline_refreshes_on_recognition_activity() -> None:
+    now = [0.0]
+    capture_stop = _BargeInCaptureStop(
+        clock=lambda: now[0],
+        follow_up_timeout_seconds=6.5,
+    )
+
+    capture_stop.barge_in_detected()
+    now[0] = 6.0
+    capture_stop.recognition_activity()
+    now[0] = 12.0
+    assert capture_stop.is_set() is False
+    now[0] = 12.6
+    assert capture_stop.is_set() is True
+
+
+def test_known_single_worker_conversation_executor_is_rejected() -> None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(ValueError, match="at least two workers"):
+            VoiceAssistant(
+                settings=config.Settings(
+                    project_root=config.PROJECT_ROOT,
+                    barge_in_enabled=True,
+                ),
+                conversation_executor=executor,
+            )
 
 
 def test_settings_validate_language_and_root_derived_paths(tmp_path: Path) -> None:

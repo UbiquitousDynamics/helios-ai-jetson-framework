@@ -7,6 +7,7 @@ and uses an isolated, read-only workspace with tool surfaces disabled.
 
 from __future__ import annotations
 
+import math
 import os
 import queue
 import tempfile
@@ -58,6 +59,7 @@ Do not return markdown unless the user explicitly asks for it.
 
 class _Turn(Protocol):
     id: str
+    thread_id: str
 
     def stream(self) -> Iterable[Any]: ...
 
@@ -75,6 +77,7 @@ class _Runtime(Protocol):
         developer_instructions: str,
         effort: str | None,
         service_tier: str | None,
+        thread_id: str | None = None,
     ) -> _Turn: ...
 
     def close(self) -> None: ...
@@ -122,21 +125,43 @@ class _OfficialCodexRuntime:
         developer_instructions: str,
         effort: str | None,
         service_tier: str | None,
+        thread_id: str | None = None,
     ) -> _Turn:
-        thread = self._client.thread_start(
+        if thread_id is None:
+            thread = self._client.thread_start(
+                approval_mode=self._approval_mode,
+                cwd=str(self._working_directory),
+                developer_instructions=developer_instructions,
+                ephemeral=True,
+                model=model,
+                model_provider="openai",
+                sandbox=self._sandbox,
+            )
+            return thread.turn(
+                prompt,
+                approval_mode=self._approval_mode,
+                cwd=str(self._working_directory),
+                effort=effort,
+                sandbox=self._sandbox,
+                service_tier=service_tier,
+            )
+
+        thread = self._client.thread_resume(
+            thread_id,
             approval_mode=self._approval_mode,
             cwd=str(self._working_directory),
             developer_instructions=developer_instructions,
-            ephemeral=True,
             model=model,
             model_provider="openai",
             sandbox=self._sandbox,
+            service_tier=service_tier,
         )
         return thread.turn(
             prompt,
             approval_mode=self._approval_mode,
             cwd=str(self._working_directory),
             effort=effort,
+            model=model,
             sandbox=self._sandbox,
             service_tier=service_tier,
         )
@@ -252,6 +277,9 @@ class CodexAppServerAdapter:
         runtime: _Runtime | None = None,
         runtime_factory: Callable[[], _Runtime] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        allow_remote_context: bool = False,
+        context_idle_timeout_seconds: float = 900.0,
+        context_max_turns: int = 20,
     ) -> None:
         if not provider or any(character.isspace() for character in provider):
             raise ValueError("provider must be a non-empty identifier")
@@ -259,6 +287,21 @@ class CodexAppServerAdapter:
             raise ValueError("Codex app-server endpoint must be 'stdio://codex'")
         if runtime is not None and runtime_factory is not None:
             raise ValueError("pass either runtime or runtime_factory, not both")
+        if not isinstance(allow_remote_context, bool):
+            raise TypeError("allow_remote_context must be a boolean")
+        if (
+            isinstance(context_idle_timeout_seconds, bool)
+            or not isinstance(context_idle_timeout_seconds, (int, float))
+            or not math.isfinite(float(context_idle_timeout_seconds))
+            or context_idle_timeout_seconds <= 0
+        ):
+            raise ValueError("context_idle_timeout_seconds must be positive and finite")
+        if (
+            isinstance(context_max_turns, bool)
+            or not isinstance(context_max_turns, int)
+            or context_max_turns < 1
+        ):
+            raise ValueError("context_max_turns must be a positive integer")
         self._identity = ProviderIdentity(provider, endpoint, remote=True)
         self._capabilities = ProviderCapabilities(
             supports_system_messages=True,
@@ -272,6 +315,14 @@ class CodexAppServerAdapter:
         self._account_lock = threading.Lock()
         self._chatgpt_account_verified = False
         self._clock = clock
+        self._allow_remote_context = allow_remote_context
+        self._context_idle_timeout_seconds = float(context_idle_timeout_seconds)
+        self._context_max_turns = context_max_turns
+        self._context_turn_lock = threading.Lock()
+        self._context_state_lock = threading.Lock()
+        self._context_thread_id: str | None = None
+        self._context_turn_count = 0
+        self._context_last_activity_at: float | None = None
         self._closed = False
 
     @property
@@ -418,6 +469,45 @@ class CodexAppServerAdapter:
             except Exception:
                 pass
 
+    def _reset_context_locked(self) -> None:
+        self._context_thread_id = None
+        self._context_turn_count = 0
+        self._context_last_activity_at = None
+
+    def _begin_context_attempt(self) -> tuple[str | None, int]:
+        now = self._clock()
+        with self._context_state_lock:
+            thread_id = self._context_thread_id
+            turn_count = self._context_turn_count
+            last_activity = self._context_last_activity_at
+            if thread_id is not None and (
+                turn_count >= self._context_max_turns
+                or last_activity is None
+                or now - last_activity >= self._context_idle_timeout_seconds
+            ):
+                thread_id = None
+                turn_count = 0
+            # A failed, cancelled, or only partially consumed attempt must not
+            # leave a thread containing an incomplete turn available for reuse.
+            self._reset_context_locked()
+            return thread_id, turn_count
+
+    def _finish_context_attempt(
+        self,
+        attempt: dict[str, Any],
+        *,
+        previous_turn_count: int,
+    ) -> None:
+        thread_id = attempt.get("thread_id")
+        completed = attempt.get("completed") is True
+        with self._context_state_lock:
+            if completed and isinstance(thread_id, str) and bool(thread_id) and not self._closed:
+                self._context_thread_id = thread_id
+                self._context_turn_count = previous_turn_count + 1
+                self._context_last_activity_at = self._clock()
+            else:
+                self._reset_context_locked()
+
     def stream(
         self,
         request: ChatRequest,
@@ -425,6 +515,37 @@ class CodexAppServerAdapter:
         cancellation: CancellationToken | None = None,
     ) -> Iterator[StreamEvent]:
         self._preflight(request)
+        if not self._allow_remote_context:
+            yield from self._stream_attempt(request, cancellation=cancellation)
+            return
+
+        # The app-server permits only one active turn on a thread. Serialize
+        # context-enabled calls so concurrent API users cannot append competing
+        # turns to the same conversation or race the shared lifecycle counters.
+        with self._context_turn_lock:
+            thread_id, previous_turn_count = self._begin_context_attempt()
+            attempt: dict[str, Any] = {}
+            try:
+                yield from self._stream_attempt(
+                    request,
+                    cancellation=cancellation,
+                    resume_thread_id=thread_id,
+                    context_attempt=attempt,
+                )
+            finally:
+                self._finish_context_attempt(
+                    attempt,
+                    previous_turn_count=previous_turn_count,
+                )
+
+    def _stream_attempt(
+        self,
+        request: ChatRequest,
+        *,
+        cancellation: CancellationToken | None = None,
+        resume_thread_id: str | None = None,
+        context_attempt: dict[str, Any] | None = None,
+    ) -> Iterator[StreamEvent]:
         developer, prompt = _prompt(request)
         mailbox: queue.Queue[tuple[str, Any]] = queue.Queue()
         holder: dict[str, _Turn] = {}
@@ -435,14 +556,25 @@ class CodexAppServerAdapter:
                 runtime = self._get_authenticated_runtime()
                 if stop_requested.is_set():
                     return
-                turn = runtime.start_turn(
-                    model=request.model,
-                    prompt=prompt,
-                    developer_instructions=developer,
-                    effort=request.options.get("reasoning_effort"),
-                    service_tier=request.options.get("service_tier"),
-                )
+                turn_kwargs = {
+                    "model": request.model,
+                    "prompt": prompt,
+                    "developer_instructions": developer,
+                    "effort": request.options.get("reasoning_effort"),
+                    "service_tier": request.options.get("service_tier"),
+                }
+                if resume_thread_id is not None:
+                    turn_kwargs["thread_id"] = resume_thread_id
+                turn = runtime.start_turn(**turn_kwargs)
                 holder["turn"] = turn
+                if context_attempt is not None:
+                    candidate = field_value(turn, "thread_id")
+                    if candidate is None:
+                        candidate = field_value(turn, "threadId")
+                    if not isinstance(candidate, str) or not candidate:
+                        candidate = resume_thread_id
+                    if isinstance(candidate, str) and candidate:
+                        context_attempt["thread_id"] = candidate
                 if stop_requested.is_set():
                     self._interrupt(turn)
                     return
@@ -546,6 +678,8 @@ class CodexAppServerAdapter:
                         transmitted="turn" in holder,
                         request_id=request_id,
                     )
+                if context_attempt is not None:
+                    context_attempt["completed"] = True
                 return
 
             method, payload = _notification_parts(value)
@@ -650,6 +784,8 @@ class CodexAppServerAdapter:
             self._chatgpt_account_verified = False
             runtime = self._runtime
             self._runtime = None
+        with self._context_state_lock:
+            self._reset_context_locked()
         if runtime is not None:
             try:
                 runtime.close()

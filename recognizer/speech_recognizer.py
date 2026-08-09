@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+from recognizer.barge_in_detector import pcm16_rms
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class RecognitionResult:
 
     text: str
     is_final: bool
+    frame_energy: float | None = None
 
 
 class SpeechRecognizer:
@@ -155,8 +157,18 @@ class SpeechRecognizer:
             raise SpeechRecognitionError("Recognizer returned invalid JSON") from exc
         return str(parsed.get(key) or "")
 
-    def listen_events(self, timeout: float | None = None) -> Iterator[RecognitionResult]:
+    def listen_events(
+        self,
+        timeout: float | None = None,
+        *,
+        stop_event: threading.Event | None = None,
+    ) -> Iterator[RecognitionResult]:
         """Yield distinct partial and final recognition events.
+
+        When ``stop_event`` is set, capture ends after the current microphone
+        read and Vosk's pending text is flushed through ``FinalResult``. This
+        lets a coordinating thread stop one continuous recognition session
+        without repeatedly closing and reopening the input stream.
 
         The microphone stream is always stopped and closed, including when a
         consumer stops after the first final result.
@@ -164,6 +176,8 @@ class SpeechRecognizer:
 
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be greater than zero")
+        if stop_event is not None and stop_event.is_set():
+            return
         self._ensure_runtime()
         assert self.p is not None
         assert self._recognizer_factory is not None
@@ -171,6 +185,7 @@ class SpeechRecognizer:
         stream: Any | None = None
         last_partial = ""
         last_final = ""
+        last_frame_energy: float | None = None
         start_time = self._clock()
         try:
             stream = self.p.open(
@@ -184,27 +199,53 @@ class SpeechRecognizer:
             recognizer = self._recognizer_factory(self.model, self.rate)
             logger.info("Listening for speech")
 
-            while timeout is None or self._clock() - start_time < timeout:
+            while (timeout is None or self._clock() - start_time < timeout) and not (
+                stop_event is not None and stop_event.is_set()
+            ):
                 data = stream.read(self.chunk, exception_on_overflow=False)
+                try:
+                    last_frame_energy = pcm16_rms(data)
+                except (TypeError, ValueError):
+                    # Preserve compatibility with synthetic/non-PCM adapters
+                    # while exposing real PCM energy to barge-in consumers.
+                    last_frame_energy = None
                 if recognizer.AcceptWaveform(data):
                     text = self._parse_result(recognizer.Result(), "text")
                     clean_text = self.remove_consecutive_duplicates(text).strip()
                     if clean_text and clean_text != last_final:
                         last_final = clean_text
-                        yield RecognitionResult(clean_text, is_final=True)
+                        yield RecognitionResult(
+                            clean_text,
+                            is_final=True,
+                            frame_energy=last_frame_energy,
+                        )
                 else:
                     partial = self._parse_result(recognizer.PartialResult(), "partial")
                     clean_partial = self.remove_consecutive_duplicates(partial).strip()
                     if clean_partial and clean_partial != last_partial:
                         last_partial = clean_partial
-                        yield RecognitionResult(clean_partial, is_final=False)
+                        yield RecognitionResult(
+                            clean_partial,
+                            is_final=False,
+                            frame_energy=last_frame_energy,
+                        )
 
             final_result = getattr(recognizer, "FinalResult", None)
             if callable(final_result):
                 text = self._parse_result(final_result(), "text")
                 clean_text = self.remove_consecutive_duplicates(text).strip()
+                if not clean_text and stop_event is not None and stop_event.is_set():
+                    # An externally stopped Vosk session can retain useful
+                    # decoder state only in its last partial. The explicit
+                    # endpoint promotes that state to a final event so callers
+                    # never have to execute a partial command.
+                    clean_text = last_partial
                 if clean_text and clean_text != last_final:
-                    yield RecognitionResult(clean_text, is_final=True)
+                    yield RecognitionResult(
+                        clean_text,
+                        is_final=True,
+                        frame_energy=last_frame_energy,
+                    )
         except SpeechRecognitionError:
             raise
         except Exception as exc:

@@ -5,15 +5,13 @@
 Helios uses a model-free detector with two inputs. Raw microphone frames are
 classified by normalized RMS energy, and a signal must remain above the
 configured threshold for a minimum duration before it becomes a candidate.
-An integration that already has Vosk results may instead submit a non-empty
-partial or final `RecognitionResult`; recognized speech is a stronger signal
-than energy alone and becomes a candidate immediately. Because the existing
-`listen_events()` boundary does not attach PCM energy, the event path uses a
-configurable nominal energy when none is supplied. It still consults the echo
-policy on every non-empty event. Integrations that retain the corresponding PCM
-frame should pass its measured energy explicitly for a better-informed veto.
-The detector is one-shot during each playback interval and must be rearmed with
-`reset()`.
+The production Vosk path emits each non-empty partial or final
+`RecognitionResult` with the normalized RMS energy of its corresponding PCM
+frame. Recognized speech is a stronger signal than energy alone and becomes a
+candidate immediately, but the echo policy still receives the measured energy
+and can veto it. Legacy injected recognizers that do not expose PCM energy fall
+back to the detector's configurable event-energy value. The detector is
+one-shot during each response interval and must be rearmed with `reset()`.
 
 The defaults match the existing recognizer's 16 kHz, signed 16-bit mono PCM.
 With its current 4,000-sample reads, the default 120 ms duration is satisfied
@@ -23,15 +21,12 @@ adding a neural model, inference runtime, network access, or native package.
 
 Vosk partial events alone are useful but not sufficient for every integration:
 they arrive only after the recognizer has decoded speech, and speaker leakage
-can itself decode as text. The PCM path gives predictable early triggering;
-the event path remains available when an integration already runs Vosk. Its
-nominal energy is necessarily a coarse assumption: setting it too high can
-admit decoded playback echo, while setting it too low can suppress quiet real
-interruptions. A dedicated VAD such as Silero was rejected for the first
-implementation because the synthetic-energy approach is deterministic and adds
-no model asset or runtime cost. It can be reconsidered after hardware
-measurements show that RMS cannot adequately distinguish environmental noise
-from speech.
+can itself decode as text. Attaching PCM RMS to the decoded event lets one
+continuous Vosk session provide both signals without opening a second capture
+stream. A dedicated VAD such as Silero was rejected for the first implementation
+because the synthetic-energy approach is deterministic and adds no model asset
+or runtime cost. It can be reconsidered after hardware measurements show that
+RMS cannot adequately distinguish environmental noise from speech.
 
 ## Self-hearing mitigation
 
@@ -73,18 +68,85 @@ are constructor arguments so hardware tuning does not require detector changes.
 
 `VoiceAssistant` implements that contract only when
 `HELIOS_BARGE_IN_ENABLED=true`. It submits the response path to its existing
-injectable executor and consumes bounded 250 ms `listen_events()` slices on the
-coordinating thread while `PiperTTS.is_speaking` is true. A detection calls both
-`PiperTTS.interrupt()` and `APIClient.cancel_current()`, waits for the cancelled
-worker to unwind, then treats the finalized utterance as an authorized immediate
-follow-up. The follow-up does not require the wake word, and its response is
+injectable conversation executor and opens one continuous `listen_events()`
+microphone/Vosk session while the response is being generated and spoken. The
+capture stays open during model thinking, but detection is deliberately armed
+only during actual playback and a 250 ms echo tail; background speech before
+Helios makes sound cannot cancel generation. This preserves Vosk decoder state
+across the whole overlap instead of repeatedly reopening 250 ms capture slices.
+A detection calls both `PiperTTS.interrupt()` and
+`APIClient.cancel_current()`. The same recognizer session then continues until
+Vosk emits or flushes the finalized interruption utterance. After the cancelled
+response worker unwinds, that finalized utterance becomes an authorized
+immediate follow-up. It does not require the wake word, and its response is
 monitored in the same way so more than one consecutive interruption is possible.
 Returning to the idle listening loop restores the normal wake-word requirement.
+The post-detection timeout is an inactivity deadline refreshed by each decoded
+event, so a long utterance is not cut off a fixed number of seconds after its
+first partial.
 
 Piper playback is split into 100 ms writes. This lets an interrupt be observed
 between writes while retaining and reusing the same `sounddevice` stream. The
 200-300 ms stop target is therefore plausible from the playback side but remains
-a target-device measurement, not a scheduling guarantee.
+a target-device measurement, not a scheduling guarantee. A speech-operation
+event is registered before Piper synthesis begins, so cancellation during
+synthesis prevents the completed WAV from starting. Closing Piper sets a
+terminal state, interrupts and drains synthesis/playback, clears the cue cache,
+and only then closes the backend.
+
+Notification sound and RAG preparation retain their original single-worker
+serial executor. Conversation responses and backchannels use a separate
+two-worker injectable lane, preventing a model worker from starving its cue.
+A supplied conversation executor with a known capacity below two workers is
+rejected when barge-in is enabled. Assistant-owned tasks are tracked and drained
+at shutdown even when the executor itself belongs to the caller.
+
+The conservative gate is deployment-tunable without code changes:
+
+| Environment variable | Default | Meaning |
+|---|---:|---|
+| `HELIOS_BARGE_IN_EVENT_ENERGY` | `0.08` | Fallback energy for legacy recognition events without PCM RMS |
+| `HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY` | `0.04` | Calibrated microphone RMS of ordinary Piper leakage |
+| `HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY` | `0.06` | Absolute floor for admitting an interruption |
+
+## Conversational pacing and time to first audio
+
+`SpeechChunker` already committed streamed output at a natural boundary: `.`,
+`!`, `?`, `;`, or `:`, with an 80-character soft whitespace boundary for the
+bundled talk profile when punctuation is late. It neither waited for a complete
+response nor emitted lone words, so this granularity was preserved.
+
+When barge-in mode is enabled, Helios also schedules one short phrase from the
+active language profile after `HELIOS_BACKCHANNEL_DELAY_SECONDS` (default
+`0.7`). Italian rotates through `Certo.`, `Un momento.`, and `Vediamo.`;
+English rotates through `Sure.`, `One moment.`, and `Let's see.`. Piper
+pre-synthesizes these WAVs once after the welcome message, and startup waits for
+that preparation before accepting the first command. The latency-sensitive path
+only plays a verified in-memory WAV and never synthesizes a cue on demand. The
+delay is measured from session construction rather than worker-dispatch time.
+If the first real fragment is ready first, the queued cue is cancelled. If a cue
+is already playing, a session-owned cancellation event stops and fully joins it
+immediately before dispatching real speech, so the two cannot overlap or queue
+back-to-back. A legacy TTS backend without scoped cancellation skips cues rather
+than risking interruption of unrelated playback. Partial or failed preparation
+rotates only through phrases verified as cached; no ready cue degrades to silence
+and never blocks a valid answer.
+
+The model-free timed-stream harness used a fake local provider whose first
+complete sentence arrived at either 250 ms (representative fast stream) or
+1,200 ms (representative slow stream). Times are medians of three wall-clock
+runs on the development host and measure dispatch to a fake first audio frame;
+they exclude Piper synthesis, device buffering, and Jetson scheduling:
+
+| Scripted case | Baseline first real audio | Post-change perceived first audio | Post-change first real audio |
+|---|---:|---:|---:|
+| Fast sentence at 250 ms | 251 ms | 251 ms; no cue | 251 ms |
+| Slow sentence at 1,200 ms | 1,201 ms | 709 ms cached cue | 1,201 ms |
+
+The change deliberately does not pretend to make the model faster: real-answer
+latency is unchanged. It removes roughly 492 ms of perceived silence in the
+slow scripted case while leaving the fast case untouched. Production Piper
+frame latency and the threshold still require target-device measurement.
 
 ## Streaming cancellation and budget settlement
 
@@ -99,9 +161,12 @@ all three behaviors.
 
 ## Deployment status
 
-Barge-in defaults off. Before enabling it on a vehicle, calibrate expected echo
-energy with the production enclosure, microphone, speaker level, and Piper voice,
-then measure interruption latency and self-trigger rate. The Vosk-event path uses
-a nominal energy because the current recognizer event does not carry PCM RMS;
-deployments needing stronger echo discrimination should feed synchronized PCM
-energy into the detector or add hardware/software AEC ahead of it.
+Barge-in and conversational cues default off together. Before enabling them on a
+vehicle, calibrate expected echo energy with the production enclosure,
+microphone, speaker level, and Piper voice, then measure interruption latency,
+self-trigger rate, cue timing, Piper synthesis time, and actual first audio on
+the Jetson. Silence endpointing remains intentionally unchanged and optional;
+the existing 6.5-second recognition timeout is backward compatible, while the
+full-duplex work removes repeated capture setup and addresses interruption
+without making an unvalidated endpointing policy the default. Hardware or
+software AEC can later feed cleaner PCM into the same detector interface.

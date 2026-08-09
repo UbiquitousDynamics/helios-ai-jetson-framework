@@ -504,6 +504,8 @@ class LLMSettings:
     denylist: tuple[str, ...] = ()
     unknown_connectivity: str = "prefer_local"
     privacy: LLMPrivacySettings = field(default_factory=LLMPrivacySettings)
+    context_idle_timeout_seconds: float = 900.0
+    context_max_turns: int = 20
     timeouts: LLMTimeoutSettings = field(default_factory=LLMTimeoutSettings)
     health: LLMHealthSettings = field(default_factory=LLMHealthSettings)
     budget: LLMBudgetSettings = field(default_factory=LLMBudgetSettings)
@@ -525,6 +527,19 @@ class LLMSettings:
             raise ConfigurationError(
                 f"Unsupported unknown-connectivity policy: {self.unknown_connectivity!r}"
             )
+        if (
+            isinstance(self.context_idle_timeout_seconds, bool)
+            or not isinstance(self.context_idle_timeout_seconds, (int, float))
+            or not math.isfinite(float(self.context_idle_timeout_seconds))
+            or self.context_idle_timeout_seconds <= 0
+        ):
+            raise ConfigurationError("LLM remote-context idle timeout must be positive and finite")
+        if (
+            isinstance(self.context_max_turns, bool)
+            or not isinstance(self.context_max_turns, int)
+            or self.context_max_turns < 1
+        ):
+            raise ConfigurationError("LLM remote-context turn cap must be a positive integer")
         if len(set(self.allowlist)) != len(self.allowlist):
             raise ConfigurationError("provider allowlist entries must be unique")
         if len(set(self.denylist)) != len(self.denylist):
@@ -578,6 +593,7 @@ class LanguageProfile:
     presentation_answers: tuple[str, str, str]
     talk_model: str
     welcome_message: str
+    backchannel_phrases: tuple[str, ...]
     rag_result_prefix: str
     model_error_message: str
 
@@ -611,6 +627,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
                 "Hi! I just woke up and I'm ready to help. Just remember to call "
                 "me '{wake_word}' when you talk to me."
             ),
+            backchannel_phrases=("Sure.", "One moment.", "Let's see."),
             rag_result_prefix="Here's what I found: ",
             model_error_message="I could not contact the language model.",
         ),
@@ -635,6 +652,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
                 "Ciao! Mi sono appena svegliata e sono pronta ad aiutarti. "
                 "Ricordati solo di chiamarmi '{wake_word}' quando mi parli."
             ),
+            backchannel_phrases=("Certo.", "Un momento.", "Vediamo."),
             rag_result_prefix="Ecco cosa ho trovato: ",
             model_error_message="Non riesco a contattare il modello linguistico.",
         ),
@@ -1558,6 +1576,20 @@ def _llm_from_env(
         remote_enabled=remote_enabled,
         emergency_local_only=emergency,
         privacy=privacy,
+        context_idle_timeout_seconds=_float_from_env(
+            environ.get(
+                "HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS",
+                str(base.context_idle_timeout_seconds),
+            ),
+            "HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS",
+        ),
+        context_max_turns=_int_from_env(
+            environ.get(
+                "HELIOS_LLM_CONTEXT_MAX_TURNS",
+                str(base.context_max_turns),
+            ),
+            "HELIOS_LLM_CONTEXT_MAX_TURNS",
+        ),
         budget=budget,
         observability=observability,
     )
@@ -1576,6 +1608,10 @@ class Settings:
     name: str = "emilia"
     listen_timeout: float = 6.5
     barge_in_enabled: bool = False
+    barge_in_event_energy: float = 0.08
+    barge_in_expected_echo_energy: float = 0.04
+    barge_in_minimum_interrupt_energy: float = 0.06
+    backchannel_delay_seconds: float = 0.7
     log_level: int = logging.INFO
     log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     log_file_name: str | None = "app.log"
@@ -1596,6 +1632,25 @@ class Settings:
             )
         if self.listen_timeout <= 0:
             raise ConfigurationError("listen_timeout must be greater than zero")
+        for name, value in (
+            ("barge_in_event_energy", self.barge_in_event_energy),
+            ("barge_in_expected_echo_energy", self.barge_in_expected_echo_energy),
+            ("barge_in_minimum_interrupt_energy", self.barge_in_minimum_interrupt_energy),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0 <= float(value) <= 1
+            ):
+                raise ConfigurationError(f"{name} must be finite and between zero and one")
+        if (
+            isinstance(self.backchannel_delay_seconds, bool)
+            or not isinstance(self.backchannel_delay_seconds, (int, float))
+            or not math.isfinite(float(self.backchannel_delay_seconds))
+            or self.backchannel_delay_seconds <= 0
+        ):
+            raise ConfigurationError("backchannel_delay_seconds must be positive")
         if self.top_k < 1:
             raise ConfigurationError("top_k must be at least one")
 
@@ -1662,6 +1717,22 @@ class Settings:
             barge_in_enabled=_bool_from_env(
                 env.get("HELIOS_BARGE_IN_ENABLED", "false"),
                 "HELIOS_BARGE_IN_ENABLED",
+            ),
+            barge_in_event_energy=_float_from_env(
+                env.get("HELIOS_BARGE_IN_EVENT_ENERGY", "0.08"),
+                "HELIOS_BARGE_IN_EVENT_ENERGY",
+            ),
+            barge_in_expected_echo_energy=_float_from_env(
+                env.get("HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY", "0.04"),
+                "HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY",
+            ),
+            barge_in_minimum_interrupt_energy=_float_from_env(
+                env.get("HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY", "0.06"),
+                "HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY",
+            ),
+            backchannel_delay_seconds=_float_from_env(
+                env.get("HELIOS_BACKCHANNEL_DELAY_SECONDS", "0.7"),
+                "HELIOS_BACKCHANNEL_DELAY_SECONDS",
             ),
             log_level=_log_level_from_env(env.get("HELIOS_LOG_LEVEL", "INFO")),
             log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
