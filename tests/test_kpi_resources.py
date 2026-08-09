@@ -202,6 +202,47 @@ def test_collector_retries_without_count_when_initial_command_times_out_without_
     assert snapshot.power_mw == pytest.approx(3100.0)
 
 
+def test_collector_reads_jetson_nano_gpu_clock_and_input_power_from_sysfs(
+    tmp_path: Path,
+) -> None:
+    sys_root = tmp_path / "sys"
+    gpu_root = sys_root / "devices" / "57000000.gpu" / "devfreq" / "57000000.gpu"
+    gpu_root.mkdir(parents=True)
+    (gpu_root / "cur_freq").write_text("921600000\n", encoding="ascii")
+    power_root = (
+        sys_root
+        / "bus"
+        / "i2c"
+        / "drivers"
+        / "ina3221x"
+        / "6-0040"
+        / "iio-device0"
+    )
+    power_root.mkdir(parents=True)
+    (power_root / "rail_name_0").write_text("VDD_IN\n", encoding="ascii")
+    (power_root / "in_power0_input").write_text("2875\n", encoding="ascii")
+
+    snapshot = ResourceCollector(
+        disk_path=tmp_path,
+        proc_root=tmp_path / "missing-proc",
+        thermal_root=tmp_path / "missing-thermal",
+        sys_root=sys_root,
+        system="Linux",
+        tegrastats_command=("tegrastats",),
+        runner=lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="GR3D_FREQ 0% GPU@46.5C",
+            stderr="",
+        ),
+        clock=lambda: FIXED_TIME,
+    ).collect()
+
+    assert snapshot.gpu_percent == pytest.approx(0.0)
+    assert snapshot.gpu_frequency_mhz == pytest.approx(921.6)
+    assert snapshot.power_mw == pytest.approx(2875.0)
+
+
 def test_windows_style_fallback_skips_tegrastats_and_returns_disk_only(tmp_path: Path) -> None:
     called = False
 

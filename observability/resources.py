@@ -358,6 +358,7 @@ class ResourceCollector:
         disk_path: str | Path = ".",
         proc_root: str | Path = "/proc",
         thermal_root: str | Path = "/sys/class/thermal",
+        sys_root: str | Path = "/sys",
         system: str | None = None,
         tegrastats_command: Sequence[str] | None = None,
         command_finder: Callable[[str], str | None] = shutil.which,
@@ -379,6 +380,7 @@ class ResourceCollector:
         self.disk_path = Path(disk_path)
         self.proc_root = Path(proc_root)
         self.thermal_root = Path(thermal_root)
+        self.sys_root = Path(sys_root)
         self.system = platform.system() if system is None else str(system)
         self._configured_command = None if tegrastats_command is None else tuple(tegrastats_command)
         self._command_finder = command_finder
@@ -504,6 +506,74 @@ class ResourceCollector:
             return None
         return 100.0 * (total_delta - idle_delta) / total_delta
 
+    @staticmethod
+    def _read_measurement_file(path: Path) -> float | None:
+        try:
+            value = path.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            return None
+        return _measurement(value, minimum=0.0, maximum=1_000_000_000_000.0)
+
+    def _read_gpu_frequency(self) -> float | None:
+        if self.system.lower() != "linux":
+            return None
+        patterns = (
+            "class/devfreq/*gpu*/cur_freq",
+            "devices/*.gpu/devfreq/*/cur_freq",
+            "devices/platform/*.gpu/devfreq/*/cur_freq",
+            "devices/platform/*/*gpu*/devfreq/*/cur_freq",
+        )
+        for pattern in patterns:
+            try:
+                paths = sorted(self.sys_root.glob(pattern))
+            except OSError:
+                continue
+            for path in paths:
+                value = self._read_measurement_file(path)
+                if value is None:
+                    continue
+                # Linux devfreq exposes ``cur_freq`` in hertz.
+                frequency_mhz = value / 1_000_000.0
+                return _finite_number(frequency_mhz, minimum=0.0, maximum=1_000_000.0)
+        return None
+
+    def _read_input_power(self) -> float | None:
+        if self.system.lower() != "linux":
+            return None
+        try:
+            label_paths = sorted(
+                path
+                for pattern in (
+                    "bus/i2c/drivers/ina3221*/**/rail_name_*",
+                    "bus/i2c/drivers/ina3221*/**/in*_label",
+                )
+                for path in self.sys_root.glob(pattern)
+            )
+        except OSError:
+            return None
+        for label_path in label_paths:
+            try:
+                label = label_path.read_text(encoding="ascii").strip().upper()
+            except (OSError, UnicodeError):
+                continue
+            if label not in {"VDD_IN", "VIN_SYS_5V0", "SYS5V"}:
+                continue
+            channel_match = re.search(r"(\d+)$", label_path.name)
+            if channel_match is None:
+                continue
+            channel = channel_match.group(1)
+            direct_power = self._read_measurement_file(
+                label_path.parent / f"in_power{channel}_input"
+            )
+            if direct_power is not None:
+                # The legacy INA3221 IIO driver reports milliwatts.
+                return direct_power
+            voltage_mv = self._read_measurement_file(label_path.parent / f"in{channel}_input")
+            current_ma = self._read_measurement_file(label_path.parent / f"curr{channel}_input")
+            if voltage_mv is not None and current_ma is not None:
+                return voltage_mv * current_ma / 1_000.0
+        return None
+
     def _read_proc_memory(self) -> Mapping[str, int | None]:
         unavailable = {
             "memory_used_bytes": None,
@@ -624,6 +694,14 @@ class ResourceCollector:
             disk_used, disk_total = self._read_disk()
         except Exception:
             disk_used, disk_total = None, None
+        try:
+            gpu_frequency = self._read_gpu_frequency()
+        except Exception:
+            gpu_frequency = None
+        try:
+            input_power = self._read_input_power()
+        except Exception:
+            input_power = None
 
         return replace(
             tegra,
@@ -653,6 +731,10 @@ class ResourceCollector:
             ),
             gpu_temperature_c=(
                 gpu_temperature if gpu_temperature is not None else tegra.gpu_temperature_c
+            ),
+            power_mw=input_power if input_power is not None else tegra.power_mw,
+            gpu_frequency_mhz=(
+                gpu_frequency if gpu_frequency is not None else tegra.gpu_frequency_mhz
             ),
             disk_used_bytes=disk_used,
             disk_total_bytes=disk_total,
