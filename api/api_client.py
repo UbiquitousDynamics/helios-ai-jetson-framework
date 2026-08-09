@@ -15,7 +15,7 @@ import config
 from api.budget import BudgetError, BudgetLedger, BudgetLimits
 from api.catalog import CatalogError, ModelCatalog
 from api.health import HealthTracker
-from api.metrics import SafeMetricsRecorder
+from api.metrics import FanoutMetricSink, MetricEvent, SafeMetricsRecorder, record_safely
 from api.privacy import PrivacyGuard, PrivacyPolicy
 from api.provider_factory import configured_provider_factory
 from api.providers.contracts import (
@@ -36,12 +36,14 @@ from api.routing import (
     NoRouteError,
     ProviderRegistry,
     RoutePlanner,
+    RoutingDecision,
     RoutingPolicy,
 )
 from api.streaming import (
     CancellationController,
     ExecutionTarget,
     SpeechReplayUnsafeError,
+    StreamingFailureContext,
     StreamingResponseCoordinator,
 )
 from api.target_compiler import TargetCompiler
@@ -80,6 +82,7 @@ def _content_safe_jsonl_sink(
     """Return a lazy, daily-pruned sink for the content-free metric schema."""
 
     last_pruned_date = None
+    allowed_fields = set(MetricEvent.__dataclass_fields__) - {"request_id", "attempt_id"}
 
     def parse_timestamp(value: Any) -> datetime:
         if not isinstance(value, str):
@@ -118,6 +121,9 @@ def _content_safe_jsonl_sink(
     def write(payload: Mapping[str, Any]) -> None:
         nonlocal last_pruned_date
         timestamp = parse_timestamp(payload.get("timestamp"))
+        sanitized = {name: payload[name] for name in allowed_fields if name in payload}
+        if not isinstance(sanitized.get("event"), str):
+            raise ValueError("metric event is missing")
         path.parent.mkdir(parents=True, exist_ok=True)
         if last_pruned_date != timestamp.date():
             prune(timestamp)
@@ -125,7 +131,7 @@ def _content_safe_jsonl_sink(
         with path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(
                 json.dumps(
-                    dict(payload),
+                    sanitized,
                     ensure_ascii=True,
                     separators=(",", ":"),
                     sort_keys=True,
@@ -169,6 +175,7 @@ class APIClient:
         metrics: SafeMetricsRecorder | None = None,
         connectivity: (Connectivity | str | Callable[[], Connectivity | str] | None) = None,
         network_monitor: Any | None = None,
+        kpi_settings: config.KPISettings | None = None,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
@@ -179,6 +186,8 @@ class APIClient:
         self.models = {"talk": model_talk, "think": model_think}
         self.language = language.strip().lower()
         self.llm_settings = config.LLM_SETTINGS if llm_settings is None else llm_settings
+        self.kpi_settings = kpi_settings or config.KPISettings()
+        self._kpi_service: Any | None = None
         self._mode_settings_by_name = {
             "talk": self.llm_settings.talk,
             "think": self.llm_settings.think,
@@ -268,19 +277,6 @@ class APIClient:
         )
         self.catalog = model_catalog or self._load_catalog()
         self.budget = budget_ledger or self._load_budget()
-        self._owns_metrics = metrics is None
-        self.metrics = metrics or self._build_metrics()
-        self._coordinator = StreamingResponseCoordinator(
-            self._registry,
-            privacy=self.privacy,
-            health=self.health,
-            budget=self.budget,
-            metrics=self.metrics,
-            require_priced_remote=self.llm_settings.budget.enabled,
-            retry_wait=retry_wait,
-            maximum_retry_delay=max(5.0, retry_wait),
-            sleep=sleep,
-        )
         ollama_remote, ollama_enabled = self._ollama_classification()
         self._execution_targets = TargetCompiler(
             self.llm_settings,
@@ -300,20 +296,60 @@ class APIClient:
             mode: self._compile_route_planner(mode, executions)
             for mode, executions in self._execution_targets.items()
         }
-        if self._network_monitor is not None:
-            set_online_callback = getattr(
-                self._network_monitor,
-                "set_online_callback",
-                None,
-            )
-            if callable(set_online_callback):
-                set_online_callback(self.prepare_remote_async)
-            start_monitor = getattr(self._network_monitor, "start", None)
-            if callable(start_monitor):
-                start_monitor()
+        # Start background KPI resources only after static target compilation
+        # succeeds, then unwind them if later active initialization fails.
+        self._owns_metrics = metrics is None
+        self.metrics = metrics or self._build_metrics()
+        set_runtime_health_provider = getattr(
+            self._kpi_service,
+            "set_runtime_health_provider",
+            None,
+        )
+        if callable(set_runtime_health_provider):
+            try:
+                set_runtime_health_provider(self._runtime_health_snapshot)
+            except Exception:
+                logger.warning("KPI runtime health registration is unavailable")
+        set_health_observer = getattr(self.health, "set_transition_observer", None)
+        if callable(set_health_observer):
+            set_health_observer(self._record_health_transition)
+        self._coordinator = StreamingResponseCoordinator(
+            self._registry,
+            privacy=self.privacy,
+            health=self.health,
+            budget=self.budget,
+            metrics=self.metrics,
+            require_priced_remote=self.llm_settings.budget.enabled,
+            retry_wait=retry_wait,
+            maximum_retry_delay=max(5.0, retry_wait),
+            sleep=sleep,
+            activity_tracker=getattr(self._kpi_service, "activity_tracker", None),
+        )
+        try:
+            if self._network_monitor is not None:
+                set_snapshot_observer = getattr(
+                    self._network_monitor,
+                    "set_snapshot_observer",
+                    None,
+                )
+                if callable(set_snapshot_observer):
+                    set_snapshot_observer(self._record_network_snapshot)
+                set_online_callback = getattr(
+                    self._network_monitor,
+                    "set_online_callback",
+                    None,
+                )
+                if callable(set_online_callback):
+                    set_online_callback(self.prepare_remote_async)
+                start_monitor = getattr(self._network_monitor, "start", None)
+                if callable(start_monitor):
+                    start_monitor()
 
-        if warm_up:
-            self.warm_up()
+            if warm_up:
+                self.warm_up()
+        except Exception:
+            self.close()
+            raise
 
     @property
     def client(self) -> Any:
@@ -418,7 +454,7 @@ class APIClient:
 
     def _build_metrics(self) -> SafeMetricsRecorder:
         settings = self.llm_settings.observability
-        sink = (
+        legacy_sink = (
             _content_safe_jsonl_sink(
                 settings.metrics_path,
                 retention_days=settings.metrics_retention_days,
@@ -426,10 +462,145 @@ class APIClient:
             if settings.metrics_path is not None
             else None
         )
+        if self.kpi_settings.enabled or self.kpi_settings.dashboard_enabled:
+            try:
+                from observability.service import ObservabilityService
+
+                self._kpi_service = ObservabilityService(
+                    self.kpi_settings,
+                    additional_sinks=(
+                        (legacy_sink,)
+                        if legacy_sink is not None and settings.metrics_enabled
+                        else ()
+                    ),
+                )
+                return self._kpi_service.recorder
+            except Exception:
+                logger.warning(
+                    "KPI subsystem could not start; language-model behavior is unchanged"
+                )
+        sink = FanoutMetricSink((legacy_sink,)) if legacy_sink is not None else None
         return SafeMetricsRecorder(
             enabled=settings.metrics_enabled,
             sink=sink,
             asynchronous=sink is not None,
+        )
+
+    @staticmethod
+    def _network_quality_tier(score: float | None, state: str | None = None) -> str:
+        if state == "offline":
+            return "offline"
+        if score is None:
+            return "unknown"
+        if score < 0.25:
+            return "poor"
+        if score < 0.5:
+            return "fair"
+        if score < 0.75:
+            return "good"
+        return "excellent"
+
+    def _record_health_transition(self, previous: Any, current: Any) -> None:
+        provider, separator, model = str(getattr(current, "key", "")).partition("/")
+        record_safely(
+            self.metrics,
+            "provider_health_changed",
+            provider=provider or "unknown",
+            model=model if separator and model else None,
+            previous_circuit_state=getattr(getattr(previous, "status", None), "value", None),
+            circuit_state=getattr(getattr(current, "status", None), "value", None),
+            outcome="transition",
+        )
+
+    def _runtime_health_snapshot(self) -> dict[str, object]:
+        """Read configured circuit state from the in-memory health tracker only."""
+
+        configured: dict[str, dict[str, Any]] = {}
+        for mode, executions in self._execution_targets.items():
+            for execution in executions:
+                route = execution.route
+                target = configured.setdefault(
+                    route.health_key,
+                    {
+                        "provider": route.provider,
+                        "model": route.model,
+                        "locality": "remote" if route.remote else "local",
+                        "enabled": False,
+                        "modes": set(),
+                        "routes": set(),
+                    },
+                )
+                target["enabled"] = bool(target["enabled"] or route.enabled)
+                target["modes"].add(mode)
+                target["routes"].add(route.name)
+
+        providers: list[dict[str, object]] = []
+        for health_key, target in sorted(configured.items()):
+            snapshot = self.health.snapshot(health_key)
+            enabled = bool(target["enabled"])
+            available = enabled and bool(snapshot.available)
+            providers.append(
+                {
+                    "provider": str(target["provider"]),
+                    "model": str(target["model"]),
+                    "locality": str(target["locality"]),
+                    "enabled": enabled,
+                    "available": available,
+                    "circuit_state": snapshot.status.value,
+                    "retry_after_seconds": snapshot.retry_after_seconds,
+                    "consecutive_failures": snapshot.consecutive_failures,
+                    "successes": snapshot.successes,
+                    "failures": snapshot.failures,
+                    "latency_ewma_ms": (
+                        snapshot.latency_ewma_seconds * 1_000
+                        if snapshot.latency_ewma_seconds is not None
+                        else None
+                    ),
+                    "modes": sorted(target["modes"]),
+                    "routes": sorted(target["routes"]),
+                }
+            )
+
+        local_available = any(
+            provider["locality"] == "local" and provider["available"] is True
+            for provider in providers
+        )
+        remote_available = any(
+            provider["locality"] == "remote" and provider["available"] is True
+            for provider in providers
+        )
+        return {
+            "status": "healthy" if local_available or remote_available else "degraded",
+            "local_available": local_available,
+            "remote_available": remote_available,
+            "providers": providers,
+        }
+
+    def _record_network_snapshot(self, previous: Any, current: Any) -> None:
+        state = getattr(getattr(current, "connectivity", None), "value", None)
+        previous_state = getattr(getattr(previous, "connectivity", None), "value", None)
+        score = getattr(current, "quality_score", None)
+        record_safely(
+            self.metrics,
+            ("network_state_changed" if previous_state != state else "network_probe_completed"),
+            network_state=state,
+            network_quality_score=score,
+            network_quality_tier=self._network_quality_tier(score, state),
+            network_reason=getattr(current, "reason", None),
+            interface_available=getattr(current, "interface", None) is not None,
+            interface_kind=getattr(current, "interface_kind", None),
+            probe_success=state == "online",
+            probe_success_ratio=(
+                1.0 - getattr(current, "loss_ratio")
+                if getattr(current, "loss_ratio", None) is not None
+                else None
+            ),
+            dns_ms=getattr(current, "dns_ms", None),
+            tcp_ms=getattr(current, "connect_ms", None),
+            tls_ms=getattr(current, "tls_ms", None),
+            ttfb_ms=getattr(current, "ttfb_ewma_ms", None),
+            goodput_kbps=getattr(current, "goodput_ewma_kbps", None),
+            success=state == "online",
         )
 
     def _ollama_classification(self) -> tuple[bool, bool]:
@@ -452,6 +623,12 @@ class APIClient:
             return self._mode_settings_by_name[mode]
         except KeyError:
             raise ValueError(f"Unknown model mode: {mode!r}") from None
+
+    def _speech_callable(self) -> Callable[[str], Any]:
+        """Prefer timing-aware speech while supporting legacy TTS implementations."""
+
+        speak_with_timing = getattr(self.tts, "speak_with_timing", None)
+        return speak_with_timing if callable(speak_with_timing) else self.tts.speak
 
     def _compile_timeouts(self, mode_settings: config.LLMModeSettings) -> Timeouts:
         values = self.llm_settings.timeouts
@@ -543,6 +720,23 @@ class APIClient:
         *,
         connectivity: Connectivity | str | None,
     ) -> tuple[ExecutionTarget, ...]:
+        planned, _decision, _snapshot, _connectivity = self._plan_detailed(
+            request,
+            connectivity=connectivity,
+        )
+        return planned
+
+    def _plan_detailed(
+        self,
+        request: ChatRequest,
+        *,
+        connectivity: Connectivity | str | None,
+    ) -> tuple[
+        tuple[ExecutionTarget, ...],
+        RoutingDecision,
+        Any | None,
+        Connectivity,
+    ]:
         executions = self._execution_targets[request.mode]
         request_for_planning = request
         privacy_error: ProviderError | None = None
@@ -555,22 +749,56 @@ class APIClient:
         selected_connectivity = (
             self.connectivity if connectivity is None else Connectivity(connectivity)
         )
+        network_snapshot = self.network_snapshot if connectivity is None else None
         policy = RoutingPolicy(self.llm_settings.routing_policy)
+        network_preferred_local = False
         if (
             selected_connectivity is Connectivity.UNKNOWN
             and self.llm_settings.unknown_connectivity == "prefer_local"
             and policy is RoutingPolicy.REMOTE_FIRST
         ):
             policy = RoutingPolicy.LOCAL_FIRST
+            network_preferred_local = True
 
         planner = self._route_planners[request.mode]
         try:
-            routes = planner.plan(
+            decision = planner.plan_detailed(
                 request_for_planning,
                 connectivity=selected_connectivity,
                 policy=policy,
             )
-        except NoRouteError:
+        except NoRouteError as routing_error:
+            rejected_decision = routing_error.decision
+            if rejected_decision is not None:
+                quality_score = getattr(network_snapshot, "quality_score", None)
+                network_values = {
+                    "network_state": selected_connectivity.value,
+                    "network_quality_score": quality_score,
+                    "network_quality_tier": self._network_quality_tier(
+                        quality_score,
+                        selected_connectivity.value,
+                    ),
+                    "network_reason": getattr(network_snapshot, "reason", None),
+                    "network_forced_local": False,
+                }
+                for rejection in rejected_decision.rejections:
+                    record_safely(
+                        self.metrics,
+                        "llm_route_candidate_rejected",
+                        provider=rejection.target.provider,
+                        model=rejection.target.model,
+                        mode=request.mode,
+                        language=request.language,
+                        route=rejection.target.name,
+                        locality="remote" if rejection.target.remote else "local",
+                        model_tier=rejection.target.tier,
+                        route_reason=rejected_decision.reason,
+                        rejection_reason=rejection.reason,
+                        outcome="rejected",
+                        success=False,
+                        complexity_score=rejected_decision.complexity_score,
+                        **network_values,
+                    )
             if privacy_error is not None:
                 raise privacy_error from None
             raise ProviderError(
@@ -581,8 +809,18 @@ class APIClient:
                 transmitted=False,
             ) from None
 
+        if network_preferred_local and decision.targets and not decision.targets[0].remote:
+            decision = RoutingDecision(
+                targets=decision.targets,
+                complexity_score=decision.complexity_score,
+                selected_tier=decision.selected_tier,
+                reason="network.unknown.prefer_local",
+                rejections=decision.rejections,
+                network_forced_local=True,
+            )
+
         by_name = self._execution_by_name[request.mode]
-        planned = tuple(by_name[route.name] for route in routes)
+        planned = tuple(by_name[route.name] for route in decision.targets)
         planned_names = {execution.route.name for execution in planned}
         for execution in executions:
             if execution.route.name in planned_names:
@@ -599,7 +837,7 @@ class APIClient:
                         else None
                     ),
                 )
-        return planned
+        return planned, decision, network_snapshot, selected_connectivity
 
     def warm_up(self, mode: str = "talk") -> None:
         """Explicitly load the local Ollama model; remote warm-up is forbidden."""
@@ -742,6 +980,7 @@ class APIClient:
         connectivity: Connectivity | str | None = None,
         request_options: Mapping[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
+        pipeline_started_at: float | None = None,
     ) -> str:
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
@@ -754,6 +993,89 @@ class APIClient:
                 raise APIClientError("Language-model client is closed")
             self._active_cancellations.append(active_cancellation)
 
+        observed_start = time.monotonic()
+        request_started_at = (
+            float(pipeline_started_at)
+            if isinstance(pipeline_started_at, (int, float))
+            and not isinstance(pipeline_started_at, bool)
+            and 0 <= pipeline_started_at <= observed_start
+            else observed_start
+        )
+        decision: RoutingDecision | None = None
+        network_values: dict[str, Any] = {
+            "network_state": None,
+            "network_quality_score": None,
+            "network_quality_tier": "unknown",
+            "network_reason": None,
+            "network_forced_local": None,
+        }
+        routing_ms: float | None = None
+        terminal_recorded = False
+
+        def record_request_failure(
+            category: ErrorCategory,
+            *,
+            provider: str | None = None,
+            model: str | None = None,
+            speech_committed: bool = False,
+            attempts: int = 0,
+            context: StreamingFailureContext | None = None,
+        ) -> None:
+            nonlocal terminal_recorded
+            if terminal_recorded:
+                return
+            terminal_recorded = True
+            selected = context.target if context is not None else None
+            if selected is None and decision is not None:
+                selected = next(
+                    (
+                        target
+                        for target in decision.targets
+                        if target.provider == provider and (model is None or target.model == model)
+                    ),
+                    decision.targets[0] if decision.targets else None,
+                )
+            observed_attempts = context.attempts if context is not None else attempts
+            retry_count = (
+                context.retry_count if context is not None else max(0, observed_attempts - 1)
+            )
+            record_safely(
+                self.metrics,
+                "llm_request_failed",
+                provider=provider or (selected.provider if selected is not None else "router"),
+                model=model or (selected.model if selected is not None else self.models[mode]),
+                mode=mode,
+                language=self.language,
+                route=selected.name if selected is not None else None,
+                locality=(
+                    "remote"
+                    if selected is not None and selected.remote
+                    else "local"
+                    if selected is not None
+                    else None
+                ),
+                model_tier=selected.tier if selected is not None else None,
+                route_reason=decision.reason if decision is not None else None,
+                outcome="failed",
+                success=False,
+                error_category=category,
+                timeout_category=(category.value if "timeout" in category.value else None),
+                routing_ms=routing_ms,
+                end_to_end_ms=(time.monotonic() - request_started_at) * 1_000,
+                retry_count=retry_count,
+                fallback_count=context.fallback_count if context is not None else 0,
+                fallback_from=context.fallback_from if context is not None else None,
+                fallback_to=context.fallback_to if context is not None else None,
+                fallback_cause=context.fallback_cause if context is not None else None,
+                cancellation_count=1 if category is ErrorCategory.CANCELLED else 0,
+                interruption_count=1 if speech_committed else 0,
+                speech_committed=(
+                    context.speech_committed if context is not None else speech_committed
+                ),
+                streaming=True,
+                **network_values,
+            )
+
         try:
             request = self._request(
                 mode=mode,
@@ -765,7 +1087,60 @@ class APIClient:
                 privacy=privacy,
                 request_options=request_options,
             )
-            executions = self._plan(request, connectivity=connectivity)
+            routing_started_at = time.monotonic()
+            executions, decision, snapshot, selected_connectivity = self._plan_detailed(
+                request,
+                connectivity=connectivity,
+            )
+            routing_ms = (time.monotonic() - routing_started_at) * 1_000
+            quality_score = getattr(snapshot, "quality_score", None)
+            network_values = {
+                "network_state": selected_connectivity.value,
+                "network_quality_score": quality_score,
+                "network_quality_tier": self._network_quality_tier(
+                    quality_score,
+                    selected_connectivity.value,
+                ),
+                "network_reason": getattr(snapshot, "reason", None),
+                "network_forced_local": decision.network_forced_local,
+            }
+            selected_route = executions[0].route
+            record_safely(
+                self.metrics,
+                "llm_route_decided",
+                provider=selected_route.provider,
+                model=selected_route.model,
+                mode=mode,
+                language=self.language,
+                route=selected_route.name,
+                locality="remote" if selected_route.remote else "local",
+                model_tier=selected_route.tier or decision.selected_tier,
+                route_reason=decision.reason,
+                outcome="selected",
+                success=True,
+                complexity_score=decision.complexity_score,
+                routing_ms=routing_ms,
+                estimated_input_tokens=RoutePlanner.estimate_input_tokens(request),
+                **network_values,
+            )
+            for rejection in decision.rejections:
+                record_safely(
+                    self.metrics,
+                    "llm_route_candidate_rejected",
+                    provider=rejection.target.provider,
+                    model=rejection.target.model,
+                    mode=mode,
+                    language=self.language,
+                    route=rejection.target.name,
+                    locality="remote" if rejection.target.remote else "local",
+                    model_tier=rejection.target.tier,
+                    route_reason=decision.reason,
+                    rejection_reason=rejection.reason,
+                    outcome="rejected",
+                    success=False,
+                    complexity_score=decision.complexity_score,
+                    **network_values,
+                )
             logger.info(
                 "Planning %s request with eligible routes in fallback order: %s",
                 mode,
@@ -774,7 +1149,7 @@ class APIClient:
             result = self._coordinator.run(
                 request,
                 executions,
-                speak=self.tts.speak if speak else None,
+                speak=self._speech_callable() if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
                 speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
                 maximum_first_audio_seconds=(
@@ -783,8 +1158,77 @@ class APIClient:
                     else None
                 ),
                 cancellation=active_cancellation,
-                route_reason=self.llm_settings.routing_policy,
+                route_reason=decision.reason,
+                complexity_score=decision.complexity_score,
+                **network_values,
             )
+            request_latency_ms = (time.monotonic() - request_started_at) * 1_000
+            attempt_latency_ms = (
+                result.attempt_latency_seconds * 1_000
+                if result.attempt_latency_seconds is not None
+                else None
+            )
+
+            def request_relative(value: float | None) -> float | None:
+                if value is None or attempt_latency_ms is None:
+                    return None
+                return max(0.0, request_latency_ms - attempt_latency_ms + value * 1_000)
+
+            usage = result.metadata.usage
+            record_safely(
+                self.metrics,
+                "llm_request_succeeded",
+                provider=result.target.provider,
+                model=result.target.model,
+                resolved_model=result.metadata.resolved_model,
+                mode=mode,
+                language=self.language,
+                route=result.target.name,
+                locality="remote" if result.target.remote else "local",
+                model_tier=result.target.tier or decision.selected_tier,
+                route_reason=decision.reason,
+                outcome="succeeded",
+                success=True,
+                routing_ms=routing_ms,
+                inference_ms=(
+                    max(
+                        0.0,
+                        attempt_latency_ms
+                        - result.tts_synthesis_seconds * 1_000
+                        - result.audio_playback_seconds * 1_000,
+                    )
+                    if attempt_latency_ms is not None
+                    else None
+                ),
+                first_token_ms=request_relative(result.first_token_seconds),
+                first_audio_ms=request_relative(result.first_audio_seconds),
+                speech_dispatch_ms=request_relative(result.first_audio_seconds),
+                actual_first_audio_ms=request_relative(result.actual_first_audio_seconds),
+                tts_synthesis_ms=result.tts_synthesis_seconds * 1_000 or None,
+                audio_playback_ms=result.audio_playback_seconds * 1_000 or None,
+                audio_duration_ms=result.audio_duration_seconds * 1_000 or None,
+                end_to_end_ms=request_latency_ms,
+                input_tokens=usage.input_tokens,
+                cached_input_tokens=usage.cached_input_tokens,
+                output_tokens=usage.output_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
+                total_tokens=usage.total_tokens,
+                estimated_input_tokens=RoutePlanner.estimate_input_tokens(request),
+                retry_count=result.retry_count,
+                fallback_count=result.fallback_count,
+                fallback_from=(
+                    executions[result.fallback_count - 1].route.name
+                    if result.fallback_count > 0
+                    else None
+                ),
+                fallback_to=result.target.name if result.fallback_count > 0 else None,
+                fallback_cause=result.fallback_cause,
+                speech_committed=result.first_audio_seconds is not None,
+                streaming=True,
+                complexity_score=decision.complexity_score,
+                **network_values,
+            )
+            terminal_recorded = True
             logger.info(
                 "Completed %s request using route %s "
                 "(provider=%s, requested_model=%s, resolved_model=%s, "
@@ -807,12 +1251,37 @@ class APIClient:
                 ),
             )
             return result.text
-        except SpeechReplayUnsafeError:
+        except SpeechReplayUnsafeError as wrapped:
+            failure_context = getattr(wrapped.error, "streaming_context", None)
+            record_request_failure(
+                wrapped.error.category,
+                provider=wrapped.error.provider,
+                model=wrapped.error.model,
+                speech_committed=True,
+                attempts=wrapped.error.attempts,
+                context=(
+                    failure_context
+                    if isinstance(failure_context, StreamingFailureContext)
+                    else None
+                ),
+            )
             raise APIClientError(
                 "Model stream was interrupted after speech output began; "
                 "the request was not retried"
             ) from None
         except ProviderError as error:
+            failure_context = getattr(error, "streaming_context", None)
+            record_request_failure(
+                error.category,
+                provider=error.provider,
+                model=error.model,
+                attempts=error.attempts,
+                context=(
+                    failure_context
+                    if isinstance(failure_context, StreamingFailureContext)
+                    else None
+                ),
+            )
             attempts = error.attempts
             if attempts > 1:
                 raise APIClientError(
@@ -821,6 +1290,23 @@ class APIClient:
             raise APIClientError(
                 f"Unable to stream a model response ({error.category.value})"
             ) from None
+        except Exception as error:
+            streaming_error = getattr(error, "streaming_error", None)
+            failure_context = getattr(error, "streaming_context", None)
+            if isinstance(streaming_error, ProviderError) and isinstance(
+                failure_context, StreamingFailureContext
+            ):
+                record_request_failure(
+                    streaming_error.category,
+                    provider=streaming_error.provider,
+                    model=streaming_error.model,
+                    speech_committed=True,
+                    attempts=streaming_error.attempts,
+                    context=failure_context,
+                )
+            else:
+                record_request_failure(ErrorCategory.UNKNOWN)
+            raise
         finally:
             with self._cancellation_lock:
                 self._active_cancellations = [
@@ -841,6 +1327,7 @@ class APIClient:
         connectivity: Connectivity | str | None = None,
         request_options: Mapping[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
+        pipeline_started_at: float | None = None,
     ) -> str:
         """Stream a conversational response and speak sentences as they arrive."""
 
@@ -856,6 +1343,7 @@ class APIClient:
             connectivity=connectivity,
             request_options=request_options,
             cancellation=cancellation,
+            pipeline_started_at=pipeline_started_at,
         )
 
     def think(
@@ -871,6 +1359,7 @@ class APIClient:
         connectivity: Connectivity | str | None = None,
         request_options: Mapping[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
+        pipeline_started_at: float | None = None,
     ) -> str:
         """Stream a reasoning response and optionally speak it."""
 
@@ -886,6 +1375,7 @@ class APIClient:
             connectivity=connectivity,
             request_options=request_options,
             cancellation=cancellation,
+            pipeline_started_at=pipeline_started_at,
         )
 
     def cancel_current(self) -> None:
@@ -915,7 +1405,12 @@ class APIClient:
                 self._ollama.close()
         except Exception:
             logger.warning("Unable to close a language-model provider")
-        if self._owns_metrics:
+        if self._kpi_service is not None:
+            try:
+                self._kpi_service.close()
+            except Exception:
+                logger.warning("Unable to close the KPI subsystem")
+        elif self._owns_metrics:
             try:
                 self.metrics.close()
             except Exception:

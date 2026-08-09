@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from api.api_client import APIClient, APIClientError
+from api.metrics import SafeMetricsRecorder
 
 
 class FakeTTS:
@@ -137,16 +138,25 @@ def test_tts_failure_is_not_retried_or_relabeled() -> None:
             raise RuntimeError("speaker failed")
 
     fake = FakeClient([chunk("Ready.", done=True)])
+    metrics = SafeMetricsRecorder()
     client = APIClient(
         client=fake,
         tts=FailingTTS(),
         retry_attempts=3,
         retry_wait=0,
+        metrics=metrics,
     )
 
     with pytest.raises(RuntimeError, match="speaker failed"):
         client.talk("hello")
     assert len(fake.calls) == 1
+    events = metrics.snapshot()
+    terminal = [event for event in events if event.event == "llm_request_failed"]
+    assert len(terminal) == 1
+    assert terminal[0].provider == "ollama"
+    assert terminal[0].speech_committed is True
+    assert terminal[0].retry_count == 0
+    assert [event.event for event in events].count("tts_failed") == 1
 
 
 def test_stream_is_not_retried_after_speech_has_started() -> None:
@@ -173,3 +183,31 @@ def test_stream_is_not_retried_after_speech_has_started() -> None:
         client.talk("hello")
     assert tts.spoken == ["First sentence."]
     assert len(fake.calls) == 1
+
+
+def test_failed_active_initialization_closes_owned_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TrackingMetrics:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        def record(self, event: object) -> object:
+            return event
+
+        def close(self) -> bool:
+            self.closed += 1
+            return True
+
+    tracking = TrackingMetrics()
+    monkeypatch.setattr(APIClient, "_build_metrics", lambda _self: tracking)
+
+    def fail_warm_up(_self: APIClient, _mode: str = "talk") -> None:
+        raise RuntimeError("warm-up failed")
+
+    monkeypatch.setattr(APIClient, "warm_up", fail_warm_up)
+
+    with pytest.raises(RuntimeError, match="warm-up failed"):
+        APIClient(client=FakeClient(), tts=FakeTTS(), warm_up=True)
+
+    assert tracking.closed == 1

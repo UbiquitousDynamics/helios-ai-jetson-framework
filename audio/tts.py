@@ -5,7 +5,10 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 import wave
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -34,6 +37,16 @@ class AudioSynthesisError(TTSError):
 
 class AudioPlaybackError(TTSError):
     """Raised when synthesized audio cannot be played."""
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechTiming:
+    """Content-free timing returned by the production TTS implementation."""
+
+    synthesis_ms: float
+    playback_ms: float
+    audio_duration_ms: float
+    audio_started_at: float
 
 
 class SoundDeviceBackend:
@@ -133,10 +146,12 @@ class PiperTTS:
         *,
         voice: Any | None = None,
         audio_backend: AudioBackend | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.voice_model = Path(voice_model)
         self._voice = voice
         self._audio_backend = audio_backend or SoundDeviceBackend()
+        self._clock = clock
 
     @property
     def voice(self) -> Any:
@@ -200,31 +215,51 @@ class PiperTTS:
         output.seek(0)
         return output
 
-    def _play_wave(self, source: Any) -> None:
+    def _play_wave(self, source: Any) -> tuple[float, float, float]:
         try:
             with wave.open(source, "rb") as wav_file:
                 sample_rate = wav_file.getframerate()
                 channels = wav_file.getnchannels()
                 sample_width = wav_file.getsampwidth()
-                frames = wav_file.readframes(wav_file.getnframes())
+                frame_count = wav_file.getnframes()
+                frames = wav_file.readframes(frame_count)
+            audio_duration_ms = frame_count / sample_rate * 1_000
+            audio_started_at = self._clock()
             self._audio_backend.play(
                 frames,
                 sample_rate,
                 channels,
                 sample_width,
             )
+            playback_ms = (self._clock() - audio_started_at) * 1_000
+            return playback_ms, audio_duration_ms, audio_started_at
         except AudioPlaybackError:
             raise
         except Exception as exc:
             raise AudioPlaybackError("Unable to play synthesized audio") from exc
 
-    def speak(self, text: str) -> None:
+    def speak_with_timing(self, text: str) -> SpeechTiming | None:
+        """Speak text and return content-free synthesis/playback timing."""
+
         if text and text.strip() and not any(character.isalnum() for character in text):
             logger.debug("Skipping punctuation-only speech fragment")
             return
         logger.debug("Synthesizing %s character(s) of speech", len(text))
+        synthesis_started_at = self._clock()
         output = self.synthesize_wave(text)
-        self._play_wave(output)
+        synthesis_ms = (self._clock() - synthesis_started_at) * 1_000
+        playback_ms, audio_duration_ms, audio_started_at = self._play_wave(output)
+        return SpeechTiming(
+            synthesis_ms=synthesis_ms,
+            playback_ms=playback_ms,
+            audio_duration_ms=audio_duration_ms,
+            audio_started_at=audio_started_at,
+        )
+
+    def speak(self, text: str) -> None:
+        """Speak text while retaining the historical ``None`` return value."""
+
+        self.speak_with_timing(text)
 
     def play_audio(self, filename: str | Path) -> None:
         """Play a WAV file while retaining the legacy public method."""

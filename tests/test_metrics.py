@@ -14,6 +14,51 @@ def fixed_clock():
     return datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
 
 
+def test_metric_event_preserves_the_legacy_positional_constructor_order():
+    event = MetricEvent(
+        "attempt.completed",
+        fixed_clock(),
+        "provider",
+        "model",
+        "talk",
+        "it",
+        "auto.local_sufficient",
+        "request-id",
+        "attempt-id",
+        120.0,
+        30.0,
+        80.0,
+        10,
+        2,
+        4,
+        1,
+        17,
+        99,
+        1_000,
+        Decimal("0.001"),
+        ErrorCategory.RATE_LIMITED,
+        2,
+    )
+
+    assert event.route_reason == "auto.local_sufficient"
+    assert event.request_id == "request-id"
+    assert event.latency_ms == 120.0
+    assert event.cost_usd == Decimal("0.001")
+    assert event.error_category is ErrorCategory.RATE_LIMITED
+    assert event.fallback_count == 2
+    assert event.resolved_model is None
+
+
+def test_metric_event_keeps_legacy_null_keys_without_emitting_unused_new_keys():
+    payload = MetricEvent("attempt.started").as_dict()
+
+    assert payload["timestamp"] is None
+    assert payload["provider"] is None
+    assert payload["request_id"] is None
+    assert payload["fallback_count"] == 0
+    assert "resolved_model" not in payload
+
+
 def test_recorder_emits_only_closed_content_free_schema():
     emitted = []
     recorder = SafeMetricsRecorder(sink=emitted.append, clock=fixed_clock)

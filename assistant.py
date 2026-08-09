@@ -14,6 +14,7 @@ from typing import Any
 
 import config
 from api.api_client import APIClient, APIClientError
+from api.metrics import record_safely
 from audio.sound_player import SoundPlaybackError, SoundPlayer
 from audio.tts import PiperTTS, TTSError
 from recognizer.speech_recognizer import (
@@ -54,6 +55,8 @@ class VoiceAssistant:
         sound_executor: Any | None = None,
         choice: Callable[[tuple[str, ...]], str] = random.choice,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+        metrics: Any | None = None,
     ) -> None:
         self.settings = settings
         self.profile = settings.profile
@@ -73,11 +76,14 @@ class VoiceAssistant:
                 tts=self.tts,
                 language=settings.language,
                 llm_settings=settings.llm,
+                kpi_settings=settings.kpi,
+                metrics=metrics,
             )
         else:
             self.api_client = api_client
             if isinstance(api_client, APIClient) and api_client.configured_tts is None:
                 api_client.tts = self.tts
+        self.metrics = metrics if metrics is not None else getattr(self.api_client, "metrics", None)
         self.speech_recognizer = (
             speech_recognizer
             if speech_recognizer is not None
@@ -96,9 +102,48 @@ class VoiceAssistant:
         self._owns_sound_executor = sound_executor is None
         self._choice = choice
         self._sleep = sleep
+        self._clock = clock
         self.state = AssistantState.COMMAND
         self._running = False
         self._closed = False
+
+    def _speak_observed(self, text: str, *, scope: str) -> Any:
+        started_at = self._clock()
+        try:
+            speak_with_timing = getattr(self.tts, "speak_with_timing", None)
+            timing = (
+                speak_with_timing(text) if callable(speak_with_timing) else self.tts.speak(text)
+            )
+        except Exception:
+            record_safely(
+                self.metrics,
+                "tts_failed",
+                resource_scope=scope,
+                outcome="failed",
+                success=False,
+                latency_ms=(self._clock() - started_at) * 1_000,
+            )
+            raise
+        values: dict[str, Any] = {}
+        if timing is not None:
+            for attribute, field in (
+                ("synthesis_ms", "tts_synthesis_ms"),
+                ("playback_ms", "audio_playback_ms"),
+                ("audio_duration_ms", "audio_duration_ms"),
+            ):
+                value = getattr(timing, attribute, None)
+                if value is not None:
+                    values[field] = value
+        record_safely(
+            self.metrics,
+            "tts_completed",
+            resource_scope=scope,
+            outcome="succeeded",
+            success=True,
+            latency_ms=(self._clock() - started_at) * 1_000,
+            **values,
+        )
+        return timing
 
     @staticmethod
     def _contains_phrase(text: str, phrase: str) -> bool:
@@ -153,7 +198,12 @@ class VoiceAssistant:
     def _contains_rag_word(self, command: str) -> bool:
         return self._contains_phrase(command, self.profile.rag_word)
 
-    def process_command(self, command: str) -> str | None:
+    def process_command(
+        self,
+        command: str,
+        *,
+        pipeline_started_at: float | None = None,
+    ) -> str | None:
         if not command:
             logger.warning("No command to process")
             return None
@@ -170,7 +220,7 @@ class VoiceAssistant:
         for question in self.profile.presentation_questions:
             if question in normalized:
                 response = self._choice(self.profile.presentation_answers)
-                self.tts.speak(response)
+                self._speak_observed(response, scope="presentation")
                 return response
 
         think_prompt = self._think_prompt(model_prompt)
@@ -178,8 +228,21 @@ class VoiceAssistant:
             if not think_prompt:
                 logger.info("Ignoring think trigger without a question")
                 return None
+            if isinstance(self.api_client, APIClient):
+                return self.api_client.think(
+                    think_prompt,
+                    context=None,
+                    tts=True,
+                    pipeline_started_at=pipeline_started_at,
+                )
             return self.api_client.think(think_prompt, context=None, tts=True)
 
+        if isinstance(self.api_client, APIClient):
+            return self.api_client.talk(
+                model_prompt,
+                context=None,
+                pipeline_started_at=pipeline_started_at,
+            )
         return self.api_client.talk(model_prompt, context=None)
 
     @staticmethod
@@ -209,6 +272,7 @@ class VoiceAssistant:
     def process_rag_command(self, command: str, searcher: Any | None = None) -> str:
         if not command:
             raise RagCommandError("RAG command cannot be empty")
+        started_at = self._clock()
         try:
             if searcher is not None:
                 result = searcher.run(
@@ -225,12 +289,41 @@ class VoiceAssistant:
             result_text = self._rag_result_text(result).strip()
             if not result_text:
                 raise RagCommandError("The RAG search returned no text")
-            self.tts.speak(self.profile.rag_result_prefix + result_text)
-            return result_text
+            rag_ms = (self._clock() - started_at) * 1_000
+            record_safely(
+                self.metrics,
+                "rag_completed",
+                outcome="succeeded",
+                success=True,
+                rag_ms=rag_ms,
+            )
         except RagCommandError:
+            record_safely(
+                self.metrics,
+                "rag_failed",
+                outcome="failed",
+                success=False,
+                rag_ms=(self._clock() - started_at) * 1_000,
+            )
             raise
         except Exception as exc:
+            record_safely(
+                self.metrics,
+                "rag_failed",
+                outcome="failed",
+                success=False,
+                rag_ms=(self._clock() - started_at) * 1_000,
+            )
             raise RagCommandError("Unable to answer the RAG command") from exc
+
+        try:
+            self._speak_observed(
+                self.profile.rag_result_prefix + result_text,
+                scope="rag",
+            )
+            return result_text
+        except Exception as exc:
+            raise RagCommandError("Unable to present the RAG result") from exc
 
     def _get_rag_searcher(self) -> Any:
         with self._rag_lock:
@@ -290,7 +383,7 @@ class VoiceAssistant:
             add_done_callback(self._log_sound_failure)
         return future
 
-    def _recognize_once(self) -> RecognitionResult | None:
+    def _recognize_once_unobserved(self) -> RecognitionResult | None:
         listen_once = getattr(self.speech_recognizer, "listen_once", None)
         if callable(listen_once):
             result = listen_once(timeout=self.settings.listen_timeout)
@@ -311,6 +404,35 @@ class VoiceAssistant:
                 latest = str(text).strip()
         return RecognitionResult(latest, is_final=True) if latest else None
 
+    def _recognize_once(self) -> RecognitionResult | None:
+        started_at = self._clock()
+        try:
+            result = self._recognize_once_unobserved()
+        except Exception:
+            record_safely(
+                self.metrics,
+                "voice_listen_completed",
+                outcome="failed",
+                success=False,
+                listening_ms=(self._clock() - started_at) * 1_000,
+            )
+            raise
+        elapsed_ms = (self._clock() - started_at) * 1_000
+        if result is None:
+            outcome = "timeout"
+        elif result.is_final and result.text:
+            outcome = "final"
+        else:
+            outcome = "partial"
+        record_safely(
+            self.metrics,
+            "voice_listen_completed",
+            outcome=outcome,
+            success=outcome == "final",
+            listening_ms=elapsed_ms,
+        )
+        return result
+
     def run_once(self) -> bool:
         """Process at most one finalized utterance.
 
@@ -322,6 +444,7 @@ class VoiceAssistant:
         if result is None or not result.text or not result.is_final:
             return False
         command = result.text
+        finalized_at = self._clock()
 
         if self.state is AssistantState.COMMAND:
             if self._contains_rag_word(command):
@@ -329,15 +452,75 @@ class VoiceAssistant:
                 self.prepare_rag_async()
                 self.state = AssistantState.RAG
                 logger.info("Entering RAG mode")
+                record_safely(
+                    self.metrics,
+                    "voice_command_completed",
+                    mode="rag",
+                    outcome="rag_mode_entered",
+                    success=True,
+                    recognized_count=1,
+                    end_to_end_ms=(self._clock() - finalized_at) * 1_000,
+                )
                 return True
             if self.contains_wake_word(command):
-                self.process_command(command)
+                model_prompt = self._without_wake_word(command)
+                selected_mode = "think" if self._think_prompt(model_prompt) is not None else "talk"
+                record_safely(
+                    self.metrics,
+                    "wake_word_detected",
+                    mode=selected_mode,
+                    outcome="detected",
+                    success=True,
+                    wake_word_count=1,
+                )
+                try:
+                    self.process_command(command, pipeline_started_at=finalized_at)
+                except Exception:
+                    record_safely(
+                        self.metrics,
+                        "voice_command_failed",
+                        mode=selected_mode,
+                        outcome="failed",
+                        success=False,
+                        recognized_count=1,
+                        end_to_end_ms=(self._clock() - finalized_at) * 1_000,
+                    )
+                    raise
+                record_safely(
+                    self.metrics,
+                    "voice_command_completed",
+                    mode=selected_mode,
+                    outcome="succeeded",
+                    success=True,
+                    recognized_count=1,
+                    end_to_end_ms=(self._clock() - finalized_at) * 1_000,
+                )
                 return True
             return False
 
         if self.state is AssistantState.RAG:
             try:
                 self.process_rag_command(command)
+                record_safely(
+                    self.metrics,
+                    "voice_command_completed",
+                    mode="rag",
+                    outcome="succeeded",
+                    success=True,
+                    recognized_count=1,
+                    end_to_end_ms=(self._clock() - finalized_at) * 1_000,
+                )
+            except Exception:
+                record_safely(
+                    self.metrics,
+                    "voice_command_failed",
+                    mode="rag",
+                    outcome="failed",
+                    success=False,
+                    recognized_count=1,
+                    end_to_end_ms=(self._clock() - finalized_at) * 1_000,
+                )
+                raise
             finally:
                 self.state = AssistantState.COMMAND
                 self.play_sound_async(str(self.settings.stop_sound))
@@ -353,6 +536,12 @@ class VoiceAssistant:
             raise AssistantRuntimeError("Voice assistant is closed")
 
         logger.info("Starting voice assistant")
+        record_safely(
+            self.metrics,
+            "assistant_started",
+            outcome="started",
+            success=True,
+        )
         self._running = True
         iterations = 0
         recoverable_errors = (
@@ -373,7 +562,10 @@ class VoiceAssistant:
             )
             if callable(prepare_recognizer):
                 prepare_recognizer()
-            self.tts.speak(self.profile.welcome_message.format(wake_word=self.profile.wake_word))
+            self._speak_observed(
+                self.profile.welcome_message.format(wake_word=self.profile.wake_word),
+                scope="welcome",
+            )
             while self._running and (max_iterations is None or iterations < max_iterations):
                 iterations += 1
                 try:
@@ -384,8 +576,21 @@ class VoiceAssistant:
                     self._sleep(1.0)
         except KeyboardInterrupt:
             logger.info("Voice assistant interrupted")
+            record_safely(
+                self.metrics,
+                "voice_interrupted",
+                outcome="cancelled",
+                success=False,
+                interruption_count=1,
+            )
         finally:
             self._running = False
+            record_safely(
+                self.metrics,
+                "assistant_stopped",
+                outcome="stopped",
+                success=True,
+            )
             self.close()
 
     def stop(self) -> None:
@@ -393,6 +598,13 @@ class VoiceAssistant:
         cancel = getattr(self.api_client, "cancel_current", None)
         if callable(cancel):
             cancel()
+        record_safely(
+            self.metrics,
+            "voice_cancelled",
+            outcome="cancelled",
+            success=False,
+            cancellation_count=1,
+        )
 
     def close(self) -> None:
         if self._closed:

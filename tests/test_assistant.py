@@ -7,6 +7,7 @@ import pytest
 
 import config
 from api.api_client import APIClient
+from api.metrics import SafeMetricsRecorder
 from assistant import AssistantState, VoiceAssistant
 from audio.tts import PiperTTS
 from recognizer.speech_recognizer import RecognitionResult
@@ -113,6 +114,7 @@ def make_assistant(
     results: list[RecognitionResult | None],
     *,
     rag: FakeRag | None = None,
+    metrics: SafeMetricsRecorder | None = None,
 ) -> tuple[VoiceAssistant, FakeTTS, FakeAPI, FakeSoundPlayer, FakeRecognizer]:
     tts = FakeTTS()
     api = FakeAPI()
@@ -126,6 +128,7 @@ def make_assistant(
         speech_recognizer=recognizer,
         rag_searcher=rag,
         sound_executor=ImmediateExecutor(),
+        metrics=metrics,
     )
     return assistant, tts, api, sounds, recognizer
 
@@ -205,6 +208,48 @@ def test_rag_state_transition_has_no_startup_warmup_query() -> None:
         str(assistant.settings.wake_sound),
         str(assistant.settings.stop_sound),
     ]
+
+
+def test_successful_rag_retrieval_is_not_reclassified_when_tts_fails() -> None:
+    class FailingTTS(FakeTTS):
+        def speak(self, text: str) -> None:
+            del text
+            raise RuntimeError("audio unavailable")
+
+    metrics = SafeMetricsRecorder()
+    assistant, _tts, _api, _sounds, _recognizer = make_assistant(
+        [],
+        rag=FakeRag(),
+        metrics=metrics,
+    )
+    assistant.tts = FailingTTS()
+
+    with pytest.raises(Exception, match="present the RAG result"):
+        assistant.process_rag_command("query")
+
+    names = [event.event for event in metrics.snapshot()]
+    assert names.count("rag_completed") == 1
+    assert "rag_failed" not in names
+    assert names.count("tts_failed") == 1
+
+
+def test_recognized_command_is_counted_once_without_inventing_stt_latency() -> None:
+    metrics = SafeMetricsRecorder()
+    assistant, _tts, _api, _sounds, _recognizer = make_assistant(
+        [RecognitionResult("Emilia dimmi qualcosa", is_final=True)],
+        metrics=metrics,
+    )
+
+    assert assistant.run_once() is True
+
+    events = metrics.snapshot()
+    listen = next(event for event in events if event.event == "voice_listen_completed")
+    command = next(event for event in events if event.event == "voice_command_completed")
+    assert listen.listening_ms is not None
+    assert listen.stt_ms is None
+    assert listen.recognized_count == 0
+    assert command.recognized_count == 1
+    assert sum(event.recognized_count for event in events) == 1
 
 
 def test_close_releases_services_once() -> None:

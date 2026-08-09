@@ -33,6 +33,10 @@ class Connectivity(str, Enum):
 class NoRouteError(RuntimeError):
     """No provider target satisfies the deterministic eligibility rules."""
 
+    def __init__(self, message: str, *, decision: RoutingDecision | None = None) -> None:
+        super().__init__(message)
+        self.decision = decision
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderTarget:
@@ -48,6 +52,7 @@ class ProviderTarget:
     features: frozenset[str] = frozenset()
     priority: int = 100
     enabled: bool = True
+    tier: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -69,6 +74,10 @@ class ProviderTarget:
             raise ValueError("target remote and enabled flags must be booleans")
         if isinstance(self.priority, bool) or not isinstance(self.priority, int):
             raise ValueError("target priority must be an integer")
+        if self.tier is not None and (
+            not self.tier or len(self.tier) > 64 or re.search(r"[^A-Za-z0-9_.:-]", self.tier)
+        ):
+            raise ValueError("target tier must be a machine-readable label")
         if self.context_window is not None and (
             isinstance(self.context_window, bool)
             or not isinstance(self.context_window, int)
@@ -101,6 +110,26 @@ class _ProviderRegistration:
     factory: Callable[[], ChatProvider]
     owned: bool
     instance: ChatProvider | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RouteRejection:
+    """Content-free explanation for one excluded configured target."""
+
+    target: ProviderTarget
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingDecision:
+    """A route chain plus the low-cardinality facts that produced it."""
+
+    targets: tuple[ProviderTarget, ...]
+    complexity_score: int | None
+    selected_tier: str | None
+    reason: str
+    rejections: tuple[RouteRejection, ...]
+    network_forced_local: bool
 
 
 class ProviderRegistry:
@@ -266,6 +295,23 @@ class RoutePlanner:
         policy: RoutingPolicy | str | None = None,
         complexity_threshold: int | None = None,
     ) -> tuple[ProviderTarget, ...]:
+        return self.plan_detailed(
+            request,
+            connectivity=connectivity,
+            estimated_input_tokens=estimated_input_tokens,
+            policy=policy,
+            complexity_threshold=complexity_threshold,
+        ).targets
+
+    def plan_detailed(
+        self,
+        request: ChatRequest,
+        *,
+        connectivity: Connectivity | str = Connectivity.UNKNOWN,
+        estimated_input_tokens: int | None = None,
+        policy: RoutingPolicy | str | None = None,
+        complexity_threshold: int | None = None,
+    ) -> RoutingDecision:
         selected_policy = self.policy if policy is None else RoutingPolicy(policy)
         connectivity = Connectivity(connectivity)
         input_tokens = (
@@ -277,21 +323,26 @@ class RoutePlanner:
             raise ValueError("estimated_input_tokens must be a non-negative integer")
 
         mode_ranks = self._mode_ranks.get(request.mode)
-        eligible = [
-            (index, target)
-            for index, target in enumerate(self._targets)
-            if self._eligible(
+        eligible: list[tuple[int, ProviderTarget]] = []
+        rejections: list[RouteRejection] = []
+        for index, target in enumerate(self._targets):
+            rejection = self._ineligibility_reason(
                 target,
                 request,
                 connectivity=connectivity,
                 estimated_input_tokens=input_tokens,
             )
-        ]
+            if rejection is None:
+                eligible.append((index, target))
+            else:
+                rejections.append(RouteRejection(target, rejection))
+        eligible_before_tiering = tuple(target for _index, target in eligible)
         adaptive_remotes = [
             pair for pair in eligible if pair[1].remote and pair[1].min_complexity_score is not None
         ]
         local_context = None
         score: int | None = None
+        selected_tier: str | None = None
         if adaptive_remotes or selected_policy is RoutingPolicy.AUTO:
             local_context = max(
                 (
@@ -336,6 +387,12 @@ class RoutePlanner:
                 ),
             )
             tiered_names = {target.name for _, target in adaptive_remotes}
+            selected_tier = selected_pair[1].tier or f"complexity_{selected_floor}"
+            rejections.extend(
+                RouteRejection(target, "adaptive_tier")
+                for _, target in adaptive_remotes
+                if target.name != selected_pair[1].name
+            )
             eligible = [
                 pair
                 for pair in eligible
@@ -360,6 +417,8 @@ class RoutePlanner:
         local = [target for _, target in eligible if not target.remote]
         remote = [target for _, target in eligible if target.remote]
 
+        reason = f"policy.{selected_policy.value}"
+        network_forced_local = False
         if selected_policy is RoutingPolicy.LOCAL_ONLY:
             result = local
         elif selected_policy is RoutingPolicy.REMOTE_ONLY:
@@ -373,6 +432,17 @@ class RoutePlanner:
                 connectivity is Connectivity.UNKNOWN
                 and not self.allow_remote_when_connectivity_unknown
             ):
+                network_rejected = any(
+                    rejection.reason == "network_offline" for rejection in rejections
+                )
+                if remote or network_rejected:
+                    network_forced_local = True
+                    reason = f"network.{connectivity.value}.local"
+                    if remote:
+                        rejections.extend(
+                            RouteRejection(target, f"network_{connectivity.value}")
+                            for target in remote
+                        )
                 remote = []
             if score is None:
                 score = self.complexity_score(
@@ -391,10 +461,50 @@ class RoutePlanner:
                 score >= threshold or not local or request.options.get("resource_offload") is True
             )
             result = remote + local if remote_wanted else local + remote
+            if not network_forced_local:
+                reason = "auto.remote_preferred" if remote_wanted else "auto.local_sufficient"
 
+        network_rejected = any(
+            rejection.reason in {"network_offline", "network_unknown"} for rejection in rejections
+        )
+        if (
+            result
+            and selected_policy is not RoutingPolicy.LOCAL_ONLY
+            and network_rejected
+            and not result[0].remote
+        ):
+            network_forced_local = True
+            reason = f"network.{connectivity.value}.local"
         if not result:
-            raise NoRouteError("no eligible provider target")
-        return tuple(result)
+            raise NoRouteError(
+                "no eligible provider target",
+                decision=RoutingDecision(
+                    targets=(),
+                    complexity_score=score,
+                    selected_tier=selected_tier,
+                    reason=reason,
+                    rejections=tuple(rejections),
+                    network_forced_local=False,
+                ),
+            )
+        result_names = {target.name for target in result}
+        rejected_names = {rejection.target.name for rejection in rejections}
+        for target in eligible_before_tiering:
+            if target.name not in result_names and target.name not in rejected_names:
+                rejections.append(RouteRejection(target, f"policy_{selected_policy.value}"))
+        if selected_tier is None:
+            selected_tier = next(
+                (target.tier for target in result if target.remote and target.tier is not None),
+                None,
+            )
+        return RoutingDecision(
+            targets=tuple(result),
+            complexity_score=score,
+            selected_tier=selected_tier,
+            reason=reason,
+            rejections=tuple(rejections),
+            network_forced_local=network_forced_local,
+        )
 
     def select(self, request: ChatRequest, **kwargs: object) -> ProviderTarget:
         return self.plan(request, **kwargs)[0]
@@ -467,17 +577,39 @@ class RoutePlanner:
         connectivity: Connectivity,
         estimated_input_tokens: int,
     ) -> bool:
-        if not target.enabled or request.mode not in target.modes:
-            return False
+        return (
+            self._ineligibility_reason(
+                target,
+                request,
+                connectivity=connectivity,
+                estimated_input_tokens=estimated_input_tokens,
+            )
+            is None
+        )
+
+    def _ineligibility_reason(
+        self,
+        target: ProviderTarget,
+        request: ChatRequest,
+        *,
+        connectivity: Connectivity,
+        estimated_input_tokens: int,
+    ) -> str | None:
+        if not target.enabled:
+            return "disabled"
+        if request.mode not in target.modes:
+            return "mode"
         mode_ranks = self._mode_ranks.get(request.mode)
         if mode_ranks is not None and target.name not in mode_ranks:
-            return False
-        if self._denied(target) or not self._allowed(target):
-            return False
+            return "candidate_chain"
+        if self._denied(target):
+            return "denylist"
+        if not self._allowed(target):
+            return "allowlist"
         if target.languages and request.language.lower() not in target.languages:
-            return False
+            return "language"
         if not request.required_features.issubset(target.features):
-            return False
+            return "feature"
         requested_output = request.max_output_tokens
         if requested_output is None:
             output_tokens = target.max_output_tokens or 0
@@ -491,15 +623,15 @@ class RoutePlanner:
             target.context_window is not None
             and estimated_input_tokens + output_tokens > target.context_window
         ):
-            return False
+            return "context_window"
         if self.health is not None and not self.health.is_available(target.health_key):
-            return False
+            return "provider_health"
         if target.remote:
             if request.remote_authorized is not True:
-                return False
+                return "privacy"
             if connectivity is Connectivity.OFFLINE:
-                return False
-        return True
+                return "network_offline"
+        return None
 
     def _allowed(self, target: ProviderTarget) -> bool:
         if not self.allowlist:
@@ -515,6 +647,8 @@ __all__ = [
     "NoRouteError",
     "ProviderRegistry",
     "ProviderTarget",
+    "RouteRejection",
     "RoutePlanner",
+    "RoutingDecision",
     "RoutingPolicy",
 ]

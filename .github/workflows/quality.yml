@@ -44,7 +44,7 @@ jobs:
       - name: Compile source
         run: >-
           python -m compileall -q
-          main.py assistant.py config.py api audio document recognizer scripts tests
+          main.py assistant.py config.py api audio document observability recognizer scripts tests
 
       - name: Run unit tests
         run: python -m pytest

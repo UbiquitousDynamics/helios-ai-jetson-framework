@@ -369,14 +369,62 @@ def test_tts_failure_is_preserved_and_never_retried() -> None:
     def fail_speech(_text: str) -> None:
         raise RuntimeError("speaker failed")
 
-    with pytest.raises(RuntimeError, match="speaker failed"):
-        coordinator(provider).run(
+    metrics = SafeMetricsRecorder()
+    with pytest.raises(RuntimeError, match="speaker failed") as captured:
+        coordinator(provider, metrics=metrics).run(
             request(),
             (ExecutionTarget(target("first"), retry_attempts=3),),
             speak=fail_speech,
         )
 
     assert len(provider.calls) == 1
+    context = captured.value.streaming_context
+    assert context.target.name == "first"
+    assert context.attempts == 1
+    assert context.speech_committed is True
+    events = metrics.snapshot()
+    assert [event.event for event in events] == ["llm_attempt_failed", "tts_failed"]
+    assert all(event.speech_committed for event in events)
+
+
+def test_three_route_fallback_reports_the_immediate_hop_and_cause() -> None:
+    first_error = ProviderError(
+        ErrorCategory.CONNECTIVITY,
+        "offline",
+        provider="first",
+        model="model",
+        retryable_same_provider=False,
+    )
+    second_error = ProviderError(
+        ErrorCategory.READ_TIMEOUT,
+        "timed out",
+        provider="second",
+        model="model",
+        retryable_same_provider=False,
+    )
+    first = FakeProvider("first", [first_error])
+    second = FakeProvider("second", [second_error])
+    third = FakeProvider("third", [[TextDelta("Ready."), completion("third")]])
+    metrics = SafeMetricsRecorder()
+
+    result = coordinator(first, second, third, metrics=metrics).run(
+        request(),
+        (
+            ExecutionTarget(target("first")),
+            ExecutionTarget(target("second")),
+            ExecutionTarget(target("third")),
+        ),
+    )
+
+    assert result.target.name == "third"
+    assert result.attempts == 3
+    assert result.retry_count == 0
+    assert result.fallback_count == 2
+    assert result.fallback_cause == ErrorCategory.READ_TIMEOUT.value
+    succeeded = metrics.snapshot()[-1]
+    assert succeeded.fallback_from == "second"
+    assert succeeded.fallback_to == "third"
+    assert succeeded.fallback_cause == ErrorCategory.READ_TIMEOUT.value
 
 
 def test_slow_first_audio_counts_against_future_provider_health() -> None:
@@ -602,9 +650,15 @@ def test_tts_failure_settles_a_remote_reservation_conservatively(
             monthly_usd=Decimal("1"),
         ),
     )
+    metrics = SafeMetricsRecorder()
 
     with pytest.raises(RuntimeError, match="speaker failed"):
-        coordinator(provider, budget=ledger, require_priced_remote=True).run(
+        coordinator(
+            provider,
+            budget=ledger,
+            require_priced_remote=True,
+            metrics=metrics,
+        ).run(
             replace(
                 request(),
                 privacy=PrivacyLevel.REMOTE_ALLOWED,
@@ -623,6 +677,11 @@ def test_tts_failure_settles_a_remote_reservation_conservatively(
     snapshot = ledger.snapshot()
     assert snapshot.outstanding_usd == 0
     assert snapshot.daily_usd > 0
+    attempt = next(event for event in metrics.snapshot() if event.event == "llm_attempt_failed")
+    assert attempt.cost_usd == snapshot.daily_usd
+    assert attempt.estimated_cost_usd is not None
+    assert attempt.estimated_cost_usd >= attempt.cost_usd
+    assert attempt.estimated_output_tokens == 32
 
 
 def test_exhausted_rate_limit_snapshot_cools_down_the_target() -> None:

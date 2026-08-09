@@ -302,6 +302,7 @@ def tls_http_probe(
 
     raw_socket: socket.socket | None = None
     started = clock()
+    stage = "dns"
     try:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         dns_done = clock()
@@ -309,6 +310,7 @@ def tls_http_probe(
             return ProbeResult(False, reason="dns_no_address")
         last_error: OSError | None = None
         connected_at = dns_done
+        stage = "tcp"
         for family, socktype, protocol, _canonical, address in addresses:
             candidate = socket.socket(family, socktype, protocol)
             candidate.settimeout(remaining())
@@ -326,9 +328,11 @@ def tls_http_probe(
 
         context = ssl_context or ssl.create_default_context()
         raw_socket.settimeout(remaining())
+        stage = "tls"
         with context.wrap_socket(raw_socket, server_hostname=host) as secured:
             raw_socket = None
             tls_done = clock()
+            stage = "http"
             method = "GET" if measure_payload else "HEAD"
             range_header = f"Range: bytes=0-{maximum_bytes - 1}\r\n" if measure_payload else ""
             request = (
@@ -379,8 +383,14 @@ def tls_http_probe(
                 bytes_received=received,
                 reason="validated",
             )
-    except (OSError, ssl.SSLError, TimeoutError):
-        return ProbeResult(False, reason="probe_unreachable")
+    except socket.gaierror:
+        return ProbeResult(False, reason="dns_failed")
+    except ssl.SSLError:
+        return ProbeResult(False, reason="tls_failed")
+    except TimeoutError:
+        return ProbeResult(False, reason=f"{stage}_timeout")
+    except OSError:
+        return ProbeResult(False, reason=f"{stage}_failed")
     finally:
         if raw_socket is not None:
             raw_socket.close()
@@ -452,6 +462,9 @@ class ConnectivityMonitor:
         route_watcher_factory: Callable[[Callable[[], None]], Any] | None = (
             LinuxRouteEventWatcher
         ),
+        snapshot_observer: (
+            Callable[[NetworkQualitySnapshot, NetworkQualitySnapshot], None] | None
+        ) = None,
     ) -> None:
         self.settings = settings
         self.inspector = inspector or LinuxNetworkInspector()
@@ -465,6 +478,7 @@ class ConnectivityMonitor:
         self._thread: threading.Thread | None = None
         self._watcher: Any | None = None
         self._online_callback: Callable[[], None] | None = None
+        self._snapshot_observer = snapshot_observer
         self._history: deque[bool] = deque(maxlen=settings.history_size)
         self._snapshot = NetworkQualitySnapshot()
         self._last_goodput_probe_at: float | None = None
@@ -472,6 +486,13 @@ class ConnectivityMonitor:
     def set_online_callback(self, callback: Callable[[], None] | None) -> None:
         with self._lock:
             self._online_callback = callback
+
+    def set_snapshot_observer(
+        self,
+        observer: Callable[[NetworkQualitySnapshot, NetworkQualitySnapshot], None] | None,
+    ) -> None:
+        with self._lock:
+            self._snapshot_observer = observer
 
     def start(self) -> None:
         with self._lock:
@@ -516,6 +537,13 @@ class ConnectivityMonitor:
             return Connectivity.OFFLINE
         if self._clock() - snapshot.observed_at > self.settings.result_max_age_seconds:
             self.trigger()
+            self._publish(
+                replace(
+                    snapshot,
+                    connectivity=Connectivity.OFFLINE,
+                    reason="stale_probe",
+                )
+            )
             return Connectivity.OFFLINE
         return snapshot.connectivity
 
@@ -755,6 +783,13 @@ class ConnectivityMonitor:
                     callback()
                 except Exception:
                     logger.warning("Network-online callback failed", exc_info=True)
+        with self._lock:
+            observer = self._snapshot_observer
+        if observer is not None:
+            try:
+                observer(previous, snapshot)
+            except Exception:
+                logger.warning("Network snapshot observer failed")
         return snapshot
 
     @staticmethod

@@ -76,6 +76,28 @@ class StreamingResult:
     attempts: int
     first_token_seconds: float | None
     first_audio_seconds: float | None
+    actual_first_audio_seconds: float | None = None
+    tts_synthesis_seconds: float = 0.0
+    audio_playback_seconds: float = 0.0
+    audio_duration_seconds: float = 0.0
+    attempt_latency_seconds: float | None = None
+    fallback_count: int = 0
+    retry_count: int = 0
+    fallback_cause: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingFailureContext:
+    """Content-free route accounting attached to a failed streamed request."""
+
+    target: ProviderTarget
+    attempts: int
+    retry_count: int
+    fallback_count: int
+    fallback_from: str | None = None
+    fallback_to: str | None = None
+    fallback_cause: str | None = None
+    speech_committed: bool = False
 
 
 class SpeechReplayUnsafeError(RuntimeError):
@@ -115,7 +137,11 @@ class _AttemptState:
     started_at: float
     first_token_at: float | None = None
     first_audio_at: float | None = None
+    actual_first_audio_at: float | None = None
     speech_committed: bool = False
+    tts_synthesis_seconds: float = 0.0
+    audio_playback_seconds: float = 0.0
+    audio_duration_seconds: float = 0.0
 
 
 class StreamingResponseCoordinator:
@@ -134,6 +160,7 @@ class StreamingResponseCoordinator:
         maximum_retry_delay: float = 5.0,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        activity_tracker: Any | None = None,
     ) -> None:
         if retry_wait < 0 or maximum_retry_delay < 0:
             raise ValueError("retry delays cannot be negative")
@@ -147,6 +174,7 @@ class StreamingResponseCoordinator:
         self.maximum_retry_delay = maximum_retry_delay
         self._sleep = sleep
         self._clock = clock
+        self._activity_tracker = activity_tracker
 
     def run(
         self,
@@ -159,6 +187,12 @@ class StreamingResponseCoordinator:
         maximum_first_audio_seconds: float | None = None,
         cancellation: CancellationToken | None = None,
         route_reason: str | None = None,
+        complexity_score: int | None = None,
+        network_state: str | None = None,
+        network_quality_score: float | None = None,
+        network_quality_tier: str | None = None,
+        network_reason: str | None = None,
+        network_forced_local: bool | None = None,
     ) -> StreamingResult:
         if not targets:
             raise ProviderError(
@@ -175,10 +209,24 @@ class StreamingResponseCoordinator:
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
             raise ValueError("maximum_first_audio_seconds must be positive")
 
+        metric_dimensions = {
+            "complexity_score": complexity_score,
+            "network_state": network_state,
+            "network_quality_score": network_quality_score,
+            "network_quality_tier": network_quality_tier,
+            "network_reason": network_reason,
+            "network_forced_local": network_forced_local,
+        }
+
         last_error: ProviderError | None = None
         total_attempts = 0
+        total_retries = 0
         for fallback_index, execution in enumerate(targets):
             target = execution.route
+            fallback_from = targets[fallback_index - 1].route if fallback_index > 0 else None
+            fallback_cause = (
+                last_error.category.value if fallback_index > 0 and last_error is not None else None
+            )
             routed_request = self._request_for_target(request, execution)
             try:
                 routed_request = self._authorize(routed_request, target)
@@ -187,19 +235,36 @@ class StreamingResponseCoordinator:
                 self._record_failure(
                     execution,
                     error,
+                    request=request,
                     fallback_index=fallback_index,
                     attempt_id=None,
                     state=None,
+                    retry_count=0,
                     route_reason=route_reason,
+                    metric_dimensions=metric_dimensions,
+                    fallback_from=fallback_from,
+                    fallback_cause=fallback_cause,
+                )
+                self._attach_failure_context(
+                    error,
+                    target=target,
+                    attempts=total_attempts,
+                    retry_count=total_retries,
+                    fallback_index=fallback_index,
+                    fallback_from=fallback_from,
+                    fallback_cause=fallback_cause,
                 )
                 continue
 
             for provider_attempt in range(1, execution.retry_attempts + 1):
                 self._raise_if_cancelled(cancellation, target)
                 total_attempts += 1
+                if provider_attempt > 1:
+                    total_retries += 1
                 attempt_id = uuid.uuid4().hex
                 reservation: Reservation | None = None
                 state = _AttemptState(started_at=self._clock())
+                activity_token = self._begin_activity(request, target)
                 try:
                     reservation = self._reserve(
                         execution,
@@ -227,9 +292,17 @@ class StreamingResponseCoordinator:
                         has_fallback=len(targets) > 1,
                         fallback_index=fallback_index,
                         attempt_id=attempt_id,
+                        retry_count=provider_attempt - 1,
+                        fallback_cause=fallback_cause,
+                        fallback_from=fallback_from,
                         route_reason=route_reason,
+                        metric_dimensions=metric_dimensions,
                     )
-                    return replace(result, attempts=total_attempts)
+                    return replace(
+                        result,
+                        attempts=total_attempts,
+                        retry_count=total_retries,
+                    )
                 except _SpeechFailure as wrapped:
                     speech_error = ProviderError(
                         ErrorCategory.UNKNOWN,
@@ -239,8 +312,9 @@ class StreamingResponseCoordinator:
                         retryable_same_provider=False,
                         transmitted=True,
                     )
+                    charged: Decimal | None = None
                     try:
-                        self._settle_failure(
+                        charged = self._settle_failure(
                             reservation,
                             execution,
                             speech_error,
@@ -250,12 +324,65 @@ class StreamingResponseCoordinator:
                         # The outstanding reservation remains a conservative
                         # charge and the original TTS exception stays intact.
                         pass
+                    self._record_failure(
+                        execution,
+                        speech_error,
+                        request=request,
+                        fallback_index=fallback_index,
+                        attempt_id=attempt_id,
+                        state=state,
+                        retry_count=provider_attempt - 1,
+                        route_reason=route_reason,
+                        metric_dimensions=metric_dimensions,
+                        fallback_from=fallback_from,
+                        fallback_cause=fallback_cause,
+                        reservation=reservation,
+                        charged=charged,
+                    )
+                    self._record_metric(
+                        "tts_failed",
+                        provider=target.provider,
+                        model=target.model,
+                        mode=request.mode,
+                        language=request.language,
+                        route=target.name,
+                        locality="remote" if target.remote else "local",
+                        model_tier=target.tier,
+                        route_reason=route_reason,
+                        outcome="failed",
+                        success=False,
+                        latency_ms=(self._clock() - state.started_at) * 1_000,
+                        error_category=ErrorCategory.UNKNOWN,
+                        fallback_count=fallback_index,
+                        fallback_from=(fallback_from.name if fallback_from is not None else None),
+                        fallback_to=target.name if fallback_from is not None else None,
+                        fallback_cause=fallback_cause,
+                        speech_committed=True,
+                        streaming=True,
+                        resource_scope="streaming",
+                        **metric_dimensions,
+                    )
+                    context = self._attach_failure_context(
+                        speech_error,
+                        target=target,
+                        attempts=total_attempts,
+                        retry_count=total_retries,
+                        fallback_index=fallback_index,
+                        fallback_from=fallback_from,
+                        fallback_cause=fallback_cause,
+                        speech_committed=True,
+                    )
+                    try:
+                        wrapped.error.streaming_error = speech_error
+                        wrapped.error.streaming_context = context
+                    except Exception:
+                        pass
                     raise wrapped.error from None
                 except SpeechReplayUnsafeError:
                     raise
                 except ProviderError as error:
                     last_error = error
-                    self._settle_failure(
+                    charged = self._settle_failure(
                         reservation,
                         execution,
                         error,
@@ -269,10 +396,27 @@ class StreamingResponseCoordinator:
                     self._record_failure(
                         execution,
                         error,
+                        request=request,
                         fallback_index=fallback_index,
                         attempt_id=attempt_id,
                         state=state,
+                        retry_count=provider_attempt - 1,
                         route_reason=route_reason,
+                        metric_dimensions=metric_dimensions,
+                        fallback_from=fallback_from,
+                        fallback_cause=fallback_cause,
+                        reservation=reservation,
+                        charged=charged,
+                    )
+                    self._attach_failure_context(
+                        error,
+                        target=target,
+                        attempts=total_attempts,
+                        retry_count=total_retries,
+                        fallback_index=fallback_index,
+                        fallback_from=fallback_from,
+                        fallback_cause=fallback_cause,
+                        speech_committed=state.speech_committed,
                     )
                     if state.speech_committed:
                         raise SpeechReplayUnsafeError(error) from None
@@ -294,7 +438,7 @@ class StreamingResponseCoordinator:
                         retryable_same_provider=False,
                         transmitted=None,
                     )
-                    self._settle_failure(
+                    charged = self._settle_failure(
                         reservation,
                         execution,
                         error,
@@ -305,18 +449,37 @@ class StreamingResponseCoordinator:
                     self._record_failure(
                         execution,
                         error,
+                        request=request,
                         fallback_index=fallback_index,
                         attempt_id=attempt_id,
                         state=state,
+                        retry_count=provider_attempt - 1,
                         route_reason=route_reason,
+                        metric_dimensions=metric_dimensions,
+                        fallback_from=fallback_from,
+                        fallback_cause=fallback_cause,
+                        reservation=reservation,
+                        charged=charged,
+                    )
+                    self._attach_failure_context(
+                        error,
+                        target=target,
+                        attempts=total_attempts,
+                        retry_count=total_retries,
+                        fallback_index=fallback_index,
+                        fallback_from=fallback_from,
+                        fallback_cause=fallback_cause,
+                        speech_committed=state.speech_committed,
                     )
                     if state.speech_committed:
                         raise SpeechReplayUnsafeError(error) from None
                     last_error = error
                     break
+                finally:
+                    self._end_activity(activity_token)
 
         if last_error is not None:
-            last_error.attempts = total_attempts
+            last_error.attempts = max(1, total_attempts)
             raise last_error
         raise ProviderError(
             ErrorCategory.PROVIDER_UNAVAILABLE,
@@ -325,6 +488,30 @@ class StreamingResponseCoordinator:
             model=request.model,
             transmitted=False,
         )
+
+    def _begin_activity(self, request: ChatRequest, target: ProviderTarget) -> object | None:
+        begin = getattr(self._activity_tracker, "begin", None)
+        if not callable(begin):
+            return None
+        try:
+            return begin(
+                mode=request.mode,
+                locality="remote" if target.remote else "local",
+                provider=target.provider,
+                model=target.model,
+                route=target.name,
+            )
+        except Exception:
+            return None
+
+    def _end_activity(self, token: object | None) -> None:
+        end = getattr(self._activity_tracker, "end", None)
+        if not callable(end):
+            return
+        try:
+            end(token)
+        except Exception:
+            return
 
     def _stream_once(
         self,
@@ -355,9 +542,28 @@ class StreamingResponseCoordinator:
             if state.first_audio_at is None:
                 state.first_audio_at = self._clock()
             try:
-                speak(sentence)
+                timing = speak(sentence)
             except Exception as error:
                 raise _SpeechFailure(error) from None
+            if timing is None:
+                return
+            try:
+                synthesis_ms = float(getattr(timing, "synthesis_ms"))
+                playback_ms = float(getattr(timing, "playback_ms"))
+                duration_ms = float(getattr(timing, "audio_duration_ms"))
+                actual_started_at = float(getattr(timing, "audio_started_at"))
+                if not all(
+                    value >= 0
+                    for value in (synthesis_ms, playback_ms, duration_ms, actual_started_at)
+                ):
+                    return
+            except (AttributeError, TypeError, ValueError):
+                return
+            state.tts_synthesis_seconds += synthesis_ms / 1_000
+            state.audio_playback_seconds += playback_ms / 1_000
+            state.audio_duration_seconds += duration_ms / 1_000
+            if state.actual_first_audio_at is None:
+                state.actual_first_audio_at = actual_started_at
 
         iterator: Any = None
         try:
@@ -507,6 +713,13 @@ class StreamingResponseCoordinator:
                 state.started_at,
                 state.first_audio_at,
             ),
+            actual_first_audio_seconds=self._elapsed_seconds(
+                state.started_at,
+                state.actual_first_audio_at,
+            ),
+            tts_synthesis_seconds=state.tts_synthesis_seconds,
+            audio_playback_seconds=state.audio_playback_seconds,
+            audio_duration_seconds=state.audio_duration_seconds,
         )
 
     @staticmethod
@@ -692,7 +905,11 @@ class StreamingResponseCoordinator:
         has_fallback: bool,
         fallback_index: int,
         attempt_id: str,
+        retry_count: int,
+        fallback_cause: str | None,
+        fallback_from: ProviderTarget | None,
         route_reason: str | None,
+        metric_dimensions: Mapping[str, Any],
     ) -> StreamingResult:
         """Validate, settle, and observe one successful provider attempt."""
 
@@ -712,37 +929,63 @@ class StreamingResponseCoordinator:
             has_fallback=has_fallback,
         )
         rate_limits = result.metadata.rate_limits
-        self._record_metric(
-            MetricEvent.from_usage(
-                "llm_attempt_succeeded",
-                result.metadata.usage,
-                provider=execution.route.provider,
-                model=execution.route.model,
-                mode=request.mode,
-                language=request.language,
-                route_reason=route_reason,
-                request_id=result.metadata.request_id,
-                attempt_id=attempt_id,
-                latency_ms=latency * 1_000,
-                first_token_ms=self._elapsed_ms(
-                    state.started_at,
-                    state.first_token_at,
-                ),
-                first_audio_ms=self._elapsed_ms(
-                    state.started_at,
-                    state.first_audio_at,
-                ),
-                remaining_requests=(
-                    rate_limits.remaining_requests if rate_limits is not None else None
-                ),
-                remaining_tokens=(
-                    rate_limits.remaining_tokens if rate_limits is not None else None
-                ),
-                cost_usd=charged,
-                fallback_count=fallback_index,
-            )
+        actual_first_audio_ms = self._elapsed_ms(
+            state.started_at,
+            state.actual_first_audio_at,
         )
-        return result
+        synthesis_ms = state.tts_synthesis_seconds * 1_000
+        playback_ms = state.audio_playback_seconds * 1_000
+        self._record_metric(
+            "llm_attempt_succeeded",
+            usage=result.metadata.usage,
+            provider=execution.route.provider,
+            model=execution.route.model,
+            resolved_model=result.metadata.resolved_model,
+            mode=request.mode,
+            language=request.language,
+            route=execution.route.name,
+            locality="remote" if execution.route.remote else "local",
+            model_tier=execution.route.tier,
+            route_reason=route_reason,
+            outcome="succeeded",
+            success=True,
+            request_id=result.metadata.request_id,
+            attempt_id=attempt_id,
+            latency_ms=latency * 1_000,
+            inference_ms=max(0.0, latency * 1_000 - synthesis_ms - playback_ms),
+            first_token_ms=self._elapsed_ms(state.started_at, state.first_token_at),
+            first_audio_ms=self._elapsed_ms(state.started_at, state.first_audio_at),
+            speech_dispatch_ms=self._elapsed_ms(state.started_at, state.first_audio_at),
+            actual_first_audio_ms=actual_first_audio_ms,
+            tts_synthesis_ms=synthesis_ms or None,
+            audio_playback_ms=playback_ms or None,
+            audio_duration_ms=(state.audio_duration_seconds * 1_000 or None),
+            streaming_lead_ms=(
+                max(0.0, latency * 1_000 - actual_first_audio_ms)
+                if actual_first_audio_ms is not None
+                else None
+            ),
+            remaining_requests=(
+                rate_limits.remaining_requests if rate_limits is not None else None
+            ),
+            remaining_tokens=(rate_limits.remaining_tokens if rate_limits is not None else None),
+            estimated_input_tokens=RoutePlanner.estimate_input_tokens(request),
+            cost_usd=charged,
+            retry_count=retry_count,
+            fallback_count=fallback_index,
+            fallback_from=fallback_from.name if fallback_from is not None else None,
+            fallback_to=execution.route.name if fallback_index > 0 else None,
+            fallback_cause=fallback_cause,
+            speech_committed=state.speech_committed,
+            streaming=True,
+            **metric_dimensions,
+        )
+        return replace(
+            result,
+            attempt_latency_seconds=latency,
+            fallback_count=fallback_index,
+            fallback_cause=fallback_cause,
+        )
 
     def _record_success_health(
         self,
@@ -843,17 +1086,18 @@ class StreamingResponseCoordinator:
         error: ProviderError,
         *,
         speech_committed: bool,
-    ) -> None:
+    ) -> Decimal | None:
         if reservation is None or self.budget is None:
-            return
+            return None
         try:
             if error.transmitted is False:
-                self.budget.settle(
+                settlement = self.budget.settle(
                     reservation.reservation_id,
                     actual_amount_usd=Decimal(0),
                 )
             else:
-                self.budget.settle(reservation.reservation_id)
+                settlement = self.budget.settle(reservation.reservation_id)
+            return settlement.charged_usd
         except (BudgetError, ValueError):
             settlement_error = ProviderError(
                 ErrorCategory.BUDGET_EXHAUSTED,
@@ -871,10 +1115,17 @@ class StreamingResponseCoordinator:
         execution: ExecutionTarget,
         error: ProviderError,
         *,
+        request: ChatRequest,
         fallback_index: int,
         attempt_id: str | None,
         state: _AttemptState | None,
+        retry_count: int,
         route_reason: str | None,
+        metric_dimensions: Mapping[str, Any],
+        fallback_from: ProviderTarget | None = None,
+        fallback_cause: str | None = None,
+        reservation: Reservation | None = None,
+        charged: Decimal | None = None,
     ) -> None:
         latency_ms = None
         first_token_ms = None
@@ -884,26 +1135,88 @@ class StreamingResponseCoordinator:
             first_token_ms = self._elapsed_ms(state.started_at, state.first_token_at)
             first_audio_ms = self._elapsed_ms(state.started_at, state.first_audio_at)
         self._record_metric(
-            MetricEvent(
-                event="llm_attempt_failed",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                mode=next(iter(execution.route.modes)),
-                language=None,
-                route_reason=route_reason,
-                request_id=error.request_id,
-                attempt_id=attempt_id,
-                latency_ms=latency_ms,
-                first_token_ms=first_token_ms,
-                first_audio_ms=first_audio_ms,
-                error_category=error.category,
-                fallback_count=fallback_index,
-            )
+            "llm_attempt_failed",
+            provider=execution.route.provider,
+            model=execution.route.model,
+            mode=request.mode,
+            language=request.language,
+            route=execution.route.name,
+            locality="remote" if execution.route.remote else "local",
+            model_tier=execution.route.tier,
+            route_reason=route_reason,
+            outcome="failed",
+            success=False,
+            request_id=error.request_id,
+            attempt_id=attempt_id,
+            latency_ms=latency_ms,
+            first_token_ms=first_token_ms,
+            first_audio_ms=first_audio_ms,
+            speech_dispatch_ms=first_audio_ms,
+            actual_first_audio_ms=(
+                self._elapsed_ms(state.started_at, state.actual_first_audio_at)
+                if state is not None
+                else None
+            ),
+            tts_synthesis_ms=(state.tts_synthesis_seconds * 1_000 if state is not None else None),
+            audio_playback_ms=(state.audio_playback_seconds * 1_000 if state is not None else None),
+            audio_duration_ms=(state.audio_duration_seconds * 1_000 if state is not None else None),
+            estimated_input_tokens=RoutePlanner.estimate_input_tokens(request),
+            estimated_output_tokens=(
+                request.max_output_tokens
+                or execution.max_output_tokens
+                or execution.route.max_output_tokens
+                or (execution.price.max_output_tokens if execution.price is not None else None)
+            ),
+            cost_usd=charged,
+            estimated_cost_usd=(reservation.reserved_usd if reservation is not None else None),
+            error_category=error.category,
+            timeout_category=(error.category.value if "timeout" in error.category.value else None),
+            retry_count=retry_count,
+            fallback_count=fallback_index,
+            fallback_from=fallback_from.name if fallback_from is not None else None,
+            fallback_to=execution.route.name if fallback_from is not None else None,
+            fallback_cause=fallback_cause,
+            speech_committed=state.speech_committed if state is not None else False,
+            streaming=True,
+            **metric_dimensions,
         )
 
-    def _record_metric(self, event: MetricEvent) -> None:
+    @staticmethod
+    def _attach_failure_context(
+        error: ProviderError,
+        *,
+        target: ProviderTarget,
+        attempts: int,
+        retry_count: int,
+        fallback_index: int,
+        fallback_from: ProviderTarget | None,
+        fallback_cause: str | None,
+        speech_committed: bool = False,
+    ) -> StreamingFailureContext:
+        context = StreamingFailureContext(
+            target=target,
+            attempts=attempts,
+            retry_count=retry_count,
+            fallback_count=fallback_index,
+            fallback_from=fallback_from.name if fallback_from is not None else None,
+            fallback_to=target.name if fallback_from is not None else None,
+            fallback_cause=fallback_cause,
+            speech_committed=speech_committed,
+        )
         try:
-            self.metrics.record(event)
+            error.streaming_context = context
+        except Exception:
+            pass
+        return context
+
+    def _record_metric(self, event: str, *, usage: Any | None = None, **values: Any) -> None:
+        try:
+            metric = (
+                MetricEvent(event=event, **values)
+                if usage is None
+                else MetricEvent.from_usage(event, usage, **values)
+            )
+            self.metrics.record(metric)
         except Exception:
             # Observability must never change routing, speech, or budget behavior.
             return
@@ -930,6 +1243,7 @@ __all__ = [
     "CancellationController",
     "ExecutionTarget",
     "SpeechReplayUnsafeError",
+    "StreamingFailureContext",
     "StreamingResponseCoordinator",
     "StreamingResult",
 ]
