@@ -6,7 +6,7 @@ import math
 import numbers
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable
 
@@ -47,6 +47,7 @@ class _HealthState:
     quota_until: float = 0.0
     auth_blocked: bool = False
     latency_ewma_seconds: float | None = None
+    reported_status: HealthStatus = HealthStatus.AVAILABLE
 
 
 _TRANSIENT_FAILURES = frozenset(
@@ -75,6 +76,7 @@ class HealthTracker:
         maximum_cooldown_seconds: float = 900.0,
         latency_alpha: float = 0.25,
         clock: Callable[[], float] = time.monotonic,
+        transition_observer: Callable[[HealthSnapshot, HealthSnapshot], None] | None = None,
     ) -> None:
         if (
             isinstance(failures_to_open, bool)
@@ -96,24 +98,29 @@ class HealthTracker:
         self._maximum_cooldown_seconds = float(maximum_cooldown_seconds)
         self._latency_alpha = float(latency_alpha)
         self._clock = clock
+        self._transition_observer = transition_observer
         self._states: dict[str, _HealthState] = {}
         self._lock = threading.RLock()
 
+    def set_transition_observer(
+        self,
+        observer: Callable[[HealthSnapshot, HealthSnapshot], None] | None,
+    ) -> None:
+        with self._lock:
+            self._transition_observer = observer
+
     def snapshot(self, key: str) -> HealthSnapshot:
         key = self._validate_key(key)
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None = None
         with self._lock:
-            state = self._states.get(key, _HealthState())
+            state = self._states.get(key)
+            if state is None:
+                return self._snapshot_for(key, _HealthState(), self._now())
             now = self._now()
-            status, retry_after = self._status(state, now)
-            return HealthSnapshot(
-                key=key,
-                status=status,
-                retry_after_seconds=retry_after,
-                consecutive_failures=state.consecutive_failures,
-                successes=state.successes,
-                failures=state.failures,
-                latency_ewma_seconds=state.latency_ewma_seconds,
-            )
+            current = self._snapshot_for(key, state, now)
+            transition = self._reported_transition(state, current)
+        self._notify_transition(transition)
+        return current
 
     def is_available(self, key: str) -> bool:
         return self.snapshot(key).available
@@ -124,8 +131,11 @@ class HealthTracker:
             not self._is_finite_number(latency_seconds) or latency_seconds < 0
         ):
             raise ValueError("latency_seconds must be finite and non-negative")
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None = None
         with self._lock:
             state = self._states.setdefault(key, _HealthState())
+            now = self._now()
+            before = self._snapshot_for(key, state, now)
             state.successes += 1
             state.consecutive_failures = 0
             state.cooldown_until = 0.0
@@ -138,6 +148,9 @@ class HealthTracker:
                     state.latency_ewma_seconds = (
                         alpha * latency_seconds + (1.0 - alpha) * state.latency_ewma_seconds
                     )
+            after = self._snapshot_for(key, state, now)
+            transition = self._reported_transition(state, after, before=before)
+        self._notify_transition(transition)
 
     def record_failure(
         self,
@@ -157,58 +170,145 @@ class HealthTracker:
         self._validate_delay(retry_after_seconds, "retry_after_seconds")
         self._validate_delay(quota_reset_after_seconds, "quota_reset_after_seconds")
 
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None = None
         with self._lock:
             now = self._now()
             state = self._states.setdefault(key, _HealthState())
+            before = self._snapshot_for(key, state, now)
             state.failures += 1
             if retry_after_seconds is not None:
                 state.rate_limited_until = max(state.rate_limited_until, now + retry_after_seconds)
 
             if category in {ErrorCategory.AUTHENTICATION, ErrorCategory.PERMISSION}:
                 state.auth_blocked = True
-                return
-            if category is ErrorCategory.QUOTA_EXHAUSTED:
+            elif category is ErrorCategory.QUOTA_EXHAUSTED:
                 state.quota_until = (
                     now + quota_reset_after_seconds
                     if quota_reset_after_seconds is not None
                     else math.inf
                 )
-                return
-            if category is ErrorCategory.RATE_LIMITED:
+            elif category is ErrorCategory.RATE_LIMITED:
                 delay = (
                     self._cooldown_seconds if retry_after_seconds is None else retry_after_seconds
                 )
                 state.rate_limited_until = max(state.rate_limited_until, now + delay)
-                return
-            if category not in _TRANSIENT_FAILURES:
+            elif category in _TRANSIENT_FAILURES:
+                state.consecutive_failures += 1
+                if (
+                    state.consecutive_failures >= self._failures_to_open
+                    and state.cooldown_until <= now
+                ):
+                    exponent = min(state.open_count, 30)
+                    delay = min(
+                        self._cooldown_seconds * (2**exponent),
+                        self._maximum_cooldown_seconds,
+                    )
+                    if retry_after_seconds is not None:
+                        delay = max(delay, retry_after_seconds)
+                    state.cooldown_until = max(state.cooldown_until, now + delay)
+                    state.open_count += 1
+            after = self._snapshot_for(key, state, now)
+            transition = self._reported_transition(state, after, before=before)
+        self._notify_transition(transition)
+
+    @staticmethod
+    def _reported_transition(
+        state: _HealthState,
+        current: HealthSnapshot,
+        *,
+        before: HealthSnapshot | None = None,
+    ) -> tuple[HealthSnapshot, HealthSnapshot] | None:
+        previous_status = state.reported_status
+        if previous_status is current.status:
+            return None
+        previous = (
+            before
+            if before is not None and before.status is previous_status
+            else replace(
+                current,
+                status=previous_status,
+                retry_after_seconds=None,
+            )
+        )
+        state.reported_status = current.status
+        return previous, current
+
+    def _notify_transition(
+        self,
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None,
+    ) -> None:
+        if transition is None:
+            return
+        with self._lock:
+            observer = self._transition_observer
+        if observer is not None:
+            try:
+                observer(*transition)
+            except Exception:
                 return
 
-            state.consecutive_failures += 1
-            if state.consecutive_failures >= self._failures_to_open and state.cooldown_until <= now:
-                exponent = min(state.open_count, 30)
-                delay = min(
-                    self._cooldown_seconds * (2**exponent),
-                    self._maximum_cooldown_seconds,
-                )
-                if retry_after_seconds is not None:
-                    delay = max(delay, retry_after_seconds)
-                state.cooldown_until = max(state.cooldown_until, now + delay)
-                state.open_count += 1
+    @classmethod
+    def _snapshot_for(
+        cls,
+        key: str,
+        state: _HealthState,
+        now: float,
+    ) -> HealthSnapshot:
+        status, retry_after = cls._status(state, now)
+        return HealthSnapshot(
+            key=key,
+            status=status,
+            retry_after_seconds=retry_after,
+            consecutive_failures=state.consecutive_failures,
+            successes=state.successes,
+            failures=state.failures,
+            latency_ewma_seconds=state.latency_ewma_seconds,
+        )
 
     def reset_authorization(self, key: str) -> None:
         key = self._validate_key(key)
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None = None
         with self._lock:
-            self._states.setdefault(key, _HealthState()).auth_blocked = False
+            state = self._states.setdefault(key, _HealthState())
+            now = self._now()
+            before = self._snapshot_for(key, state, now)
+            state.auth_blocked = False
+            after = self._snapshot_for(key, state, now)
+            transition = self._reported_transition(state, after, before=before)
+        self._notify_transition(transition)
 
     def reset_quota(self, key: str) -> None:
         key = self._validate_key(key)
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None = None
         with self._lock:
-            self._states.setdefault(key, _HealthState()).quota_until = 0.0
+            state = self._states.setdefault(key, _HealthState())
+            now = self._now()
+            before = self._snapshot_for(key, state, now)
+            state.quota_until = 0.0
+            after = self._snapshot_for(key, state, now)
+            transition = self._reported_transition(state, after, before=before)
+        self._notify_transition(transition)
 
     def reset(self, key: str) -> None:
         key = self._validate_key(key)
+        transition: tuple[HealthSnapshot, HealthSnapshot] | None = None
         with self._lock:
-            self._states.pop(key, None)
+            state = self._states.pop(key, None)
+            if state is not None and state.reported_status is not HealthStatus.AVAILABLE:
+                now = self._now()
+                before = self._snapshot_for(key, state, now)
+                after = self._snapshot_for(key, _HealthState(), now)
+                transition = (
+                    before
+                    if before.status is state.reported_status
+                    else replace(
+                        before,
+                        status=state.reported_status,
+                        retry_after_seconds=None,
+                    ),
+                    after,
+                )
+        self._notify_transition(transition)
 
     @staticmethod
     def _validate_key(key: str) -> str:

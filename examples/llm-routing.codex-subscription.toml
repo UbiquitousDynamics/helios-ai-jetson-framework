@@ -87,6 +87,7 @@ internal_retries = 0
 [targets.codex-talk-luna]
 provider = "openai-codex"
 model = "gpt-5.6-luna"
+tier = "luna"
 languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
@@ -97,6 +98,7 @@ options = { reasoning_effort = "none" }
 [targets.codex-talk-terra]
 provider = "openai-codex"
 model = "gpt-5.6-terra"
+tier = "terra"
 languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
@@ -107,6 +109,7 @@ options = { reasoning_effort = "low" }
 [targets.codex-talk-sol]
 provider = "openai-codex"
 model = "gpt-5.6-sol"
+tier = "sol"
 languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
@@ -117,6 +120,7 @@ options = { reasoning_effort = "low" }
 [targets.codex-think-luna]
 provider = "openai-codex"
 model = "gpt-5.6-luna"
+tier = "luna"
 languages = ["it", "en"]
 retry_attempts = 1
 min_complexity_score = 0
@@ -125,6 +129,7 @@ options = { reasoning_effort = "low" }
 [targets.codex-think-terra]
 provider = "openai-codex"
 model = "gpt-5.6-terra"
+tier = "terra"
 languages = ["it", "en"]
 retry_attempts = 1
 min_complexity_score = 3
@@ -133,6 +138,7 @@ options = { reasoning_effort = "medium" }
 [targets.codex-think-sol]
 provider = "openai-codex"
 model = "gpt-5.6-sol"
+tier = "sol"
 languages = ["it", "en"]
 retry_attempts = 1
 min_complexity_score = 5

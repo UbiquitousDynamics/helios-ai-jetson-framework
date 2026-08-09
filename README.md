@@ -64,6 +64,7 @@ integration.
 - [Configuration](#configuration)
 - [Remote inference setup](#remote-inference-setup)
 - [Active settings](#active-settings)
+- [KPI observability and dashboard](#kpi-observability-and-dashboard)
 - [Running and using the assistant](#running-and-using-the-assistant)
 - [Knowledge base and embeddings](#knowledge-base-and-embeddings)
 - [Asset validation and provenance](#asset-validation-and-provenance)
@@ -138,8 +139,8 @@ flowchart LR
     Intro -->|No| LLMRouter{Hybrid LLM router}
     LLMRouter --> Gates{Privacy, network,<br/>health, budget}
     Gates -->|Local route| Ollama[Local Ollama model]
-    Gates -->|API opt-in| Remote[OpenAI-compatible SSE]
-    Gates -->|Subscription opt-in| Codex[Codex app-server]
+    Gates -->|API route| Remote[OpenAI-compatible SSE]
+    Gates -->|Subscription route| Codex[Codex app-server]
     Ollama --> Stream[Normalized text deltas]
     Remote --> Stream
     Codex --> Stream
@@ -300,10 +301,9 @@ classDiagram
 
 ## Hybrid inference and data flow
 
-The default behavior remains fully local. Remote transmission is possible only
-after a valid routing file and an independent environment switch both enable
-it. The same provider-neutral request then travels through a sequence of
-fail-closed checks:
+The repository defaults to the Codex/ChatGPT-subscription profile with
+`remote_first` routing and local Ollama fallback. Remote transmission still
+passes through the same sequence of fail-closed checks:
 
 ```mermaid
 flowchart TD
@@ -615,17 +615,28 @@ process from blocking shutdown indefinitely.
 |-- recognizer/
 |   |-- speech_recognizer.py        Vosk/PyAudio recognition boundary
 |   `-- models/                     Bundled Italian and English Vosk models
+|-- observability/
+|   |-- activity.py                 Local/remote inference activity correlation
+|   |-- service.py                  Optional KPI lifecycle and composition
+|   |-- storage.py                  Versioned SQLite storage and retention
+|   |-- aggregate.py                Bounded summaries, percentiles, and series
+|   |-- resources.py                Cross-platform and Jetson resource sampling
+|   |-- dashboard.py                Local-first read-only HTTP API
+|   `-- static/                     Dependency-free dashboard assets
 |-- scripts/
 |   |-- build_index.py              Explicit RAG index builder
 |   |-- doctor.py                   Environment and asset validator
 |   |-- run_jetson.py               Virtualenv/OpenMP-aware Jetson launcher
 |   |-- network_diagnostics.py      Sanitized route and HTTPS quality report
 |   |-- codex_subscription.py       Device login, status, and model listing
+|   |-- kpi.py                      KPI status, clear, export, and dashboard CLI
+|   |-- benchmark_kpi.py            Synthetic KPI performance benchmark
 |   `-- smoke_tts.py                Manual Piper/audio smoke command
 |-- docs/
 |   |-- HYBRID_LLM_OPERATIONS.md    Security, deployment, live-test checklist
 |   |-- CODEX_SUBSCRIPTION.md       ChatGPT sign-in and Codex operation
 |   |-- ADAPTIVE_REMOTE_ROUTING.md  Complexity tiers and latency tuning
+|   |-- KPI_OBSERVABILITY.md        KPI definitions, dashboard, privacy, operations
 |   `-- NETWORK_CONNECTIVITY_ROUTING.md
 |                                    Network decision and calibration details
 |-- examples/
@@ -683,13 +694,16 @@ console command.
 | SentenceTransformers | Local corpus and query encoding |
 | PyTorch | SentenceTransformer inference backend |
 | NumPy | Matrix storage, validation, normalization, and ranking |
+| SQLite / Python HTTP server | Optional KPI persistence and local dashboard, using only the standard library |
 | Pytest | Model-free unit tests |
 | Ruff | Linting and formatting checks |
 | GitHub Actions | Linux/Windows automated quality checks |
 
-There is no HTTP server or public network API exposed by Helios itself.
-`APIClient` is an in-process Python facade. Provider integrations are outgoing
-clients behind typed contracts.
+No inbound listener starts by default. The optional KPI dashboard exposes only a
+versioned, read-only operational API; it is disabled by default and binds to
+`127.0.0.1` unless explicitly reconfigured. `APIClient` remains an in-process
+facade, and provider integrations remain outgoing clients behind typed
+contracts. The dashboard adds no third-party runtime or frontend dependency.
 
 ### Dependency files
 
@@ -819,6 +833,11 @@ the WAV header as audio samples.
 
 The old public name `Pyttsx3TTS` remains as an alias to `PiperTTS` for
 compatibility. It does not import or use `pyttsx3`.
+
+The public `PiperTTS.speak(text)` method also retains its historical `None`
+return value. KPI instrumentation uses the internal `speak_with_timing(text)`
+path to collect content-free synthesis and playback timing without changing the
+legacy caller contract.
 
 `SoundPlayer` resolves `aplay` only when a cue is requested. Cue playback runs
 on one reusable assistant worker and has a configurable timeout.
@@ -1015,17 +1034,18 @@ empty value to send logs to stderr instead of a file:
 HELIOS_LOG_LEVEL=DEBUG HELIOS_LOG_FILE=- python3 scripts/run_jetson.py
 ```
 
-Optional hybrid routing uses a versioned TOML file:
+Hybrid routing uses a versioned TOML file. These overrides force offline mode:
 
 ```bash
 export HELIOS_LLM_CONFIG=examples/llm-routing.offline.toml
 export HELIOS_LLM_REMOTE_ENABLED=false
 ```
 
-Remote operation is opt-in and fails closed. The repository includes offline,
-free-tier-first, paid-first, and local-first escalation examples. The committed
-catalog is intentionally stale and must be replaced with reviewed current
-provider data. See
+The default is `examples/llm-routing.codex-subscription.toml` with remote
+routing enabled. The repository also includes offline, free-tier-first,
+paid-first, and local-first escalation examples. The committed catalog is
+intentionally stale and must be replaced with reviewed current provider data.
+See
 [`docs/HYBRID_LLM_OPERATIONS.md`](docs/HYBRID_LLM_OPERATIONS.md) for the full
 configuration, credential, privacy, budget, live-test, benchmark, rollout, and
 human-review checklist.
@@ -1052,6 +1072,28 @@ All implemented LLM environment overrides are:
 | `HELIOS_LLM_ZERO_COST_ONLY` | Reject nonzero cost reservations when true |
 | `HELIOS_LLM_METRICS_ENABLED` | Enable content-free metrics |
 | `HELIOS_LLM_LOG_CONTENT` | Reserved; content logging remains disabled |
+
+The broader KPI recorder and dashboard use a separate `HELIOS_KPI_*`
+configuration. Collection and automatic dashboard startup both default to
+`false`; the default database is `logs/helios-kpi.sqlite3`, and the dashboard
+defaults to `127.0.0.1:8765`. The principal switches are:
+
+| Variable | Purpose |
+|---|---|
+| `HELIOS_KPI_ENABLED` | Enable sanitized SQLite KPI collection |
+| `HELIOS_KPI_STORAGE_PATH` | Override the project-rooted SQLite path |
+| `HELIOS_KPI_DASHBOARD_ENABLED` | Start the read-only dashboard with the assistant |
+| `HELIOS_KPI_DASHBOARD_HOST` / `HELIOS_KPI_DASHBOARD_PORT` | Configure the local listener |
+| `HELIOS_KPI_DASHBOARD_ALLOW_LAN` | Explicitly permit a non-loopback bind |
+| `HELIOS_KPI_DASHBOARD_AUTH_TOKEN_ENV` | Name the environment variable holding the required LAN Basic/Bearer token |
+| `HELIOS_KPI_EXPORT_ENABLED` | Enable bounded sanitized JSON/CSV export |
+
+Queue, batch, flush, retention, rollup, size, resource interval, query, and
+export limits are also configurable. The complete list, validation rules, and
+secure defaults are in
+[`docs/KPI_OBSERVABILITY.md`](docs/KPI_OBSERVABILITY.md#configuration). An
+invalid KPI override disables the optional subsystem without changing assistant
+or routing behavior.
 
 `HELIOS_PYTHON` is consumed by `scripts/run_jetson.py` and must point to a
 virtual-environment interpreter. API credentials use the environment-variable
@@ -1146,6 +1188,7 @@ after the remote issue has been reviewed.
 | `ollama_host` | `http://localhost:11434` | Host passed to the Ollama SDK |
 | `think_model` | `qwen3:0.6b` | Model used by `APIClient.think()` |
 | `top_k` | `4` | Number of RAG passages returned and spoken |
+| `kpi` | Disabled, local-only dashboard settings | Optional bounded recorder, SQLite store, resource sampler, and read-only dashboard |
 
 Language profiles select:
 
@@ -1159,6 +1202,81 @@ Language profiles select:
 
 All derived paths use `project_root`; launching from another working directory
 does not redirect model, corpus, sound, index, or log files.
+
+## KPI observability and dashboard
+
+Helios can persist content-free voice, routing, provider, network, and device
+metrics to SQLite and display them in a responsive static dashboard. It uses a
+bounded non-blocking queue and asynchronous batched writes; queue or storage
+failure is isolated from recognition, LLM, RAG, TTS, and playback. No prompt,
+transcript, answer, document content, credential, address, interface name, or
+provider request/attempt ID enters the KPI database, API, or export.
+
+Enable collection and automatic local dashboard startup:
+
+```bash
+export HELIOS_KPI_ENABLED=true
+export HELIOS_KPI_DASHBOARD_ENABLED=true
+python3 scripts/run_jetson.py
+```
+
+Or serve the configured database separately, without running or collecting from
+the assistant:
+
+```bash
+python scripts/kpi.py serve
+```
+
+Open <http://127.0.0.1:8765/> locally. From another computer, keep the listener
+on loopback and forward it through SSH:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 operator@<jetson-address>
+```
+
+Direct LAN binding requires explicit `allow_lan` configuration and a dashboard
+token of at least 24 characters. Browsers can use HTTP Basic authentication with
+username `helios` and that token as the password; API clients can send the same
+token as a Bearer credential. Both schemes protect static assets and API routes.
+The built-in server does not provide TLS, so SSH or a reviewed
+TLS/authenticating reverse proxy is preferred. Storage management is explicit:
+
+```bash
+python scripts/kpi.py status
+python scripts/kpi.py export json --output helios-kpi.json --limit 1000
+python scripts/kpi.py export csv --output helios-kpi.csv --limit 1000
+python scripts/kpi.py clear --yes
+```
+
+The dashboard prefers `actual_first_audio_ms`, the production clock captured
+immediately before the playback-backend call. If that real playback boundary is
+unavailable, it falls back to the historical `first_audio_ms`/
+`speech_dispatch_ms` time to first TTS dispatch. `listening_ms` is recognition-
+call wall time; `stt_ms` remains unavailable unless the STT engine exposes a
+separate compute duration.
+
+On Jetson, resource sampling combines `tegrastats` with read-only sysfs
+fallbacks. GPU frequency can come from devfreq, and input power can come from
+an INA3221 rail named `VDD_IN`, `POM_5V_IN`, `VIN_SYS_5V0`, or `SYS5V` when the
+normal Helios user has permission to read it. A measured `0%` is valid idle GPU
+utilization; `—` means the source is absent, unsupported, or unreadable. Older
+JetPack `tegrastats` versions without `--count` and the Python 3.10.0 query
+parser shipped by early JetPack images are supported. Do not run the assistant
+as root merely to populate an optional dashboard field; grant narrowly scoped
+read access or leave the field unavailable.
+
+Run the content-free synthetic KPI benchmark with:
+
+```bash
+python scripts/benchmark_kpi.py --pretty
+```
+
+It reports record-call percentiles, asynchronous SQLite throughput, raw and
+dashboard-summary query latency, bounded-queue memory/drop behavior, and resource
+sampler overhead as JSON without enforcing machine-dependent thresholds.
+Architecture, all KPI definitions and units, API filters, retention, security,
+Jetson metric availability, and benchmark methodology are documented in
+[`docs/KPI_OBSERVABILITY.md`](docs/KPI_OBSERVABILITY.md).
 
 ## Running and using the assistant
 
@@ -1175,6 +1293,12 @@ interpreter and native OpenMP runtime are selected before Python starts:
 ```bash
 python3 scripts/run_jetson.py
 ```
+
+When `HELIOS_KPI_ENABLED=true`, the same lifecycle owns and cleanly closes the
+background KPI writer and resource sampler. When
+`HELIOS_KPI_DASHBOARD_ENABLED=true`, it also starts the configured read-only
+dashboard. Failure to initialize either optional component is logged without
+preventing the voice assistant from running.
 
 Expected behavior:
 
@@ -1456,8 +1580,13 @@ a rebuild instruction instead of silently returning a potentially unrelated
 passage.
 
 Provider metrics use a closed schema that has no prompt, transcript, retrieved
-passage, response, header, or key field. Do not publish general application
-logs if other operational queries are sensitive.
+passage, response, header, or key field. The KPI SQLite sanitizer additionally
+omits provider request/attempt identifiers, endpoints, interface names, network
+addresses, and arbitrary exception text. Its API and JSON/CSV exports use the
+same allowlist. Only an interface-availability boolean and controlled coarse
+states are eligible. Do not publish general application logs if other
+operational queries are sensitive; logs and the legacy optional LLM JSONL sink
+are separate from the KPI export contract.
 
 ## Testing and development
 
@@ -1493,7 +1622,18 @@ Covered behaviors include:
 - the historical 1,116-row/1,115-chunk mismatch;
 - corpus and model content fingerprints;
 - vector normalization, finite-value checks, and stable ranking;
-- asset paths, companion files, checksums, and manifest safety.
+- asset paths, companion files, checksums, and manifest safety;
+- KPI configuration validation and fail-disabled security defaults;
+- closed-schema sanitization and proof that conversation content and identifiers
+  are not persisted;
+- bounded queue overflow, asynchronous batching, final flush, and sink failure;
+- SQLite migration, retention, size enforcement, concurrent reads/writes,
+  aggregates, percentile correctness, and empty-store behavior;
+- strict dashboard API validation, Basic/Bearer access control, exports, and static
+  assets;
+- machine-readable KPI benchmark schema and invariants without timing thresholds;
+- mocked `tegrastats`, unavailable resource sources, and clean sampler shutdown
+  on cross-platform test hosts.
 
 Install development dependencies:
 
@@ -1506,7 +1646,7 @@ Run the complete local quality suite:
 ```bash
 python -m ruff check .
 python -m ruff format --check .
-python -m compileall -q main.py assistant.py config.py api audio document recognizer scripts tests
+python -m compileall -q main.py assistant.py config.py api audio document observability recognizer scripts tests
 python -m pytest
 python scripts/doctor.py --assets-only --check-hashes
 ```
@@ -1535,7 +1675,7 @@ dispatches:
 - Ruff linting;
 - Ruff format verification;
 - bytecode compilation;
-- all model-free tests;
+- all model-free tests, including KPI storage, resource, and local HTTP tests;
 - one asset hash-validation job.
 
 The workflow installs `requirements-dev.txt`, not the hardware runtime stack.
@@ -1585,9 +1725,10 @@ specific Jetson audio/inference image is correctly provisioned.
   the full timeout.
 - Remote deltas are spoken at sentence boundaries before completion; long
   unpunctuated output uses a configurable soft whitespace boundary.
-- Content-free JSONL metrics use a bounded background queue and are flushed on
-  client shutdown, keeping filesystem writes and daily retention pruning out
-  of the conversational return path.
+- The legacy content-free LLM JSONL sink remains available for compatibility.
+  The optional broader KPI store uses a bounded non-blocking queue, asynchronous
+  SQLite batches, rollups, and shutdown flushing, keeping persistence and
+  retention work out of the conversational return path.
 - Voice requests read cached network quality and perform only a fast passive
   kernel check instead of waiting for an active probe.
 - Notification cues reuse one bounded worker instead of creating a process per
@@ -1631,7 +1772,9 @@ target-device measurements.
 - Explicit microphone and speaker selection are not configurable through a CLI.
 - Notification cues rely on Linux ALSA `aplay`.
 - There is no spoken shutdown command.
-- The active loop is single-session and does not expose a web or remote API.
+- The active voice loop is single-session and exposes no control or conversation
+  API. The optional dashboard is a separate read-only KPI API, disabled by
+  default and local-only unless LAN access and authentication are explicit.
 - There is no persistent conversation memory; separate commands do not
   automatically share names, preferences, or prior dialogue.
 - The first RAG build can be expensive on constrained hardware.
@@ -1664,6 +1807,11 @@ target-device measurements.
 | Codex subscription route is rejected | Run `python scripts/codex_subscription.py status`; Helios accepts only account type `chatgpt`, not `apiKey`. |
 | A configured Codex model fails | Run `python scripts/codex_subscription.py models` and use only exact IDs returned for that account. |
 | Network diagnostic returns nonzero | Inspect its `passive_gate`, `active_quality`, and `decision`; verify route/carrier/IP, TLS reachability, freshness, and quality thresholds. |
+| KPI database stays empty | Set `HELIOS_KPI_ENABLED=true`, restart Helios, execute a request, and inspect `python scripts/kpi.py status`. Invalid KPI settings fail disabled. |
+| KPI dashboard does not start | Set `HELIOS_KPI_DASHBOARD_ENABLED=true`, check whether `127.0.0.1:8765` is available, and inspect the sanitized warning. Use `python scripts/kpi.py serve` to serve the configured store separately. |
+| KPI LAN bind is rejected or returns `401` | Prefer SSH forwarding. Direct LAN use requires explicit allow-LAN and a token of at least 24 characters. In a browser use Basic username `helios` with the token as password; API clients may use Bearer authentication. |
+| Jetson resource cards are blank | Run as the normal service user and check readable `/proc`, thermal sysfs, and `tegrastats` availability. Unsupported fields intentionally remain unavailable and never require root. |
+| KPI export is refused | Set `HELIOS_KPI_EXPORT_ENABLED=true` and keep `--limit` within `HELIOS_KPI_MAX_EXPORT_ROWS`. |
 | Live remote test is skipped | Set `HELIOS_LLM_LIVE=1`, point `HELIOS_LLM_LIVE_CONFIG` to a reviewed configuration whose policy is exactly `remote_only`, and provide its required authentication. |
 | `export` reports “not a valid identifier” | Use `export NAME='value'` with no whitespace around `=`. |
 | Remote routing must be stopped immediately | Set `HELIOS_LLM_EMERGENCY_LOCAL_ONLY=true` and restart Helios. |
@@ -1683,9 +1831,10 @@ target-device measurements.
 
 ### Does Helios AI require internet access?
 
-No for the default local route, once dependencies and models are provisioned.
-Remote LLM routes, initial pip installation, ChatGPT sign-in, Ollama model
-creation, or retrieving missing assets do require connectivity.
+Helios retains an Ollama fallback that works without internet once dependencies
+and models are provisioned. The default Codex route, initial pip installation,
+ChatGPT sign-in, Ollama model creation, and retrieval of missing assets require
+connectivity.
 
 ### Does Helios remember previous conversations?
 

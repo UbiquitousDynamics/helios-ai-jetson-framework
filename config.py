@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import re
+import ipaddress
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
@@ -19,6 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_LLM_CONFIG = Path("examples/llm-routing.codex-subscription.toml")
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +40,123 @@ _LOG_LEVELS = {
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL,
 }
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a dashboard bind host is restricted to this machine."""
+
+    normalized = host.strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+@dataclass(frozen=True)
+class KPISettings:
+    """Optional content-free KPI storage and dashboard configuration."""
+
+    enabled: bool = False
+    storage_path: Path = Path("logs/helios-kpi.sqlite3")
+    queue_size: int = 2_048
+    batch_size: int = 64
+    flush_interval_seconds: float = 0.5
+    raw_retention_days: int = 14
+    rollup_retention_days: int = 90
+    maximum_database_mb: int = 256
+    rollup_interval_seconds: int = 300
+    resource_sample_interval_seconds: float = 5.0
+    dashboard_enabled: bool = False
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8_765
+    dashboard_allow_lan: bool = False
+    dashboard_auth_token_env: str | None = None
+    export_enabled: bool = True
+    maximum_export_rows: int = 10_000
+    maximum_query_days: int = 31
+    maximum_query_points: int = 1_000
+
+    def __post_init__(self) -> None:
+        boolean_values = (
+            self.enabled,
+            self.dashboard_enabled,
+            self.dashboard_allow_lan,
+            self.export_enabled,
+        )
+        if any(not isinstance(value, bool) for value in boolean_values):
+            raise ConfigurationError("KPI switches must be booleans")
+        if not isinstance(self.storage_path, Path):
+            object.__setattr__(self, "storage_path", Path(self.storage_path))
+
+        integer_values = (
+            ("queue_size", self.queue_size),
+            ("batch_size", self.batch_size),
+            ("raw_retention_days", self.raw_retention_days),
+            ("rollup_retention_days", self.rollup_retention_days),
+            ("maximum_database_mb", self.maximum_database_mb),
+            ("rollup_interval_seconds", self.rollup_interval_seconds),
+            ("maximum_export_rows", self.maximum_export_rows),
+            ("maximum_query_days", self.maximum_query_days),
+            ("maximum_query_points", self.maximum_query_points),
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for _name, value in integer_values
+        ):
+            raise ConfigurationError("KPI integer limits must be positive integers")
+        if self.batch_size > self.queue_size:
+            raise ConfigurationError("KPI batch_size cannot exceed queue_size")
+        if self.rollup_retention_days < self.raw_retention_days:
+            raise ConfigurationError(
+                "KPI rollup retention cannot be shorter than raw-event retention"
+            )
+        if self.maximum_export_rows > 100_000:
+            raise ConfigurationError("KPI maximum_export_rows cannot exceed 100000")
+        if self.maximum_query_days > 90:
+            raise ConfigurationError("KPI maximum_query_days cannot exceed 90")
+        if self.maximum_query_points > 1_000:
+            raise ConfigurationError("KPI maximum_query_points cannot exceed 1000")
+        if (
+            isinstance(self.flush_interval_seconds, bool)
+            or not isinstance(self.flush_interval_seconds, (int, float))
+            or not math.isfinite(float(self.flush_interval_seconds))
+            or self.flush_interval_seconds <= 0
+        ):
+            raise ConfigurationError("KPI flush interval must be finite and positive")
+        if (
+            isinstance(self.resource_sample_interval_seconds, bool)
+            or not isinstance(self.resource_sample_interval_seconds, (int, float))
+            or not math.isfinite(float(self.resource_sample_interval_seconds))
+            or self.resource_sample_interval_seconds <= 0
+        ):
+            raise ConfigurationError("KPI resource interval must be finite and positive")
+        if (
+            isinstance(self.dashboard_port, bool)
+            or not isinstance(self.dashboard_port, int)
+            or not 1 <= self.dashboard_port <= 65_535
+        ):
+            raise ConfigurationError("KPI dashboard port must be between 1 and 65535")
+        host = self.dashboard_host.strip()
+        if not host or len(host) > 253 or any(character.isspace() for character in host):
+            raise ConfigurationError("KPI dashboard host is invalid")
+        object.__setattr__(self, "dashboard_host", host)
+        token_env = self.dashboard_auth_token_env
+        if token_env is not None:
+            token_env = token_env.strip()
+            if not _ENV_NAME.fullmatch(token_env):
+                raise ConfigurationError("KPI dashboard auth-token environment name is invalid")
+            object.__setattr__(self, "dashboard_auth_token_env", token_env)
+        if self.dashboard_enabled and not _is_loopback_host(host):
+            if not self.dashboard_allow_lan:
+                raise ConfigurationError(
+                    "non-loopback KPI dashboard binding requires dashboard_allow_lan"
+                )
+            if token_env is None:
+                raise ConfigurationError(
+                    "non-loopback KPI dashboard binding requires authentication"
+                )
 
 
 @dataclass(frozen=True)
@@ -333,10 +452,15 @@ class LLMTargetSettings:
     min_complexity_score: int | None = None
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
+    tier: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.provider:
             raise ConfigurationError("target name and provider are required")
+        if self.tier is not None and (
+            not self.tier or len(self.tier) > 64 or re.search(r"[^A-Za-z0-9_.:-]", self.tier)
+        ):
+            raise ConfigurationError("target tier must be a machine-readable label")
         if not self.model and not self.model_by_language:
             raise ConfigurationError(f"Target {self.name!r} has no model")
         if self.context_window is not None and self.context_window < 1:
@@ -602,6 +726,131 @@ def _bool_from_env(value: str, name: str) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ConfigurationError(f"{name} must be a boolean value")
+
+
+def _int_from_env(value: str, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ConfigurationError(f"{name} must be an integer") from None
+
+
+def _float_from_env(value: str, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ConfigurationError(f"{name} must be a number") from None
+    if not math.isfinite(parsed):
+        raise ConfigurationError(f"{name} must be finite")
+    return parsed
+
+
+def _kpi_from_env(
+    env: Mapping[str, str],
+    *,
+    project_root: Path,
+) -> KPISettings:
+    """Build optional KPI settings without reading the authentication secret."""
+
+    defaults = KPISettings()
+    storage_value = env.get("HELIOS_KPI_STORAGE_PATH", str(defaults.storage_path)).strip()
+    if not storage_value:
+        raise ConfigurationError("HELIOS_KPI_STORAGE_PATH cannot be empty")
+    storage_path = Path(storage_value).expanduser()
+    if not storage_path.is_absolute():
+        storage_path = project_root / storage_path
+
+    token_env = env.get("HELIOS_KPI_DASHBOARD_AUTH_TOKEN_ENV", "").strip() or None
+    return KPISettings(
+        enabled=_bool_from_env(
+            env.get("HELIOS_KPI_ENABLED", str(defaults.enabled)),
+            "HELIOS_KPI_ENABLED",
+        ),
+        storage_path=storage_path.resolve(),
+        queue_size=_int_from_env(
+            env.get("HELIOS_KPI_QUEUE_SIZE", str(defaults.queue_size)),
+            "HELIOS_KPI_QUEUE_SIZE",
+        ),
+        batch_size=_int_from_env(
+            env.get("HELIOS_KPI_BATCH_SIZE", str(defaults.batch_size)),
+            "HELIOS_KPI_BATCH_SIZE",
+        ),
+        flush_interval_seconds=_float_from_env(
+            env.get(
+                "HELIOS_KPI_FLUSH_INTERVAL_SECONDS",
+                str(defaults.flush_interval_seconds),
+            ),
+            "HELIOS_KPI_FLUSH_INTERVAL_SECONDS",
+        ),
+        raw_retention_days=_int_from_env(
+            env.get("HELIOS_KPI_RAW_RETENTION_DAYS", str(defaults.raw_retention_days)),
+            "HELIOS_KPI_RAW_RETENTION_DAYS",
+        ),
+        rollup_retention_days=_int_from_env(
+            env.get(
+                "HELIOS_KPI_ROLLUP_RETENTION_DAYS",
+                str(defaults.rollup_retention_days),
+            ),
+            "HELIOS_KPI_ROLLUP_RETENTION_DAYS",
+        ),
+        maximum_database_mb=_int_from_env(
+            env.get("HELIOS_KPI_MAX_DATABASE_MB", str(defaults.maximum_database_mb)),
+            "HELIOS_KPI_MAX_DATABASE_MB",
+        ),
+        rollup_interval_seconds=_int_from_env(
+            env.get(
+                "HELIOS_KPI_ROLLUP_INTERVAL_SECONDS",
+                str(defaults.rollup_interval_seconds),
+            ),
+            "HELIOS_KPI_ROLLUP_INTERVAL_SECONDS",
+        ),
+        resource_sample_interval_seconds=_float_from_env(
+            env.get(
+                "HELIOS_KPI_RESOURCE_INTERVAL_SECONDS",
+                str(defaults.resource_sample_interval_seconds),
+            ),
+            "HELIOS_KPI_RESOURCE_INTERVAL_SECONDS",
+        ),
+        dashboard_enabled=_bool_from_env(
+            env.get(
+                "HELIOS_KPI_DASHBOARD_ENABLED",
+                str(defaults.dashboard_enabled),
+            ),
+            "HELIOS_KPI_DASHBOARD_ENABLED",
+        ),
+        dashboard_host=env.get(
+            "HELIOS_KPI_DASHBOARD_HOST",
+            defaults.dashboard_host,
+        ),
+        dashboard_port=_int_from_env(
+            env.get("HELIOS_KPI_DASHBOARD_PORT", str(defaults.dashboard_port)),
+            "HELIOS_KPI_DASHBOARD_PORT",
+        ),
+        dashboard_allow_lan=_bool_from_env(
+            env.get(
+                "HELIOS_KPI_DASHBOARD_ALLOW_LAN",
+                str(defaults.dashboard_allow_lan),
+            ),
+            "HELIOS_KPI_DASHBOARD_ALLOW_LAN",
+        ),
+        dashboard_auth_token_env=token_env,
+        export_enabled=_bool_from_env(
+            env.get("HELIOS_KPI_EXPORT_ENABLED", str(defaults.export_enabled)),
+            "HELIOS_KPI_EXPORT_ENABLED",
+        ),
+        maximum_export_rows=_int_from_env(
+            env.get("HELIOS_KPI_MAX_EXPORT_ROWS", str(defaults.maximum_export_rows)),
+            "HELIOS_KPI_MAX_EXPORT_ROWS",
+        ),
+        maximum_query_days=_int_from_env(
+            env.get("HELIOS_KPI_MAX_QUERY_DAYS", str(defaults.maximum_query_days)),
+            "HELIOS_KPI_MAX_QUERY_DAYS",
+        ),
+        maximum_query_points=_int_from_env(
+            env.get("HELIOS_KPI_MAX_QUERY_POINTS", str(defaults.maximum_query_points)),
+            "HELIOS_KPI_MAX_QUERY_POINTS",
+        ),
+    )
 
 
 def _log_level_from_env(value: str, name: str = "HELIOS_LOG_LEVEL") -> int:
@@ -1088,6 +1337,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "model",
                 "model_by_language",
                 "catalog_id",
+                "tier",
                 "languages",
                 "context_window",
                 "max_output_tokens",
@@ -1132,6 +1382,11 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                         f"targets.{name}.catalog_id",
                     )
                     if "catalog_id" in target
+                    else None
+                ),
+                tier=(
+                    _toml_string(target["tier"], f"targets.{name}.tier")
+                    if "tier" in target
                     else None
                 ),
                 languages=_string_tuple(
@@ -1219,11 +1474,11 @@ def _llm_from_env(
     )
 
     requested_remote = _bool_from_env(
-        environ.get("HELIOS_LLM_REMOTE_ENABLED", "false"),
+        environ.get("HELIOS_LLM_REMOTE_ENABLED", str(base.remote_enabled)),
         "HELIOS_LLM_REMOTE_ENABLED",
     )
-    # Remote enablement requires a validated routing file. Environment variables
-    # can always disable remote operation, but cannot create a route by themselves.
+    # Remote enablement requires a validated routing file. The file defines its
+    # default, while the environment can explicitly disable or re-enable it.
     remote_enabled = requested_remote and base.routing_file is not None and not emergency
 
     requested_policy = environ.get("HELIOS_LLM_POLICY", base.routing_policy).strip()
@@ -1328,6 +1583,7 @@ class Settings:
     top_k: int = 4
     embedding_model: str = "mxbai-embed-large"
     llm: LLMSettings = field(default_factory=LLMSettings)
+    kpi: KPISettings = field(default_factory=KPISettings)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).expanduser().resolve()
@@ -1345,6 +1601,10 @@ class Settings:
         object.__setattr__(self, "project_root", root)
         object.__setattr__(self, "language", language)
         object.__setattr__(self, "ollama_host", normalize_ollama_host(self.ollama_host))
+        kpi_path = self.kpi.storage_path.expanduser()
+        if not kpi_path.is_absolute():
+            kpi_path = root / kpi_path
+        object.__setattr__(self, "kpi", replace(self.kpi, storage_path=kpi_path.resolve()))
 
     @classmethod
     def from_env(
@@ -1355,14 +1615,20 @@ class Settings:
     ) -> Settings:
         """Build settings from deployment overrides.
 
-        A missing or invalid hybrid-routing file always fails closed to local
-        inference. Secret values are never accepted from the routing file.
+        The bundled Codex-subscription profile is selected by default when it is
+        present. A missing explicit or invalid hybrid-routing file always fails
+        closed to local inference. Secret values are never accepted from it.
         """
 
         env = os.environ if environ is None else environ
         root = Path(project_root).expanduser().resolve()
         llm = LLMSettings()
-        routing_value = env.get("HELIOS_LLM_CONFIG", "").strip()
+        routing_override = env.get("HELIOS_LLM_CONFIG")
+        if routing_override is None:
+            default_routing_path = root / DEFAULT_LLM_CONFIG
+            routing_value = str(DEFAULT_LLM_CONFIG) if default_routing_path.is_file() else ""
+        else:
+            routing_value = routing_override.strip()
         configuration_valid = True
         if routing_value:
             routing_path = Path(routing_value).expanduser()
@@ -1383,6 +1649,12 @@ class Settings:
         else:
             llm = LLMSettings(emergency_local_only=True)
 
+        try:
+            kpi = _kpi_from_env(env, project_root=root)
+        except ConfigurationError:
+            logger.error("Invalid KPI configuration; KPI collection and dashboard are disabled")
+            kpi = KPISettings(storage_path=(root / "logs/helios-kpi.sqlite3").resolve())
+
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
@@ -1390,6 +1662,7 @@ class Settings:
             log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
+            kpi=kpi,
         )
 
     @property
@@ -1432,6 +1705,7 @@ class Settings:
 SETTINGS = Settings.from_env()
 PROFILE = SETTINGS.profile
 LLM_SETTINGS = SETTINGS.llm
+KPI_SETTINGS = SETTINGS.kpi
 
 # Backward-compatible constants.
 LOG_LEVEL = SETTINGS.log_level

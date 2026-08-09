@@ -34,6 +34,7 @@ coverage.xml
 debug.log
 *.log
 *.sqlite3
+*.sqlite3-*
 /logs/
 /tts_audio/
 /output.wav

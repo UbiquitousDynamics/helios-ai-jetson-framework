@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Helios KPI Dashboard</title>
+    <link rel="stylesheet" href="/dashboard.css">
+    <script src="/dashboard.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">HELIOS AI · EDGE OBSERVABILITY</p>
+        <h1>KPI Dashboard</h1>
+      </div>
+      <div class="live-state" aria-live="polite">
+        <span id="live-indicator" class="status-dot status-unknown"></span>
+        <span id="last-updated">Waiting for the first sample</span>
+      </div>
+    </header>
+
+    <nav class="section-nav" aria-label="Dashboard sections">
+      <a href="#overview">Overview</a>
+      <a href="#routing">Routing</a>
+      <a href="#latency">Latency</a>
+      <a href="#network">Network</a>
+      <a href="#jetson">Jetson</a>
+    </nav>
+
+    <main>
+      <form id="filters" class="filter-panel" aria-label="KPI filters">
+        <label>
+          Time window
+          <select id="filter-window" name="window">
+            <option value="15m">15 minutes</option>
+            <option value="1h" selected>1 hour</option>
+            <option value="6h">6 hours</option>
+            <option value="24h">24 hours</option>
+            <option value="7d">7 days</option>
+            <option value="30d">30 days</option>
+          </select>
+        </label>
+        <label>
+          Mode
+          <select id="filter-mode" name="mode">
+            <option value="">All modes</option>
+            <option value="talk">Talk</option>
+            <option value="think">Think</option>
+          </select>
+        </label>
+        <label>
+          Locality
+          <select id="filter-locality" name="locality">
+            <option value="">Local and remote</option>
+            <option value="local">Local</option>
+            <option value="remote">Remote</option>
+          </select>
+        </label>
+        <label>
+          Provider
+          <input id="filter-provider" name="provider" maxlength="200" autocomplete="off">
+        </label>
+        <label>
+          Model
+          <input id="filter-model" name="model" maxlength="200" autocomplete="off">
+        </label>
+        <label>
+          Route
+          <input id="filter-route" name="route" maxlength="200" autocomplete="off">
+        </label>
+        <label>
+          Outcome
+          <select id="filter-outcome" name="outcome">
+            <option value="">Success and failure</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+          </select>
+        </label>
+        <label>
+          Network quality
+          <select id="filter-network-tier" name="network_tier">
+            <option value="">All tiers</option>
+            <option value="unknown">Unknown</option>
+            <option value="offline">Offline</option>
+            <option value="poor">Poor</option>
+            <option value="fair">Fair</option>
+            <option value="good">Good</option>
+            <option value="excellent">Excellent</option>
+          </select>
+        </label>
+        <button type="submit">Apply filters</button>
+      </form>
+
+      <p id="dashboard-message" class="dashboard-message" role="status">
+        No metrics have been recorded yet. The dashboard will update automatically.
+      </p>
+
+      <section id="overview" class="dashboard-section" aria-labelledby="overview-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">01</p>
+            <h2 id="overview-title">Overview</h2>
+          </div>
+          <p>Assistant health, request outcomes, perceived latency, and current resources.</p>
+        </div>
+        <div class="card-grid overview-grid">
+          <article class="metric-card">
+            <h3>Assistant health</h3>
+            <p id="card-health" class="metric-value">Unknown</p>
+          </article>
+          <article class="metric-card">
+            <h3>Local / remote availability</h3>
+            <p id="card-availability" class="metric-value">—</p>
+          </article>
+          <article class="metric-card">
+            <h3>Network state · quality</h3>
+            <p id="card-network" class="metric-value">Unknown</p>
+          </article>
+          <article class="metric-card">
+            <h3>Provider / circuit</h3>
+            <p id="card-provider" class="metric-value">—</p>
+          </article>
+          <article class="metric-card">
+            <h3>Requests</h3>
+            <p id="card-requests" class="metric-value">0</p>
+          </article>
+          <article class="metric-card">
+            <h3>Success rate</h3>
+            <p id="card-success" class="metric-value">—</p>
+          </article>
+          <article class="metric-card">
+            <h3>Fallback rate</h3>
+            <p id="card-fallback" class="metric-value">—</p>
+          </article>
+          <article class="metric-card">
+            <h3>Error rate</h3>
+            <p id="card-errors" class="metric-value">—</p>
+          </article>
+          <article class="metric-card metric-card-wide">
+            <h3>End-to-end latency · p50 / p95 / p99</h3>
+            <p id="card-e2e" class="metric-value">—</p>
+          </article>
+          <article class="metric-card metric-card-wide">
+            <h3>First token · p50 / p95</h3>
+            <p id="card-first-token" class="metric-value">—</p>
+          </article>
+          <article class="metric-card metric-card-wide">
+            <h3>First audio · p50 / p95</h3>
+            <p id="card-first-audio" class="metric-value">—</p>
+          </article>
+          <article class="metric-card metric-card-wide">
+            <h3>CPU · GPU · memory · temperature · power</h3>
+            <p id="card-resources" class="metric-value">—</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="routing" class="dashboard-section" aria-labelledby="routing-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">02</p>
+            <h2 id="routing-title">Routing</h2>
+          </div>
+          <p>Local/remote share, model tiers, routing reasons, fallbacks, and provider outcomes.</p>
+        </div>
+        <div class="visual-grid">
+          <article class="panel">
+            <h3>Local versus remote routing decisions</h3>
+            <canvas id="routing-chart" width="700" height="260" role="img"></canvas>
+            <p id="routing-empty" class="empty-state">No routing decisions in this window.</p>
+          </article>
+          <article class="panel">
+            <h3>Model-tier and complexity distribution</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Dimension</th><th>Value</th></tr></thead>
+                <tbody id="routing-distribution"></tbody>
+              </table>
+            </div>
+          </article>
+          <article class="panel panel-wide">
+            <h3>Routing reasons, fallback paths, and provider/model success</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+                <tbody id="routing-table"></tbody>
+              </table>
+            </div>
+            <p id="routing-table-empty" class="empty-state">No fallback or provider data yet.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="latency" class="dashboard-section" aria-labelledby="latency-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">03</p>
+            <h2 id="latency-title">Latency</h2>
+          </div>
+          <p>End-to-end, first-token, first-audio, and voice-stage timing.</p>
+        </div>
+        <div class="visual-grid">
+          <article class="panel panel-wide">
+            <h3>End-to-end latency over time</h3>
+            <canvas id="latency-chart" width="1100" height="300" role="img"></canvas>
+            <p id="latency-chart-empty" class="empty-state">No latency samples in this window.</p>
+          </article>
+          <article class="panel">
+            <h3>Percentiles and histogram</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Percentile / bucket</th><th>Milliseconds</th></tr></thead>
+                <tbody id="latency-table"></tbody>
+              </table>
+            </div>
+          </article>
+          <article class="panel">
+            <h3>STT · routing · inference · TTS · playback</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Stage</th><th>Milliseconds</th></tr></thead>
+                <tbody id="latency-breakdown"></tbody>
+              </table>
+            </div>
+            <p class="comparison-note">Compare talk/think and local/remote with the filters above.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="network" class="dashboard-section" aria-labelledby="network-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">04</p>
+            <h2 id="network-title">Network</h2>
+          </div>
+          <p>Connectivity, quality score, TTFB, goodput, probe success, and routing impact.</p>
+        </div>
+        <div class="visual-grid">
+          <article class="panel panel-wide">
+            <h3>Connectivity and network-quality timeline</h3>
+            <canvas id="network-chart" width="1100" height="300" role="img"></canvas>
+            <p id="network-empty" class="empty-state">No network samples have been recorded.</p>
+          </article>
+          <article class="panel panel-wide">
+            <h3>Quality, remote latency, routing, and failures</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Network KPI</th><th>Value</th></tr></thead>
+                <tbody id="network-table"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="jetson" class="dashboard-section" aria-labelledby="jetson-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-number">05</p>
+            <h2 id="jetson-title">Jetson</h2>
+          </div>
+          <p>CPU, GPU, RAM, swap, thermals, power, clocks, throttling, and KPI disk usage.</p>
+        </div>
+        <div class="visual-grid">
+          <article class="panel panel-wide">
+            <h3>Device-resource timeline</h3>
+            <canvas id="resource-chart" width="1100" height="300" role="img"></canvas>
+            <p id="resource-empty" class="empty-state">
+              Device metrics are unavailable or no samples have been recorded.
+            </p>
+          </article>
+          <article class="panel panel-wide">
+            <h3>Current values and local/remote inference comparison</h3>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Resource KPI</th><th>Value</th></tr></thead>
+                <tbody id="resource-table"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Content-free operational metrics only · polling locally · no conversation data</p>
+    </footer>
+  </body>
+</html>

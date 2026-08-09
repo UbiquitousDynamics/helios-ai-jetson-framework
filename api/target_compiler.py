@@ -91,6 +91,7 @@ class TargetCompiler:
                         min_complexity_score=target.min_complexity_score,
                         priority=priority,
                         enabled=enabled,
+                        tier=target.tier,
                     ),
                     retry_attempts=target.retry_attempts,
                     max_output_tokens=maximum_output,

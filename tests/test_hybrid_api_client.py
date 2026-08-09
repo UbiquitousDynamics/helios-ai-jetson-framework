@@ -10,6 +10,7 @@ import pytest
 import config
 from api.api_client import APIClient, APIClientError
 from api.catalog import ModelCatalog
+from api.metrics import SafeMetricsRecorder
 from api.providers.contracts import (
     ChatProvider,
     ChatRequest,
@@ -164,6 +165,7 @@ def make_client(
     *,
     allow_transcripts: bool = True,
     budget_enabled: bool = False,
+    metrics: SafeMetricsRecorder | None = None,
 ) -> tuple[APIClient, FakeOllamaClient, FakeTTS]:
     local = FakeOllamaClient()
     tts = FakeTTS()
@@ -179,6 +181,7 @@ def make_client(
         providers={"remote": remote},
         connectivity=Connectivity.ONLINE,
         retry_wait=0,
+        metrics=metrics,
     )
     return client, local, tts
 
@@ -204,6 +207,31 @@ def test_remote_route_receives_only_canonical_authorized_messages(
     assert "at most 20 words" not in request.messages[0].content
     assert request.messages[-1].role is Role.USER
     assert request.messages[-1].content == "Emilia, answer"
+
+
+def test_runtime_health_snapshot_reports_configured_local_and_remote_circuits(
+    tmp_path: Path,
+) -> None:
+    client, _local, _tts = make_client(tmp_path, FakeRemoteProvider([]))
+
+    healthy = client._runtime_health_snapshot()
+    providers = {(item["provider"], item["model"]): item for item in healthy["providers"]}
+    assert healthy["status"] == "healthy"
+    assert healthy["local_available"] is True
+    assert healthy["remote_available"] is True
+    assert providers[("ollama", "local-model")]["circuit_state"] == "available"
+    assert providers[("remote", "remote-model")]["circuit_state"] == "available"
+
+    for _ in range(client.llm_settings.health.failures_to_open):
+        client.health.record_failure("remote/remote-model", ErrorCategory.CONNECTIVITY)
+
+    degraded_remote = client._runtime_health_snapshot()
+    assert degraded_remote["status"] == "healthy"
+    assert degraded_remote["local_available"] is True
+    assert degraded_remote["remote_available"] is False
+    remote = next(item for item in degraded_remote["providers"] if item["provider"] == "remote")
+    assert remote["circuit_state"] == "cooldown"
+    assert remote["available"] is False
 
 
 def test_static_hybrid_instruction_is_reused_between_requests(tmp_path: Path) -> None:
@@ -289,6 +317,32 @@ def test_precompiled_planner_still_reads_provider_health_live(tmp_path: Path) ->
     assert tts.spoken == ["Local."]
 
 
+def test_runtime_health_snapshot_reads_configured_circuits_without_provider_io(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([[TextDelta("unused"), completed("remote", "remote-model")]])
+    client, local, _tts = make_client(tmp_path, remote)
+
+    initial = client._runtime_health_snapshot()
+    for _ in range(client.llm_settings.health.failures_to_open):
+        client.health.record_failure("remote/remote-model", ErrorCategory.CONNECTIVITY)
+    blocked = client._runtime_health_snapshot()
+
+    assert initial["status"] == "healthy"
+    assert initial["local_available"] is True
+    assert initial["remote_available"] is True
+    assert blocked["status"] == "healthy"
+    assert blocked["local_available"] is True
+    assert blocked["remote_available"] is False
+    providers = blocked["providers"]
+    assert isinstance(providers, list)
+    provider_states = {(item["provider"], item["model"]): item for item in providers}
+    assert provider_states[("remote", "remote-model")]["circuit_state"] == "cooldown"
+    assert provider_states[("remote", "remote-model")]["available"] is False
+    assert remote.calls == []
+    assert local.calls == []
+
+
 def test_unknown_context_provenance_never_leaves_the_device(tmp_path: Path) -> None:
     remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, _tts = make_client(tmp_path, remote)
@@ -345,7 +399,8 @@ def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> No
         transmitted=False,
     )
     remote = FakeRemoteProvider([error])
-    client, local, tts = make_client(tmp_path, remote)
+    metrics = SafeMetricsRecorder()
+    client, local, tts = make_client(tmp_path, remote, metrics=metrics)
 
     assert client.talk("Emilia, answer") == "Local."
 
@@ -359,6 +414,56 @@ def test_remote_failure_before_speech_falls_back_to_ollama(tmp_path: Path) -> No
     assert "at most 20 words" in local_messages[0]["content"]
     assert "at most 50 words" not in local_messages[0]["content"]
     assert local_messages[-1] == {"role": "user", "content": "Emilia, answer"}
+    terminal = [event for event in metrics.snapshot() if event.event == "llm_request_succeeded"]
+    assert len(terminal) == 1
+    assert terminal[0].route == "local-talk"
+    assert terminal[0].fallback_count == 1
+    assert terminal[0].fallback_from == "remote-talk"
+    assert terminal[0].fallback_to == "local-talk"
+    assert terminal[0].fallback_cause == ErrorCategory.CONNECT_TIMEOUT.value
+
+
+def test_terminal_failure_after_fallback_is_attributed_to_final_route(
+    tmp_path: Path,
+) -> None:
+    class FailingLocal(FakeOllamaClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            raise OSError("local unavailable")
+
+    remote_error = ProviderError(
+        ErrorCategory.CONNECT_TIMEOUT,
+        "remote timeout",
+        provider="remote",
+        model="remote-model",
+        transmitted=False,
+    )
+    metrics = SafeMetricsRecorder()
+    client = APIClient(
+        client=FailingLocal(),
+        tts=FakeTTS(),
+        llm_settings=hybrid_settings(tmp_path),
+        language="en",
+        providers={"remote": FakeRemoteProvider([remote_error])},
+        connectivity=Connectivity.ONLINE,
+        retry_attempts=1,
+        retry_wait=0,
+        metrics=metrics,
+    )
+
+    with pytest.raises(APIClientError):
+        client.talk("Emilia, answer")
+
+    terminal = [event for event in metrics.snapshot() if event.event == "llm_request_failed"]
+    assert len(terminal) == 1
+    assert terminal[0].provider == "ollama"
+    assert terminal[0].route == "local-talk"
+    assert terminal[0].locality == "local"
+    assert terminal[0].retry_count == 0
+    assert terminal[0].fallback_count == 1
+    assert terminal[0].fallback_from == "remote-talk"
+    assert terminal[0].fallback_to == "local-talk"
+    assert terminal[0].fallback_cause == ErrorCategory.CONNECT_TIMEOUT.value
 
 
 def test_adaptive_remote_failure_falls_directly_to_capped_local_route(

@@ -114,3 +114,31 @@ def test_in_flight_failure_burst_does_not_extend_an_open_circuit():
     health.record_failure("p/m", ErrorCategory.READ_TIMEOUT)
 
     assert health.snapshot("p/m").retry_after_seconds == pytest.approx(9)
+
+
+def test_transition_observer_reports_expiry_and_explicit_resets_once():
+    clock = FakeClock()
+    transitions = []
+    health = HealthTracker(
+        failures_to_open=1,
+        cooldown_seconds=5,
+        clock=clock,
+        transition_observer=lambda previous, current: transitions.append(
+            (previous.status, current.status)
+        ),
+    )
+
+    health.record_failure("p/m", ErrorCategory.CONNECTIVITY)
+    health.snapshot("p/m")
+    clock.advance(5)
+    health.snapshot("p/m")
+    health.snapshot("p/m")
+    health.record_failure("auth", ErrorCategory.AUTHENTICATION)
+    health.reset_authorization("auth")
+
+    assert transitions == [
+        (HealthStatus.AVAILABLE, HealthStatus.COOLDOWN),
+        (HealthStatus.COOLDOWN, HealthStatus.AVAILABLE),
+        (HealthStatus.AVAILABLE, HealthStatus.AUTH_BLOCKED),
+        (HealthStatus.AUTH_BLOCKED, HealthStatus.AVAILABLE),
+    ]
