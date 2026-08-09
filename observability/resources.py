@@ -749,7 +749,7 @@ class ResourceCollector:
             ),
             power_mw=input_power if input_power is not None else tegra.power_mw,
             gpu_frequency_mhz=(
-                gpu_frequency if gpu_frequency is not None else tegra.gpu_frequency_mhz
+                tegra.gpu_frequency_mhz if tegra.gpu_frequency_mhz is not None else gpu_frequency
             ),
             disk_used_bytes=disk_used,
             disk_total_bytes=disk_total,

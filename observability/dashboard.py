@@ -241,15 +241,21 @@ def _parse_query(
 ) -> dict[str, object]:
     if not _valid_percent_encoding(raw_query):
         raise QueryValidationError
-    try:
-        pairs = parse_qsl(
-            raw_query,
-            keep_blank_values=True,
-            strict_parsing=True,
-            max_num_fields=_MAX_QUERY_FIELDS,
-        )
-    except ValueError:
-        raise QueryValidationError from None
+    if not raw_query:
+        # Python 3.10.0 raises for an empty value with strict parsing while
+        # later patch releases return an empty list. Keep dashboard behavior
+        # stable on the Python version shipped by older JetPack images.
+        pairs: list[tuple[str, str]] = []
+    else:
+        try:
+            pairs = parse_qsl(
+                raw_query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=_MAX_QUERY_FIELDS,
+            )
+        except ValueError:
+            raise QueryValidationError from None
 
     values: dict[str, str] = {}
     for name, value in pairs:

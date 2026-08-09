@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 import config
+import observability.dashboard as dashboard_module
 from observability.aggregate import KPIQueryService
 from observability.dashboard import API_RESOURCES, DashboardServer
 from observability.service import ObservabilityService
@@ -91,6 +92,20 @@ def test_all_versioned_api_routes_use_the_injected_query_service() -> None:
     summary_query = next(query for resource, query in service.calls if resource == "summary")
     assert health_query == {}
     assert summary_query == {"window_seconds": 3_600}
+
+
+def test_empty_query_is_compatible_with_early_python_310(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def legacy_parse_qsl(*_args: object, **_kwargs: object) -> object:
+        raise ValueError("early Python 3.10 rejects an empty strict query")
+
+    monkeypatch.setattr(dashboard_module, "parse_qsl", legacy_parse_qsl)
+    with running_server(FakeQueryService()) as server:
+        status, _headers, body = request(server, "/api/v1/kpi/health")
+
+    assert status == 200
+    assert json_body(body) == {"local_available": True, "status": "healthy"}
 
 
 def test_query_validation_rejects_unknown_duplicate_blank_and_unbounded_values() -> None:
