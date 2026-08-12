@@ -7,16 +7,20 @@ and uses an isolated, read-only workspace with tool surfaces disabled.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import queue
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from api.conversation import safe_conversation_identifier
 from api.providers.contracts import (
     CancellationToken,
     ChatRequest,
@@ -41,6 +45,9 @@ from api.providers.codex_session import (
     field_value,
 )
 
+if TYPE_CHECKING:
+    from api.conversation import ConversationSession
+
 _ALLOWED_OPTIONS = frozenset({"reasoning_effort", "service_tier"})
 _ALLOWED_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 # Private aliases remain temporarily available for compatibility with existing
@@ -55,6 +62,21 @@ Answer the user's request directly, in the requested language, as natural-langua
 Do not inspect files, run commands, call tools, browse, modify anything, or describe internal work.
 Do not return markdown unless the user explicitly asks for it.
 """
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ContextState:
+    thread_id: str | None = None
+    turn_count: int = 0
+    synced_turn: int = 0
+    last_activity_at: float | None = None
+    invalid_reason: str | None = None
+
+
+def _safe_identifier(value: str | None) -> str:
+    return safe_conversation_identifier(value)
 
 
 class _Turn(Protocol):
@@ -246,7 +268,7 @@ def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
     return ErrorCategory.UNKNOWN, False
 
 
-def _prompt(request: ChatRequest) -> tuple[str, str]:
+def _prompt(request: ChatRequest, *, include_history: bool = True) -> tuple[str, str]:
     systems = [message.content for message in request.messages if message.role.value == "system"]
     developer = _BASE_INSTRUCTIONS
     if systems:
@@ -262,6 +284,7 @@ def _prompt(request: ChatRequest) -> tuple[str, str]:
         f"[{message.role.value}]\n{message.content}"
         for message in request.messages
         if message.role.value != "system"
+        and (include_history or message.origin is not ContentOrigin.CONVERSATION_HISTORY)
     ]
     return developer, "\n\n".join(conversation)
 
@@ -280,6 +303,9 @@ class CodexAppServerAdapter:
         allow_remote_context: bool = False,
         context_idle_timeout_seconds: float = 900.0,
         context_max_turns: int = 20,
+        context_state_limit: int = 64,
+        interrupt_ack_timeout_seconds: float = 1.0,
+        conversation_session: ConversationSession | None = None,
     ) -> None:
         if not provider or any(character.isspace() for character in provider):
             raise ValueError("provider must be a non-empty identifier")
@@ -302,6 +328,19 @@ class CodexAppServerAdapter:
             or context_max_turns < 1
         ):
             raise ValueError("context_max_turns must be a positive integer")
+        if (
+            isinstance(context_state_limit, bool)
+            or not isinstance(context_state_limit, int)
+            or context_state_limit < 1
+        ):
+            raise ValueError("context_state_limit must be a positive integer")
+        if (
+            isinstance(interrupt_ack_timeout_seconds, bool)
+            or not isinstance(interrupt_ack_timeout_seconds, (int, float))
+            or not math.isfinite(float(interrupt_ack_timeout_seconds))
+            or interrupt_ack_timeout_seconds <= 0
+        ):
+            raise ValueError("interrupt_ack_timeout_seconds must be positive and finite")
         self._identity = ProviderIdentity(provider, endpoint, remote=True)
         self._capabilities = ProviderCapabilities(
             supports_system_messages=True,
@@ -311,19 +350,37 @@ class CodexAppServerAdapter:
         )
         self._runtime = runtime
         self._runtime_factory = runtime_factory or _OfficialCodexRuntime
+        self._runtime_recreatable = runtime is None or runtime_factory is not None
+        self._runtime_epoch = 0
+        self._runtime_unusable = False
+        self._interrupt_ack_timeout_seconds = float(interrupt_ack_timeout_seconds)
         self._runtime_lock = threading.Lock()
         self._account_lock = threading.Lock()
-        self._chatgpt_account_verified = False
+        self._verified_runtime: _Runtime | None = None
         self._clock = clock
         self._allow_remote_context = allow_remote_context
         self._context_idle_timeout_seconds = float(context_idle_timeout_seconds)
         self._context_max_turns = context_max_turns
+        self._context_state_limit = context_state_limit
+        self._conversation_session = conversation_session
         self._context_turn_lock = threading.Lock()
         self._context_state_lock = threading.Lock()
-        self._context_thread_id: str | None = None
-        self._context_turn_count = 0
-        self._context_last_activity_at: float | None = None
+        self._context_states: OrderedDict[str, _ContextState] = OrderedDict()
         self._closed = False
+        logger.info(
+            "provider=%s event=remote_context_configured enabled=%s "
+            "idle_timeout_seconds=%s max_turns=%s",
+            provider,
+            allow_remote_context,
+            self._context_idle_timeout_seconds,
+            self._context_max_turns,
+        )
+        if not allow_remote_context:
+            logger.warning(
+                "provider=%s event=remote_context_disabled "
+                "reason=privacy_policy_each_request_uses_a_fresh_thread",
+                provider,
+            )
 
     @property
     def identity(self) -> ProviderIdentity:
@@ -332,6 +389,11 @@ class CodexAppServerAdapter:
     @property
     def capabilities(self) -> ProviderCapabilities:
         return self._capabilities
+
+    def attach_conversation_session(self, session: ConversationSession) -> None:
+        if self._conversation_session is not None and self._conversation_session is not session:
+            raise ValueError("a different conversation session is already attached")
+        self._conversation_session = session
 
     def _error(
         self,
@@ -353,55 +415,161 @@ class CodexAppServerAdapter:
         )
 
     def _get_runtime(self) -> _Runtime:
-        if self._closed:
-            raise self._error(
-                ErrorCategory.PROVIDER_UNAVAILABLE,
-                model=None,
-                transmitted=False,
-            )
         with self._runtime_lock:
-            if self._runtime is None:
-                try:
-                    self._runtime = self._runtime_factory()
-                except Exception as exc:
-                    category, retryable = _classify_exception(exc)
-                    raise self._error(
-                        category,
-                        model=None,
-                        retryable=retryable,
-                        transmitted=False,
-                    ) from None
-            return self._runtime
-
-    def _get_authenticated_runtime(self) -> _Runtime:
-        with self._account_lock:
-            runtime = self._get_runtime()
-            if self._chatgpt_account_verified:
-                return runtime
-            try:
-                account_kind = runtime.account_kind()
-            except Exception as exc:
-                category, retryable = _classify_exception(exc)
-                raise self._error(
-                    category,
-                    model=None,
-                    retryable=retryable,
-                    transmitted=False,
-                ) from None
-            if self._closed:
+            if self._closed or self._runtime_unusable:
                 raise self._error(
                     ErrorCategory.PROVIDER_UNAVAILABLE,
                     model=None,
                     transmitted=False,
                 )
-            if account_kind != "chatgpt":
-                raise self._error(
-                    ErrorCategory.AUTHENTICATION,
-                    model=None,
-                    transmitted=False,
+            if self._runtime is not None:
+                return self._runtime
+            epoch = self._runtime_epoch
+
+        # Runtime construction may include process startup. Never retain the
+        # lock across it: cancellation must be able to retire this generation.
+        try:
+            candidate = self._runtime_factory()
+        except Exception as exc:
+            category, retryable = _classify_exception(exc)
+            raise self._error(
+                category,
+                model=None,
+                retryable=retryable,
+                transmitted=False,
+            ) from None
+
+        with self._runtime_lock:
+            stale = (
+                self._closed
+                or self._runtime_unusable
+                or self._runtime_epoch != epoch
+            )
+            if not stale and self._runtime is None:
+                self._runtime = candidate
+                return candidate
+            selected = self._runtime
+        self._start_control_operation(candidate.close, "stale_runtime_close")
+        if stale or selected is None:
+            raise self._error(
+                ErrorCategory.PROVIDER_UNAVAILABLE,
+                model=None,
+                transmitted=False,
+            )
+        return selected
+
+    def _get_authenticated_runtime(self) -> _Runtime:
+        runtime = self._get_runtime()
+        with self._account_lock:
+            if self._verified_runtime is runtime:
+                return runtime
+        # account_kind() is an app-server RPC. It intentionally runs outside
+        # the account lock so a hung validation cannot poison later runtimes.
+        try:
+            account_kind = runtime.account_kind()
+        except Exception as exc:
+            category, retryable = _classify_exception(exc)
+            raise self._error(
+                category,
+                model=None,
+                retryable=retryable,
+                transmitted=False,
+            ) from None
+        with self._runtime_lock:
+            valid = (
+                not self._closed
+                and not self._runtime_unusable
+                and self._runtime is runtime
+            )
+        if not valid:
+            raise self._error(
+                ErrorCategory.PROVIDER_UNAVAILABLE,
+                model=None,
+                transmitted=False,
+            )
+        if account_kind != "chatgpt":
+            raise self._error(
+                ErrorCategory.AUTHENTICATION,
+                model=None,
+                transmitted=False,
+            )
+        with self._account_lock:
+            self._verified_runtime = runtime
+        return runtime
+
+    def _start_control_operation(
+        self,
+        operation: Callable[[], Any],
+        operation_name: str,
+    ) -> threading.Event:
+        done = threading.Event()
+
+        def invoke() -> None:
+            try:
+                operation()
+            except Exception:
+                logger.warning(
+                    "provider=%s event=%s_failed",
+                    self.identity.name,
+                    operation_name,
+                    exc_info=True,
                 )
-            self._chatgpt_account_verified = True
-            return runtime
+            finally:
+                done.set()
+
+        threading.Thread(
+            target=invoke,
+            name=f"helios-codex-{operation_name}",
+            daemon=True,
+        ).start()
+        return done
+
+    def _mirror_thread(self, conversation_id: str | None, thread_id: str) -> None:
+        if self._conversation_session is None or conversation_id is None:
+            return
+        self._conversation_session.bind_provider_thread(
+            self.identity.name,
+            thread_id,
+            session_id=conversation_id,
+        )
+
+    def _clear_mirrored_thread(self, conversation_id: str, reason: str) -> None:
+        if self._conversation_session is None:
+            return
+        self._conversation_session.clear_provider_thread(
+            self.identity.name,
+            session_id=conversation_id,
+            reason=reason,
+        )
+
+    def _invalidate_all_contexts(self, reason: str) -> None:
+        with self._context_state_lock:
+            keys = tuple(self._context_states)
+            for state in self._context_states.values():
+                state.thread_id = None
+                state.turn_count = 0
+                state.synced_turn = 0
+                state.last_activity_at = None
+                state.invalid_reason = reason
+        for key in keys:
+            if key != "__default_conversation__":
+                self._clear_mirrored_thread(key, reason)
+
+    def _retire_runtime(self, runtime: _Runtime | None) -> threading.Event | None:
+        with self._runtime_lock:
+            if runtime is not None and self._runtime is not runtime:
+                return None
+            selected = self._runtime
+            self._runtime_epoch += 1
+            self._runtime = None
+            if not self._runtime_recreatable:
+                self._runtime_unusable = True
+        with self._account_lock:
+            self._verified_runtime = None
+        self._invalidate_all_contexts("runtime_retired")
+        if selected is None:
+            return None
+        return self._start_control_operation(selected.close, "runtime_retire")
 
     def prepare(self) -> None:
         """Start Codex and validate ChatGPT auth without starting an inference turn."""
@@ -416,6 +584,17 @@ class CodexAppServerAdapter:
             privacy = PrivacyLevel.LOCAL_ONLY
             origins = ()
         if privacy is PrivacyLevel.LOCAL_ONLY or request.remote_authorized is not True:
+            raise self._error(
+                ErrorCategory.PRIVACY_BLOCKED,
+                model=request.model,
+                transmitted=False,
+            )
+        if len(origins) != len(request.messages) or any(
+            not message.remote_eligible
+            or ContentOrigin.UNKNOWN in message.source_origins
+            or origin is ContentOrigin.UNKNOWN
+            for message, origin in zip(request.messages, origins)
+        ):
             raise self._error(
                 ErrorCategory.PRIVACY_BLOCKED,
                 model=request.model,
@@ -469,44 +648,144 @@ class CodexAppServerAdapter:
             except Exception:
                 pass
 
-    def _reset_context_locked(self) -> None:
-        self._context_thread_id = None
-        self._context_turn_count = 0
-        self._context_last_activity_at = None
+    @staticmethod
+    def _context_key(request: ChatRequest) -> str:
+        return request.conversation_id or "__default_conversation__"
 
-    def _begin_context_attempt(self) -> tuple[str | None, int]:
+    def _begin_context_attempt(
+        self,
+        request: ChatRequest,
+    ) -> tuple[str, str | None, int, int]:
         now = self._clock()
+        key = self._context_key(request)
+        reset_reason: str | None = None
         with self._context_state_lock:
-            thread_id = self._context_thread_id
-            turn_count = self._context_turn_count
-            last_activity = self._context_last_activity_at
-            if thread_id is not None and (
-                turn_count >= self._context_max_turns
-                or last_activity is None
-                or now - last_activity >= self._context_idle_timeout_seconds
-            ):
-                thread_id = None
-                turn_count = 0
-            # A failed, cancelled, or only partially consumed attempt must not
-            # leave a thread containing an incomplete turn available for reuse.
-            self._reset_context_locked()
-            return thread_id, turn_count
+            state = self._context_states.get(key)
+            if state is None:
+                if len(self._context_states) >= self._context_state_limit:
+                    evicted_key, _evicted_state = self._context_states.popitem(last=False)
+                    if evicted_key != "__default_conversation__":
+                        self._clear_mirrored_thread(evicted_key, "state_limit")
+                    logger.info(
+                        "provider=%s event=context_state_evicted conversation_session=%s "
+                        "reason=state_limit",
+                        self.identity.name,
+                        _safe_identifier(evicted_key),
+                    )
+                state = _ContextState()
+                self._context_states[key] = state
+            else:
+                self._context_states.move_to_end(key)
+            if state.thread_id is not None:
+                if state.turn_count >= self._context_max_turns:
+                    reset_reason = "max_turns"
+                elif (
+                    state.last_activity_at is None
+                    or now - state.last_activity_at >= self._context_idle_timeout_seconds
+                ):
+                    reset_reason = "idle_timeout"
+                elif (
+                    request.conversation_turn is not None
+                    and state.synced_turn != request.conversation_turn - 1
+                ):
+                    # Another provider handled one or more logical turns. A
+                    # resumed Codex thread would be stale, so rehydrate a new
+                    # physical thread from Helios's canonical request history.
+                    reset_reason = "provider_history_gap"
+            if reset_reason is not None:
+                if key != "__default_conversation__":
+                    self._clear_mirrored_thread(key, reset_reason)
+                state.thread_id = None
+                state.turn_count = 0
+                state.synced_turn = 0
+                state.last_activity_at = None
+                state.invalid_reason = reset_reason
+
+            resume_thread_id = state.thread_id
+            previous_turn_count = state.turn_count
+            previous_synced_turn = state.synced_turn
+            if resume_thread_id is not None:
+                self._mirror_thread(request.conversation_id, resume_thread_id)
+            action = (
+                "thread_resume"
+                if resume_thread_id is not None
+                else "thread_recover"
+                if state.invalid_reason is not None
+                else "thread_start"
+            )
+            logger.info(
+                "conversation_session=%s turn=%s provider=%s action=%s "
+                "thread=%s reason=%s",
+                _safe_identifier(request.conversation_id),
+                request.conversation_turn,
+                self.identity.name,
+                action,
+                _safe_identifier(resume_thread_id),
+                state.invalid_reason,
+            )
+            return key, resume_thread_id, previous_turn_count, previous_synced_turn
 
     def _finish_context_attempt(
         self,
+        request: ChatRequest,
+        key: str,
         attempt: dict[str, Any],
         *,
+        resume_thread_id: str | None,
         previous_turn_count: int,
+        previous_synced_turn: int,
     ) -> None:
         thread_id = attempt.get("thread_id")
         completed = attempt.get("completed") is True
+        turn_started = attempt.get("turn_started") is True
         with self._context_state_lock:
+            state = self._context_states.setdefault(key, _ContextState())
             if completed and isinstance(thread_id, str) and bool(thread_id) and not self._closed:
-                self._context_thread_id = thread_id
-                self._context_turn_count = previous_turn_count + 1
-                self._context_last_activity_at = self._clock()
-            else:
-                self._reset_context_locked()
+                state.thread_id = thread_id
+                state.turn_count = previous_turn_count + 1
+                state.synced_turn = request.conversation_turn or (previous_synced_turn + 1)
+                state.last_activity_at = self._clock()
+                state.invalid_reason = None
+                self._context_states.move_to_end(key)
+                self._mirror_thread(request.conversation_id, thread_id)
+                logger.info(
+                    "conversation_session=%s turn=%s provider=%s "
+                    "event=thread_checkpoint_saved thread=%s synced_turn=%s",
+                    _safe_identifier(request.conversation_id),
+                    request.conversation_turn,
+                    self.identity.name,
+                    _safe_identifier(thread_id),
+                    state.synced_turn,
+                )
+                return
+            if (
+                not attempt.get("turn_attempted")
+                and not turn_started
+                and resume_thread_id is not None
+                and not self._closed
+                and state.invalid_reason != "runtime_retired"
+            ):
+                # Authentication or setup failed before appending anything to
+                # the existing thread; retaining its checkpoint is safe.
+                state.thread_id = resume_thread_id
+                state.turn_count = previous_turn_count
+                state.synced_turn = previous_synced_turn
+                return
+            state.thread_id = None
+            state.turn_count = 0
+            state.synced_turn = 0
+            state.last_activity_at = None
+            state.invalid_reason = str(attempt.get("failure_reason") or "attempt_incomplete")
+            if key != "__default_conversation__":
+                self._clear_mirrored_thread(key, state.invalid_reason)
+            logger.info(
+                "conversation_session=%s turn=%s provider=%s "
+                "event=thread_invalidated reason=%s",
+                _safe_identifier(request.conversation_id),
+                request.conversation_turn,
+                self.identity.name,
+                state.invalid_reason,
+            )
 
     def stream(
         self,
@@ -523,7 +802,12 @@ class CodexAppServerAdapter:
         # context-enabled calls so concurrent API users cannot append competing
         # turns to the same conversation or race the shared lifecycle counters.
         with self._context_turn_lock:
-            thread_id, previous_turn_count = self._begin_context_attempt()
+            (
+                key,
+                thread_id,
+                previous_turn_count,
+                previous_synced_turn,
+            ) = self._begin_context_attempt(request)
             attempt: dict[str, Any] = {}
             try:
                 yield from self._stream_attempt(
@@ -534,9 +818,72 @@ class CodexAppServerAdapter:
                 )
             finally:
                 self._finish_context_attempt(
+                    request,
+                    key,
                     attempt,
+                    resume_thread_id=thread_id,
                     previous_turn_count=previous_turn_count,
+                    previous_synced_turn=previous_synced_turn,
                 )
+
+    def invalidate_conversation(
+        self,
+        conversation_id: str,
+        *,
+        conversation_turn: int | None = None,
+        reason: str = "logical_turn_not_committed",
+    ) -> None:
+        """Invalidate a physical checkpoint rejected by the logical session.
+
+        This is the commit handshake used for the narrow EOF/cancellation race:
+        the provider may have completed remotely, but Helios remains the source
+        of truth for whether that answer became canonical history.
+        """
+
+        key = conversation_id.strip()
+        if not key:
+            raise ValueError("conversation_id cannot be empty")
+        with self._context_state_lock:
+            state = self._context_states.get(key)
+            if state is None:
+                return
+            if (
+                conversation_turn is not None
+                and state.synced_turn < conversation_turn
+            ):
+                return
+            state.thread_id = None
+            state.turn_count = 0
+            state.synced_turn = 0
+            state.last_activity_at = None
+            state.invalid_reason = reason
+            self._context_states.move_to_end(key)
+        self._clear_mirrored_thread(key, reason)
+        logger.info(
+            "conversation_session=%s turn=%s provider=%s "
+            "event=thread_invalidated reason=%s",
+            _safe_identifier(key),
+            conversation_turn,
+            self.identity.name,
+            reason,
+        )
+
+    def forget_conversation(self, conversation_id: str, *, reason: str) -> None:
+        """Drop a checkpoint when Helios explicitly ends a logical session."""
+
+        key = conversation_id.strip()
+        if not key:
+            raise ValueError("conversation_id cannot be empty")
+        with self._context_state_lock:
+            removed = self._context_states.pop(key, None)
+        self._clear_mirrored_thread(key, reason)
+        if removed is not None:
+            logger.info(
+                "conversation_session=%s provider=%s event=context_forgotten reason=%s",
+                _safe_identifier(key),
+                self.identity.name,
+                reason,
+            )
 
     def _stream_attempt(
         self,
@@ -546,14 +893,24 @@ class CodexAppServerAdapter:
         resume_thread_id: str | None = None,
         context_attempt: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        developer, prompt = _prompt(request)
+        developer, prompt = _prompt(
+            request,
+            include_history=resume_thread_id is None,
+        )
         mailbox: queue.Queue[tuple[str, Any]] = queue.Queue()
         holder: dict[str, _Turn] = {}
+        runtime_holder: dict[str, _Runtime] = {}
         stop_requested = threading.Event()
+        worker_done = threading.Event()
+
+        def mark_failure(reason: str) -> None:
+            if context_attempt is not None:
+                context_attempt.setdefault("failure_reason", reason)
 
         def worker() -> None:
             try:
                 runtime = self._get_authenticated_runtime()
+                runtime_holder["runtime"] = runtime
                 if stop_requested.is_set():
                     return
                 turn_kwargs = {
@@ -565,8 +922,17 @@ class CodexAppServerAdapter:
                 }
                 if resume_thread_id is not None:
                     turn_kwargs["thread_id"] = resume_thread_id
+                if context_attempt is not None:
+                    # Once start_turn is invoked the remote side may have
+                    # appended data even if the RPC raises before returning.
+                    context_attempt["turn_attempted"] = True
                 turn = runtime.start_turn(**turn_kwargs)
+                if stop_requested.is_set():
+                    self._interrupt(turn)
+                    return
                 holder["turn"] = turn
+                if context_attempt is not None:
+                    context_attempt["turn_started"] = True
                 if context_attempt is not None:
                     candidate = field_value(turn, "thread_id")
                     if candidate is None:
@@ -575,9 +941,7 @@ class CodexAppServerAdapter:
                         candidate = resume_thread_id
                     if isinstance(candidate, str) and candidate:
                         context_attempt["thread_id"] = candidate
-                if stop_requested.is_set():
-                    self._interrupt(turn)
-                    return
+                        self._mirror_thread(request.conversation_id, candidate)
                 mailbox.put(("turn", turn))
                 for notification in turn.stream():
                     if stop_requested.is_set():
@@ -587,12 +951,57 @@ class CodexAppServerAdapter:
                 mailbox.put(("eof", None))
             except BaseException as exc:
                 mailbox.put(("error", exc))
+            finally:
+                worker_done.set()
 
-        threading.Thread(
+        worker_thread = threading.Thread(
             target=worker,
             name="helios-codex-stream",
             daemon=True,
-        ).start()
+        )
+        worker_thread.start()
+
+        def stop_worker(reason: str) -> None:
+            stop_requested.set()
+            active_turn = holder.get("turn")
+            if active_turn is not None:
+                self._start_control_operation(
+                    lambda: self._interrupt(active_turn),
+                    "turn_interrupt",
+                )
+            logger.info(
+                "conversation_session=%s turn=%s provider=%s "
+                "event=cancellation_requested reason=%s thread=%s",
+                _safe_identifier(request.conversation_id),
+                request.conversation_turn,
+                self.identity.name,
+                reason,
+                _safe_identifier(
+                    str(context_attempt.get("thread_id"))
+                    if context_attempt is not None and context_attempt.get("thread_id")
+                    else resume_thread_id
+                ),
+            )
+            if worker_done.wait(self._interrupt_ack_timeout_seconds):
+                logger.info(
+                    "conversation_session=%s turn=%s provider=%s "
+                    "event=cancellation_acknowledged reason=%s",
+                    _safe_identifier(request.conversation_id),
+                    request.conversation_turn,
+                    self.identity.name,
+                    reason,
+                )
+                return
+            logger.warning(
+                "conversation_session=%s turn=%s provider=%s "
+                "event=cancellation_ack_timeout reason=%s",
+                _safe_identifier(request.conversation_id),
+                request.conversation_turn,
+                self.identity.name,
+                reason,
+            )
+            self._retire_runtime(runtime_holder.get("runtime"))
+            worker_done.wait(self._interrupt_ack_timeout_seconds)
 
         began = self._clock()
         last_event = began
@@ -604,8 +1013,8 @@ class CodexAppServerAdapter:
 
         while True:
             if self._cancelled(cancellation):
-                stop_requested.set()
-                self._interrupt(holder.get("turn"))
+                mark_failure("cancelled")
+                stop_worker("cancelled")
                 raise self._error(
                     ErrorCategory.CANCELLED,
                     model=request.model,
@@ -626,8 +1035,8 @@ class CodexAppServerAdapter:
             stage_remaining = stage_limit - (now - last_event)
             wait_seconds = min(0.1, total_remaining, stage_remaining)
             if wait_seconds <= 0:
-                stop_requested.set()
-                self._interrupt(holder.get("turn"))
+                mark_failure("timeout")
+                stop_worker("timeout")
                 if "turn" not in holder:
                     category = ErrorCategory.CONNECT_TIMEOUT
                 elif saw_visible_text:
@@ -651,14 +1060,16 @@ class CodexAppServerAdapter:
                 request_id = candidate if isinstance(candidate, str) else None
                 continue
             if kind == "auth":
-                stop_requested.set()
+                mark_failure("authentication")
+                stop_worker("authentication")
                 raise self._error(
                     ErrorCategory.AUTHENTICATION,
                     model=request.model,
                     transmitted=False,
                 )
             if kind == "error":
-                stop_requested.set()
+                mark_failure("worker_error")
+                stop_worker("worker_error")
                 if isinstance(value, ProviderError):
                     raise value
                 category, retryable = _classify_exception(value)
@@ -671,7 +1082,8 @@ class CodexAppServerAdapter:
                 ) from None
             if kind == "eof":
                 if not saw_completed:
-                    stop_requested.set()
+                    mark_failure("incomplete_eof")
+                    stop_worker("incomplete_eof")
                     raise self._error(
                         ErrorCategory.EMPTY_COMPLETION,
                         model=request.model,
@@ -701,8 +1113,8 @@ class CodexAppServerAdapter:
                 try:
                     yield event
                 except GeneratorExit:
-                    stop_requested.set()
-                    self._interrupt(holder.get("turn"))
+                    mark_failure("consumer_closed")
+                    stop_worker("consumer_closed")
                     raise
                 finally:
                     resumed = self._clock()
@@ -733,7 +1145,8 @@ class CodexAppServerAdapter:
             if hasattr(status, "value"):
                 status = status.value
             if status != "completed":
-                stop_requested.set()
+                mark_failure(str(status or "turn_failed"))
+                stop_worker(str(status or "turn_failed"))
                 error = field_value(turn_payload, "error")
                 category, retryable = _classify_exception(
                     RuntimeError(str(field_value(error, "message", status)))
@@ -749,7 +1162,8 @@ class CodexAppServerAdapter:
                     request_id=request_id,
                 )
             if not saw_visible_text:
-                stop_requested.set()
+                mark_failure("empty_completion")
+                stop_worker("empty_completion")
                 raise self._error(
                     ErrorCategory.EMPTY_COMPLETION,
                     model=request.model,
@@ -781,13 +1195,18 @@ class CodexAppServerAdapter:
             if self._closed:
                 return
             self._closed = True
-            self._chatgpt_account_verified = False
+            self._runtime_epoch += 1
             runtime = self._runtime
             self._runtime = None
+        with self._account_lock:
+            self._verified_runtime = None
+        self._invalidate_all_contexts("adapter_closed")
         with self._context_state_lock:
-            self._reset_context_locked()
+            self._context_states.clear()
         if runtime is not None:
-            try:
-                runtime.close()
-            except Exception:
-                pass
+            done = self._start_control_operation(runtime.close, "runtime_close")
+            if not done.wait(self._interrupt_ack_timeout_seconds):
+                logger.warning(
+                    "provider=%s event=runtime_close_timeout",
+                    self.identity.name,
+                )

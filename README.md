@@ -332,12 +332,24 @@ flowchart TD
     Local --> Plan
 ```
 
-No durable local conversation-memory subsystem exists. Voice commands remain
-independent unless a caller explicitly supplies context. The Codex route can
-optionally reuse an in-memory, ephemeral app-server thread during one Helios run
-when `HELIOS_LLM_ALLOW_REMOTE_CONTEXT=true`; it resets after an idle timeout or
-turn cap and is never persisted across restarts. The default remains one fresh
-ephemeral Codex thread per turn.
+Helios owns an in-memory logical conversation session above the providers. It
+commits each finalized user turn once and commits assistant text only after a
+successful completion. Ollama receives the bounded canonical user/assistant
+history on every turn, including after provider fallback. When
+`HELIOS_LLM_ALLOW_REMOTE_CONTEXT=true`, Codex resumes a healthy ephemeral thread
+and recovers an interrupted, stale, idle, or capped physical thread by starting
+a replacement and rehydrating it from the same canonical history. The session
+is intentionally not persisted across process restarts.
+
+Natural barge-in and Codex multi-turn context are enabled by default in the
+application and bundled Codex profile; no environment overrides are required.
+Set `HELIOS_BARGE_IN_ENABLED=false` or
+`HELIOS_LLM_ALLOW_REMOTE_CONTEXT=false` to opt out. Remote context means prior
+in-session turns may be transmitted remotely. Startup logs explicitly report
+whether Codex context is enabled and warn when each remote request will use a
+fresh physical thread. A `local_only` turn,
+local-document-derived answer, or unredacted `remote_redacted` turn remains
+ineligible for later remote history until an explicit session reset.
 
 ### Routing and model selection
 
@@ -515,11 +527,14 @@ sequenceDiagram
 ```
 
 Only finalized recognition results are executed. Partial phrases and measured
-PCM energy are available through `listen_events()` and, when opt-in barge-in is
+PCM energy are available through `listen_events()` and, while default-on barge-in is
 active, can stop the current response early. One continuous microphone/Vosk
 session then flushes the finalized interruption utterance, which is executed as
-an immediate follow-up without another wake word. Partial text is never sent to
-a model as a normal idle command.
+an immediate follow-up without another wake word. A finalized utterance during
+model generation or TTS synthesis also supersedes that response instead of
+being discarded. After a response completes normally, finalized follow-ups are
+accepted without another wake word until the configured conversation idle
+timeout. Partial text is never sent to a model as a normal idle command.
 
 Provider failures are retried or routed to the next target only while doing so
 is safe. Once speech has started, a failed stream is not replayed because doing
@@ -1122,9 +1137,9 @@ All implemented LLM environment overrides are:
 | `HELIOS_LLM_EMERGENCY_LOCAL_ONLY` | Force local-only operation after restart |
 | `HELIOS_LLM_POLICY` | Override `local_only`, `remote_only`, `local_first`, `remote_first`, or `auto` |
 | `HELIOS_LLM_ALLOW_REMOTE_TRANSCRIPTS` | Permit raw transcript origin remotely |
-| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | Opt into in-process ephemeral Codex thread reuse and permit conversation/tool context remotely |
-| `HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS` | Reset a reused Codex thread after inactivity; default `900` |
-| `HELIOS_LLM_CONTEXT_MAX_TURNS` | Reset before the turn after this many completed Codex turns; default `20` |
+| `HELIOS_LLM_ALLOW_REMOTE_CONTEXT` | Permit canonical conversation history remotely and enable Codex thread resume/recovery |
+| `HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS` | Expire the logical voice session and rotate idle Codex context; default `900` |
+| `HELIOS_LLM_CONTEXT_MAX_TURNS` | Bound transmitted history and rotate a Codex thread before the next turn; default `20` |
 | `HELIOS_LLM_ALLOW_REMOTE_RAG` | Permit local-document content remotely |
 | `HELIOS_LLM_CATALOG` | Override the strict model catalog path |
 | `HELIOS_LLM_DAILY_BUDGET_USD` | Override the daily USD limit |
@@ -1243,7 +1258,7 @@ after the remote issue has been reviewed.
 | `language` | `"it"` | Selects Vosk, Piper, prompts, trigger, and chat model |
 | `name` | `"emilia"` | Compatibility assistant identity |
 | `listen_timeout` | `6.5` seconds | Maximum duration of one recognition call |
-| `barge_in_enabled` | `false` | Enables interruptible listen-while-speaking turns; overridden by `HELIOS_BARGE_IN_ENABLED` |
+| `barge_in_enabled` | `true` | Enables interruptible listen-while-speaking turns; overridden by `HELIOS_BARGE_IN_ENABLED` |
 | `barge_in_event_energy` | `0.08` | Legacy-event detection energy; overridden by `HELIOS_BARGE_IN_EVENT_ENERGY` |
 | `barge_in_expected_echo_energy` | `0.04` | Calibrated Piper leakage RMS; overridden by `HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY` |
 | `barge_in_minimum_interrupt_energy` | `0.06` | Conservative interruption floor; overridden by `HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY` |
@@ -1837,12 +1852,12 @@ target-device measurements.
 - Explicit microphone and speaker selection are not configurable through a CLI.
 - Notification cues rely on Linux ALSA `aplay`.
 - There is no spoken shutdown command.
-- The active voice loop is single-session and exposes no control or conversation
-  API. The optional dashboard is a separate read-only KPI API, disabled by
-  default and local-only unless LAN access and authentication are explicit.
-- There is no durable local conversation memory. Opt-in Codex continuity is
-  ephemeral, remote-only, bounded to one running app-server process, and loses
-  its history on timeout, cap, failed/cancelled remote turn, or restart.
+- The active voice loop owns one in-process logical session and exposes only an
+  explicit reset method, not a multi-user conversation API. The optional
+  dashboard remains a separate read-only KPI API.
+- Conversation history is not durable across process restarts. Codex physical
+  threads are also ephemeral, but interruption, fallback, idle rotation, and
+  turn-cap rotation recover from bounded logical history while Helios runs.
 - Barge-in is opt-in and uses a conservative software echo gate. Its thresholds
   and 200-300 ms interruption target require calibration and measurement on the
   deployed microphone, speaker, enclosure, and audio level; hardware AEC is not

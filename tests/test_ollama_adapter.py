@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,6 +19,7 @@ from api.providers.contracts import (
     TextDelta,
 )
 from api.providers.ollama import OllamaAdapter
+from api.streaming import CancellationController
 
 
 def request(
@@ -59,6 +61,65 @@ class FakeClient:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+def test_cancellation_aborts_blocked_first_token_and_recreates_owned_client() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingChunks:
+        def __iter__(self):
+            return self
+
+        def __next__(self) -> object:
+            entered.set()
+            release.wait(timeout=2)
+            raise StopIteration
+
+        def close(self) -> None:
+            release.set()
+
+    class BlockingClient(FakeClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            return BlockingChunks()
+
+        def close(self) -> None:
+            super().close()
+            release.set()
+
+    first = BlockingClient()
+    second = FakeClient([{"message": {"content": "Recovered"}, "done": True}])
+    clients = iter([first, second])
+    adapter = OllamaAdapter(
+        "127.0.0.1:11434",
+        client_factory=lambda _host: next(clients),
+        cancellation_ack_timeout_seconds=0.1,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(adapter.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    assert entered.wait(timeout=1)
+    cancellation.cancel()
+    consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    assert first.close_calls == 1
+
+    events = list(adapter.stream(request()))
+    assert events[0] == TextDelta("Recovered")
+    assert isinstance(events[1], Completed)
 
 
 def test_constructor_is_lazy_and_normalizes_legacy_endpoint() -> None:
@@ -210,7 +271,7 @@ def test_call_time_transport_error_is_sanitized_and_retryable() -> None:
     adapter = OllamaAdapter("127.0.0.1:11434", client=FailingClient())
 
     with pytest.raises(ProviderError) as captured:
-        adapter.stream(request())
+        list(adapter.stream(request()))
 
     error = captured.value
     assert error.category is ErrorCategory.CONNECTIVITY
@@ -277,7 +338,7 @@ def test_http_status_classification(
     adapter = OllamaAdapter("127.0.0.1:11434", client=FailingClient())
 
     with pytest.raises(ProviderError) as captured:
-        adapter.stream(request())
+        list(adapter.stream(request()))
 
     error = captured.value
     assert error.category is category

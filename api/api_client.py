@@ -14,6 +14,7 @@ from typing import Any, Protocol
 import config
 from api.budget import BudgetError, BudgetLedger, BudgetLimits
 from api.catalog import CatalogError, ModelCatalog
+from api.conversation import ConversationSession, safe_conversation_identifier
 from api.health import HealthTracker
 from api.metrics import FanoutMetricSink, MetricEvent, SafeMetricsRecorder, record_safely
 from api.privacy import PrivacyGuard, PrivacyPolicy
@@ -176,6 +177,7 @@ class APIClient:
         connectivity: (Connectivity | str | Callable[[], Connectivity | str] | None) = None,
         network_monitor: Any | None = None,
         kpi_settings: config.KPISettings | None = None,
+        conversation_session: ConversationSession | None = None,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
@@ -186,6 +188,11 @@ class APIClient:
         self.models = {"talk": model_talk, "think": model_think}
         self.language = language.strip().lower()
         self.llm_settings = config.LLM_SETTINGS if llm_settings is None else llm_settings
+        self.conversation = conversation_session or ConversationSession(
+            idle_timeout_seconds=self.llm_settings.context_idle_timeout_seconds,
+            max_history_turns=self.llm_settings.context_max_turns,
+        )
+        self._conversation_request_lock = threading.Lock()
         self.kpi_settings = kpi_settings or config.KPISettings()
         self._kpi_service: Any | None = None
         self._mode_settings_by_name = {
@@ -406,6 +413,9 @@ class APIClient:
         *,
         owned: bool,
     ) -> None:
+        attach_conversation = getattr(provider, "attach_conversation_session", None)
+        if callable(attach_conversation):
+            attach_conversation(self.conversation)
         self._registry.register_instance(name, provider, owned=owned)
         self._registered_providers.add(name)
 
@@ -418,6 +428,7 @@ class APIClient:
                 allow_remote_context=self.llm_settings.privacy.allow_remote_context,
                 context_idle_timeout_seconds=(self.llm_settings.context_idle_timeout_seconds),
                 context_max_turns=self.llm_settings.context_max_turns,
+                conversation_session=self.conversation,
             )
             if factory is None:
                 logger.error(
@@ -676,6 +687,9 @@ class APIClient:
         *,
         mode: str,
         message: str,
+        history: tuple[ChatMessage, ...],
+        conversation_id: str,
+        conversation_turn: int,
         context: str | None,
         context_origin: ContentOrigin,
         message_redacted: bool,
@@ -683,6 +697,21 @@ class APIClient:
         privacy: PrivacyLevel | str | None,
         request_options: Mapping[str, Any] | None,
     ) -> ChatRequest:
+        selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
+        message_remote_eligible = (
+            selected_privacy is PrivacyLevel.REMOTE_ALLOWED
+            or (
+                selected_privacy is PrivacyLevel.REMOTE_REDACTED
+                and message_redacted
+            )
+        )
+        context_remote_eligible = (
+            selected_privacy is PrivacyLevel.REMOTE_ALLOWED
+            or (
+                selected_privacy is PrivacyLevel.REMOTE_REDACTED
+                and context_redacted
+            )
+        )
         messages: list[ChatMessage] = (
             [self._hybrid_system_message] if self._hybrid_system_message is not None else []
         )
@@ -693,17 +722,19 @@ class APIClient:
                     context,
                     origin=context_origin,
                     redacted=context_redacted,
+                    remote_eligible=context_remote_eligible,
                 )
             )
+        messages.extend(history)
         messages.append(
             ChatMessage(
                 Role.USER,
                 message,
                 origin=ContentOrigin.RAW_TRANSCRIPT,
                 redacted=message_redacted,
+                remote_eligible=message_remote_eligible,
             )
         )
-        selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
         return ChatRequest(
             model=self.models[mode],
             messages=tuple(messages),
@@ -717,6 +748,8 @@ class APIClient:
             ),
             timeouts=self._timeouts(mode),
             options=dict(request_options or {}),
+            conversation_id=conversation_id,
+            conversation_turn=conversation_turn,
         )
 
     def _plan(
@@ -994,6 +1027,127 @@ class APIClient:
             raise ValueError(f"Unknown model mode: {mode!r}")
 
         active_cancellation = cancellation or CancellationController()
+        selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
+        with self._conversation_request_lock:
+            previous_session_id = self.conversation.session_id
+            turn = self.conversation.begin_turn(
+                message,
+                privacy=selected_privacy,
+                redacted=message_redacted,
+            )
+            history = self.conversation.history_before(turn)
+            session_id = self.conversation.session_id
+            if session_id != previous_session_id:
+                self._forget_provider_conversations(
+                    previous_session_id,
+                    reason="idle_timeout",
+                )
+            try:
+                self.conversation.mark_streaming(turn)
+                response = self._stream_turn(
+                    mode=mode,
+                    message=turn.user.content,
+                    history=history,
+                    conversation_id=session_id,
+                    conversation_turn=turn.number,
+                    context=context,
+                    speak=speak,
+                    privacy=privacy,
+                    context_origin=context_origin,
+                    message_redacted=message_redacted,
+                    context_redacted=context_redacted,
+                    connectivity=connectivity,
+                    request_options=request_options,
+                    cancellation=active_cancellation,
+                    pipeline_started_at=pipeline_started_at,
+                    before_first_speech=before_first_speech,
+                )
+                source_origins: set[ContentOrigin] = {turn.user.origin}
+                assistant_remote_eligible = turn.user.remote_eligible
+                for historical in history:
+                    source_origins.add(historical.origin)
+                    source_origins.update(historical.source_origins)
+                    assistant_remote_eligible = (
+                        assistant_remote_eligible and historical.remote_eligible
+                    )
+                if context:
+                    try:
+                        source_origins.add(ContentOrigin(context_origin))
+                    except (TypeError, ValueError):
+                        source_origins.add(ContentOrigin.UNKNOWN)
+                if source_origins & {
+                    ContentOrigin.LOCAL_DOCUMENT,
+                    ContentOrigin.LOCAL_DOCUMENT_DERIVATIVE,
+                }:
+                    source_origins.add(ContentOrigin.LOCAL_DOCUMENT_DERIVATIVE)
+                if selected_privacy is PrivacyLevel.REMOTE_REDACTED:
+                    # No response redactor attested this model output.
+                    assistant_remote_eligible = False
+
+                def commit_response() -> None:
+                    self.conversation.complete_turn(
+                        turn,
+                        response,
+                        # Model output has not passed through an attested redactor,
+                        # even when its input was classified remote_redacted.
+                        redacted=False,
+                        remote_eligible=assistant_remote_eligible,
+                        source_origins=frozenset(source_origins),
+                    )
+
+                commit_if_active = getattr(
+                    active_cancellation,
+                    "commit_if_not_cancelled",
+                    None,
+                )
+                if callable(commit_if_active):
+                    commit_if_active(commit_response)
+                else:
+                    active_cancellation.raise_if_cancelled()
+                    commit_response()
+                return response
+            except BaseException:
+                self.conversation.fail_turn(
+                    turn,
+                    interrupted=bool(active_cancellation.cancelled),
+                )
+                self._invalidate_provider_conversations(
+                    session_id,
+                    turn.number,
+                    reason=(
+                        "logical_turn_cancelled"
+                        if active_cancellation.cancelled
+                        else "logical_turn_failed"
+                    ),
+                )
+                raise
+
+    def _stream_turn(
+        self,
+        *,
+        mode: str,
+        message: str,
+        history: tuple[ChatMessage, ...],
+        conversation_id: str,
+        conversation_turn: int,
+        context: str | None,
+        speak: bool,
+        privacy: PrivacyLevel | str | None = None,
+        context_origin: ContentOrigin = ContentOrigin.UNKNOWN,
+        message_redacted: bool = False,
+        context_redacted: bool = False,
+        connectivity: Connectivity | str | None = None,
+        request_options: Mapping[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
+        pipeline_started_at: float | None = None,
+        before_first_speech: Callable[[], Any] | None = None,
+    ) -> str:
+        if not message or not message.strip():
+            raise ValueError("message cannot be empty")
+        if mode not in self.models:
+            raise ValueError(f"Unknown model mode: {mode!r}")
+
+        active_cancellation = cancellation or CancellationController()
         with self._cancellation_lock:
             if self._closed:
                 raise APIClientError("Language-model client is closed")
@@ -1086,12 +1240,23 @@ class APIClient:
             request = self._request(
                 mode=mode,
                 message=message,
+                history=history,
+                conversation_id=conversation_id,
+                conversation_turn=conversation_turn,
                 context=context,
                 context_origin=context_origin,
                 message_redacted=message_redacted,
                 context_redacted=context_redacted,
                 privacy=privacy,
                 request_options=request_options,
+            )
+            logger.info(
+                "conversation_session=%s turn=%s event=llm_request_built "
+                "history_messages=%s request_messages=%s",
+                safe_conversation_identifier(conversation_id),
+                conversation_turn,
+                len(history),
+                len(request.messages),
             )
             routing_started_at = time.monotonic()
             executions, decision, snapshot, selected_connectivity = self._plan_detailed(
@@ -1111,6 +1276,14 @@ class APIClient:
                 "network_forced_local": decision.network_forced_local,
             }
             selected_route = executions[0].route
+            logger.info(
+                "conversation_session=%s turn=%s event=llm_route_selected "
+                "provider=%s route=%s",
+                safe_conversation_identifier(conversation_id),
+                conversation_turn,
+                selected_route.provider,
+                selected_route.name,
+            )
             record_safely(
                 self.metrics,
                 "llm_route_decided",
@@ -1169,6 +1342,19 @@ class APIClient:
                 complexity_score=decision.complexity_score,
                 **network_values,
             )
+            # Close the narrow race where cancellation can arrive after the
+            # coordinator consumes its terminal event but before the logical
+            # conversation commits the assistant turn. A superseded response
+            # must never become canonical history.
+            if active_cancellation.cancelled:
+                raise ProviderError(
+                    ErrorCategory.CANCELLED,
+                    "Language-model request was cancelled",
+                    provider=result.target.provider,
+                    model=result.target.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                )
             request_latency_ms = (time.monotonic() - request_started_at) * 1_000
             attempt_latency_ms = (
                 result.attempt_latency_seconds * 1_000
@@ -1388,6 +1574,60 @@ class APIClient:
             pipeline_started_at=pipeline_started_at,
             before_first_speech=before_first_speech,
         )
+
+    def reset_conversation(self, *, reason: str = "explicit") -> str:
+        """End the current logical conversation and return the new session ID."""
+
+        with self._conversation_request_lock:
+            previous_id = self.conversation.session_id
+            self._forget_provider_conversations(previous_id, reason=reason)
+            return self.conversation.reset(reason=reason)
+
+    def _forget_provider_conversations(self, conversation_id: str, *, reason: str) -> None:
+        for provider in self._registry.instantiated():
+            forget = getattr(provider, "forget_conversation", None)
+            if not callable(forget):
+                continue
+            try:
+                forget(conversation_id, reason=reason)
+            except Exception:
+                logger.warning(
+                    "Unable to forget provider conversation "
+                    "(provider=%s, conversation_session=%s)",
+                    provider.identity.name,
+                    safe_conversation_identifier(conversation_id),
+                    exc_info=True,
+                )
+
+    def _invalidate_provider_conversations(
+        self,
+        conversation_id: str,
+        conversation_turn: int,
+        *,
+        reason: str,
+    ) -> None:
+        """Tell a contextful provider that its terminal turn was not committed."""
+
+        for provider in self._registry.instantiated():
+            provider_name = provider.identity.name
+            invalidate = getattr(provider, "invalidate_conversation", None)
+            if not callable(invalidate):
+                continue
+            try:
+                invalidate(
+                    conversation_id,
+                    conversation_turn=conversation_turn,
+                    reason=reason,
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to invalidate provider conversation checkpoint "
+                    "(provider=%s, conversation_session=%s, turn=%s)",
+                    provider_name,
+                    safe_conversation_identifier(conversation_id),
+                    conversation_turn,
+                    exc_info=True,
+                )
 
     def cancel_current(self) -> None:
         """Request cancellation of all model streams currently owned by this client."""

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import math
+import queue
+import threading
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
 import config
+from api.conversation import safe_conversation_identifier
 from api.providers.contracts import (
     CancellationToken,
     ChatRequest,
@@ -25,6 +31,8 @@ from api.providers.contracts import (
 
 _PROVIDER_NAME = "ollama"
 _TRANSIENT_STATUS_CODES = frozenset({408, 425, 429})
+
+logger = logging.getLogger(__name__)
 
 
 def _default_client_factory(host: str) -> Any:
@@ -266,11 +274,25 @@ class OllamaAdapter:
         *,
         client: Any | None = None,
         client_factory: Callable[[str], Any] | None = None,
+        cancellation_ack_timeout_seconds: float = 1.0,
     ) -> None:
+        if (
+            isinstance(cancellation_ack_timeout_seconds, bool)
+            or not isinstance(cancellation_ack_timeout_seconds, (int, float))
+            or not math.isfinite(float(cancellation_ack_timeout_seconds))
+            or cancellation_ack_timeout_seconds <= 0
+        ):
+            raise ValueError("cancellation_ack_timeout_seconds must be positive and finite")
         self.host = config.normalize_ollama_host(host)
         self._client = client
         self._client_factory = client_factory or _default_client_factory
         self._owns_client = client is None
+        self._client_lock = threading.Lock()
+        self._client_epoch = 0
+        self._client_unusable = False
+        self._cancellation_ack_timeout_seconds = float(
+            cancellation_ack_timeout_seconds
+        )
         self._closed = False
 
     @property
@@ -292,25 +314,95 @@ class OllamaAdapter:
 
     @property
     def client(self) -> Any:
-        if self._closed:
+        with self._client_lock:
+            if self._closed or self._client_unusable:
+                raise ProviderError(
+                    ErrorCategory.PROVIDER_UNAVAILABLE,
+                    "Ollama provider is unavailable",
+                    provider=_PROVIDER_NAME,
+                    transmitted=False,
+                )
+            if self._client is not None:
+                return self._client
+            epoch = self._client_epoch
+        try:
+            candidate = self._client_factory(self.host)
+        except Exception as exc:
+            raise _provider_error(exc, model=None, transmitted=False) from None
+        with self._client_lock:
+            stale = (
+                self._closed
+                or self._client_unusable
+                or self._client_epoch != epoch
+            )
+            if not stale and self._client is None:
+                self._client = candidate
+                return candidate
+            selected = self._client
+        self._start_control_operation(
+            getattr(candidate, "close", lambda: None),
+            "stale_client_close",
+        )
+        if stale or selected is None:
             raise ProviderError(
                 ErrorCategory.PROVIDER_UNAVAILABLE,
-                "Ollama provider is closed",
+                "Ollama provider is unavailable",
                 provider=_PROVIDER_NAME,
                 transmitted=False,
             )
-        if self._client is None:
-            try:
-                self._client = self._client_factory(self.host)
-            except Exception as exc:
-                raise _provider_error(exc, model=None, transmitted=False) from None
-        return self._client
+        return selected
 
     @client.setter
     def client(self, value: Any) -> None:
-        self._client = value
-        self._owns_client = value is None
-        self._closed = False
+        with self._client_lock:
+            self._client_epoch += 1
+            self._client = value
+            self._owns_client = value is None
+            self._client_unusable = False
+            self._closed = False
+
+    def _start_control_operation(
+        self,
+        operation: Callable[[], Any],
+        operation_name: str,
+    ) -> threading.Event:
+        done = threading.Event()
+
+        def invoke() -> None:
+            try:
+                operation()
+            except Exception:
+                logger.warning(
+                    "provider=%s event=%s_failed",
+                    _PROVIDER_NAME,
+                    operation_name,
+                    exc_info=True,
+                )
+            finally:
+                done.set()
+
+        threading.Thread(
+            target=invoke,
+            name=f"helios-ollama-{operation_name}",
+            daemon=True,
+        ).start()
+        return done
+
+    def _retire_client(self, client: Any | None) -> threading.Event | None:
+        with self._client_lock:
+            if client is not None and self._client is not client:
+                return None
+            selected = self._client
+            self._client_epoch += 1
+            self._client = None
+            if not self._owns_client:
+                self._client_unusable = True
+        if selected is None:
+            return None
+        close = getattr(selected, "close", None)
+        if not callable(close):
+            return None
+        return self._start_control_operation(close, "client_retire")
 
     def stream(
         self,
@@ -344,12 +436,168 @@ class OllamaAdapter:
         if options:
             arguments["options"] = options
 
-        try:
-            chunks = self.client.chat(**arguments)
-        except Exception as exc:
-            raise _provider_error(exc, model=request.model, transmitted=None) from None
+        return self._cancellable_stream(
+            arguments,
+            request=request,
+            cancellation=cancellation,
+        )
 
-        return self._stream_events(chunks, request=request, cancellation=cancellation)
+    def _cancellable_stream(
+        self,
+        arguments: Mapping[str, Any],
+        *,
+        request: ChatRequest,
+        cancellation: CancellationToken | None,
+    ) -> Iterator[StreamEvent]:
+        mailbox: queue.Queue[tuple[str, Any]] = queue.Queue()
+        holder: dict[str, Any] = {}
+        stop_requested = threading.Event()
+        worker_done = threading.Event()
+
+        def worker() -> None:
+            try:
+                client = self.client
+                holder["client"] = client
+                if stop_requested.is_set():
+                    return
+                holder["chat_attempted"] = True
+                try:
+                    chunks = client.chat(**dict(arguments))
+                except Exception as exc:
+                    mailbox.put(("chat_error", exc))
+                    return
+                if stop_requested.is_set():
+                    close = getattr(chunks, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                    return
+                holder["chunks"] = chunks
+                for event in self._stream_events(
+                    chunks,
+                    request=request,
+                    cancellation=cancellation,
+                ):
+                    if stop_requested.is_set():
+                        return
+                    mailbox.put(("event", event))
+                mailbox.put(("eof", None))
+            except BaseException as exc:
+                mailbox.put(("error", exc))
+            finally:
+                worker_done.set()
+
+        threading.Thread(
+            target=worker,
+            name="helios-ollama-stream",
+            daemon=True,
+        ).start()
+
+        cancelled_worker = False
+        began = time.monotonic()
+        last_event = began
+        received_event = False
+
+        def stop_worker(reason: str) -> None:
+            nonlocal cancelled_worker
+            if cancelled_worker:
+                return
+            cancelled_worker = True
+            stop_requested.set()
+            chunks = holder.get("chunks")
+            close_chunks = getattr(chunks, "close", None)
+            if callable(close_chunks):
+                self._start_control_operation(close_chunks, "stream_close")
+            self._retire_client(holder.get("client"))
+            if not worker_done.wait(self._cancellation_ack_timeout_seconds):
+                logger.warning(
+                    "conversation_session=%s turn=%s provider=%s "
+                    "event=cancellation_ack_timeout reason=%s",
+                    safe_conversation_identifier(request.conversation_id),
+                    request.conversation_turn,
+                    _PROVIDER_NAME,
+                    reason,
+                )
+            else:
+                logger.info(
+                    "conversation_session=%s turn=%s provider=%s "
+                    "event=cancellation_acknowledged reason=%s",
+                    safe_conversation_identifier(request.conversation_id),
+                    request.conversation_turn,
+                    _PROVIDER_NAME,
+                    reason,
+                )
+
+        try:
+            while True:
+                try:
+                    self._check_cancellation(cancellation, request.model)
+                except ProviderError:
+                    stop_worker("cancelled")
+                    raise
+                now = time.monotonic()
+                total_remaining = request.timeouts.total_seconds - (now - began)
+                if "chunks" not in holder:
+                    stage_limit = request.timeouts.connect_seconds
+                elif not received_event:
+                    stage_limit = request.timeouts.first_token_seconds
+                else:
+                    stage_limit = request.timeouts.read_seconds
+                stage_remaining = stage_limit - (now - last_event)
+                wait_seconds = min(0.05, total_remaining, stage_remaining)
+                if wait_seconds <= 0:
+                    stop_worker("timeout")
+                    if "chunks" not in holder:
+                        category = ErrorCategory.CONNECT_TIMEOUT
+                    elif not received_event:
+                        category = ErrorCategory.FIRST_TOKEN_TIMEOUT
+                    else:
+                        category = ErrorCategory.READ_TIMEOUT
+                    raise ProviderError(
+                        category,
+                        "Ollama request timed out",
+                        provider=_PROVIDER_NAME,
+                        model=request.model,
+                        retryable_same_provider=True,
+                        transmitted=bool(holder.get("chat_attempted")),
+                    )
+                try:
+                    kind, value = mailbox.get(timeout=wait_seconds)
+                except queue.Empty:
+                    continue
+                if kind == "event":
+                    received_event = True
+                    last_event = time.monotonic()
+                    yield value
+                    continue
+                if kind == "eof":
+                    return
+                if kind == "chat_error" and isinstance(value, Exception):
+                    raise _provider_error(
+                        value,
+                        model=request.model,
+                        transmitted=None,
+                    ) from None
+                if isinstance(value, ProviderError):
+                    raise value
+                if isinstance(value, Exception):
+                    raise _provider_error(
+                        value,
+                        model=request.model,
+                        transmitted=bool(holder.get("chat_attempted")),
+                    ) from None
+                raise ProviderError(
+                    ErrorCategory.UNKNOWN,
+                    "Ollama stream worker failed",
+                    provider=_PROVIDER_NAME,
+                    model=request.model,
+                    transmitted=bool(holder.get("chat_attempted")),
+                )
+        finally:
+            if not worker_done.is_set():
+                stop_worker("consumer_closed")
 
     def _stream_events(
         self,
@@ -474,18 +722,24 @@ class OllamaAdapter:
             raise _provider_error(exc, model=model, transmitted=None) from None
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        client = self._client
-        if not self._owns_client or client is None:
+        with self._client_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._client_epoch += 1
+            client = self._client
+            self._client = None
+            owns_client = self._owns_client
+        if not owns_client or client is None:
             return
         close = getattr(client, "close", None)
         if callable(close):
-            try:
-                close()
-            except Exception as exc:
-                raise _provider_error(exc, model=None, transmitted=False) from None
+            done = self._start_control_operation(close, "client_close")
+            if not done.wait(self._cancellation_ack_timeout_seconds):
+                logger.warning(
+                    "provider=%s event=client_close_timeout",
+                    _PROVIDER_NAME,
+                )
 
     def __enter__(self) -> OllamaAdapter:
         return self

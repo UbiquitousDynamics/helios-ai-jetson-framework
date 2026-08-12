@@ -113,15 +113,15 @@ def test_invalid_environment_log_level_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_barge_in_is_opt_in_and_strictly_parsed(tmp_path: Path) -> None:
+def test_barge_in_is_enabled_by_default_and_strictly_parsed(tmp_path: Path) -> None:
     defaults = config.Settings.from_env(tmp_path, environ={})
-    enabled = config.Settings.from_env(
+    disabled = config.Settings.from_env(
         tmp_path,
-        environ={"HELIOS_BARGE_IN_ENABLED": "true"},
+        environ={"HELIOS_BARGE_IN_ENABLED": "false"},
     )
 
-    assert not defaults.barge_in_enabled
-    assert enabled.barge_in_enabled
+    assert defaults.barge_in_enabled
+    assert not disabled.barge_in_enabled
 
     with pytest.raises(config.ConfigurationError, match="HELIOS_BARGE_IN_ENABLED"):
         config.Settings.from_env(
@@ -239,6 +239,14 @@ def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> N
     )
 
     assert settings.health.maximum_talk_first_audio_ms == 30_000
+
+
+def test_codex_subscription_enables_remote_context_for_natural_conversation() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.privacy.allow_remote_context is True
 
 
 def test_codex_subscription_has_target_specific_talk_limits() -> None:

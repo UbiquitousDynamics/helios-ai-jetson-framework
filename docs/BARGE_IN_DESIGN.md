@@ -66,13 +66,14 @@ single edge-triggered interruption request; the integration is responsible for
 stopping playback and cancelling generation. All thresholds and timing values
 are constructor arguments so hardware tuning does not require detector changes.
 
-`VoiceAssistant` implements that contract only when
-`HELIOS_BARGE_IN_ENABLED=true`. It submits the response path to its existing
+`VoiceAssistant` implements that contract by default; set
+`HELIOS_BARGE_IN_ENABLED=false` to disable it. It submits the response path to its existing
 injectable conversation executor and opens one continuous `listen_events()`
 microphone/Vosk session while the response is being generated and spoken. The
-capture stays open during model thinking, but detection is deliberately armed
-only during actual playback and a 250 ms echo tail; background speech before
-Helios makes sound cannot cancel generation. This preserves Vosk decoder state
+capture stays open during model thinking. Partial recognition remains armed
+only during actual playback and a 250 ms echo tail, while a finalized utterance
+received during thinking or synthesis explicitly supersedes the pending answer.
+This preserves Vosk decoder state
 across the whole overlap instead of repeatedly reopening 250 ms capture slices.
 A detection calls both `PiperTTS.interrupt()` and
 `APIClient.cancel_current()`. The same recognizer session then continues until
@@ -80,7 +81,10 @@ Vosk emits or flushes the finalized interruption utterance. After the cancelled
 response worker unwinds, that finalized utterance becomes an authorized
 immediate follow-up. It does not require the wake word, and its response is
 monitored in the same way so more than one consecutive interruption is possible.
-Returning to the idle listening loop restores the normal wake-word requirement.
+The active voice session also accepts ordinary finalized follow-ups without a
+wake word until its configured idle timeout. A partial is never promoted to a
+final command when Vosk's final flush is empty; timeout therefore cancels the
+interrupted answer but executes no incomplete follow-up.
 The post-detection timeout is an inactivity deadline refreshed by each decoded
 event, so a long utterance is not cut off a fixed number of seconds after its
 first partial.
@@ -98,8 +102,9 @@ Notification sound and RAG preparation retain their original single-worker
 serial executor. Conversation responses and backchannels use a separate
 two-worker injectable lane, preventing a model worker from starving its cue.
 A supplied conversation executor with a known capacity below two workers is
-rejected when barge-in is enabled. Assistant-owned tasks are tracked and drained
-at shutdown even when the executor itself belongs to the caller.
+rejected when barge-in is enabled. Assistant-owned tasks are tracked and given a
+bounded cancellation deadline at shutdown even when the executor itself belongs
+to the caller.
 
 The conservative gate is deployment-tunable without code changes:
 
@@ -161,8 +166,8 @@ all three behaviors.
 
 ## Deployment status
 
-Barge-in and conversational cues default off together. Before enabling them on a
-vehicle, calibrate expected echo energy with the production enclosure,
+Barge-in and conversational cues default on together. Before production use on
+a vehicle, calibrate expected echo energy with the enclosure,
 microphone, speaker level, and Piper voice, then measure interruption latency,
 self-trigger rate, cue timing, Piper synthesis time, and actual first audio on
 the Jetson. Silence endpointing remains intentionally unchanged and optional;

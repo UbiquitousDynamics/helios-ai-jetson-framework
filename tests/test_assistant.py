@@ -183,6 +183,66 @@ def test_partial_recognition_is_not_executed() -> None:
     assert api.messages == []
 
 
+def test_active_voice_conversation_accepts_follow_up_without_wake_word() -> None:
+    tts = FakeTTS()
+    api = FakeAPI()
+    recognizer = FakeRecognizer(
+        [
+            RecognitionResult("Emilia, name three planets", is_final=True),
+            RecognitionResult("only discuss the second one", is_final=True),
+        ]
+    )
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            language="it",
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=recognizer,
+        barge_in_detector=object(),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assert assistant.run_once()
+    assert assistant.run_once()
+    assert api.messages == ["name three planets", "only discuss the second one"]
+    assistant.close()
+
+
+def test_voice_conversation_requires_wake_word_again_after_idle_timeout() -> None:
+    now = [0.0]
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            language="it",
+            barge_in_enabled=True,
+            llm=config.LLMSettings(context_idle_timeout_seconds=5),
+        ),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=FakeRecognizer(
+            [
+                RecognitionResult("Emilia, first question", is_final=True),
+                RecognitionResult("late follow-up", is_final=True),
+            ]
+        ),
+        barge_in_detector=object(),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: now[0],
+    )
+
+    assert assistant.run_once()
+    now[0] = 5.0
+    assert assistant.run_once() is False
+    assert api.messages == ["first question"]
+    assistant.close()
+
+
 def test_rag_state_transition_has_no_startup_warmup_query() -> None:
     rag = FakeRag()
     assistant, tts, api, sounds, _recognizer = make_assistant(
@@ -392,7 +452,7 @@ def test_echo_epoch_tracks_active_playback_and_only_a_short_completed_tail() -> 
     assistant.close()
 
 
-def test_barge_in_detector_is_not_consulted_before_playback() -> None:
+def test_final_follow_up_before_playback_supersedes_generation_without_detector() -> None:
     class IdleTTS(FakeTTS):
         is_speaking = False
         active_playback_started_at = None
@@ -431,10 +491,121 @@ def test_barge_in_detector_is_not_consulted_before_playback() -> None:
     )
     response: Future[str] = Future()
 
-    assert assistant._listen_for_barge_in(response) is None
+    assert assistant._listen_for_barge_in(response) == "correzione"
     assert detector.calls == 0
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_partial_only_barge_in_timeout_never_executes_partial_as_follow_up() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 0.0
+
+    class PartialOnlyRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult("incomplete phrase", is_final=False, frame_energy=0.5)
+
+    class Detecting:
+        def reset(self) -> None:
+            pass
+
+        def process_recognition(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=PartialOnlyRecognizer([]),
+        barge_in_detector=Detecting(),
+        sound_executor=ImmediateExecutor(),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_response_completion_wins_over_late_recognizer_finalization() -> None:
+    response: Future[str] = Future()
+
+    class ResettableDetector:
+        def reset(self) -> None:
+            pass
+
+    class CompletionRaceRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            response.set_result("done")
+            yield RecognitionResult("late flush", is_final=True, frame_energy=0.5)
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=CompletionRaceRecognizer([]),
+        barge_in_detector=ResettableDetector(),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assert assistant._listen_for_barge_in(response) is None
     assert api.cancelled is False
-    response.set_result("answer")
+    assistant.close()
+
+
+def test_tts_interrupt_failure_does_not_skip_model_cancellation() -> None:
+    class FailingInterruptTTS(FakeTTS):
+        def interrupt(self) -> None:
+            raise RuntimeError("audio backend failed")
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FailingInterruptTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assistant._interrupt_current_response()
+
+    assert api.cancelled is True
+    assistant.close()
+
+
+def test_stop_forces_active_follow_up_capture_to_finish() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+    capture_stop = _BargeInCaptureStop(
+        clock=lambda: 0.0,
+        follow_up_timeout_seconds=30,
+    )
+    capture_stop.barge_in_detected()
+    with assistant._capture_lock:
+        assistant._active_capture_stop = capture_stop
+
+    assistant.stop()
+
+    assert capture_stop.is_set()
+    assert api.cancelled is True
+    capture_stop.capture_finished()
+    with assistant._capture_lock:
+        assistant._active_capture_stop = None
     assistant.close()
 
 

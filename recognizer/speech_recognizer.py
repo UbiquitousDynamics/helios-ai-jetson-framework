@@ -16,6 +16,8 @@ from recognizer.barge_in_detector import pcm16_rms
 
 logger = logging.getLogger(__name__)
 
+_PARTIAL_ENERGY_REEMIT_DELTA = 0.02
+
 
 class SpeechRecognitionError(RuntimeError):
     """Raised when microphone capture or Vosk recognition fails."""
@@ -184,6 +186,7 @@ class SpeechRecognizer:
 
         stream: Any | None = None
         last_partial = ""
+        last_partial_energy: float | None = None
         last_final = ""
         last_frame_energy: float | None = None
         start_time = self._clock()
@@ -222,8 +225,16 @@ class SpeechRecognizer:
                 else:
                     partial = self._parse_result(recognizer.PartialResult(), "partial")
                     clean_partial = self.remove_consecutive_duplicates(partial).strip()
-                    if clean_partial and clean_partial != last_partial:
+                    energy_advanced = (
+                        clean_partial == last_partial
+                        and last_frame_energy is not None
+                        and last_partial_energy is not None
+                        and last_frame_energy - last_partial_energy
+                        >= _PARTIAL_ENERGY_REEMIT_DELTA
+                    )
+                    if clean_partial and (clean_partial != last_partial or energy_advanced):
                         last_partial = clean_partial
+                        last_partial_energy = last_frame_energy
                         yield RecognitionResult(
                             clean_partial,
                             is_final=False,
@@ -234,12 +245,6 @@ class SpeechRecognizer:
             if callable(final_result):
                 text = self._parse_result(final_result(), "text")
                 clean_text = self.remove_consecutive_duplicates(text).strip()
-                if not clean_text and stop_event is not None and stop_event.is_set():
-                    # An externally stopped Vosk session can retain useful
-                    # decoder state only in its last partial. The explicit
-                    # endpoint promotes that state to a final event so callers
-                    # never have to execute a partial command.
-                    clean_text = last_partial
                 if clean_text and clean_text != last_final:
                     yield RecognitionResult(
                         clean_text,

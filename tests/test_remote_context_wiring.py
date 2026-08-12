@@ -52,6 +52,47 @@ class NoCallCodexRuntime:
         return None
 
 
+class RecordingCodexTurn:
+    def __init__(self, thread_id: str, text: str) -> None:
+        self.thread_id = thread_id
+        self.id = f"turn-{thread_id}-{text}"
+        self.text = text
+
+    def stream(self):
+        return [
+            {"method": "item/agentMessage/delta", "payload": {"delta": self.text}},
+            {"method": "turn/completed", "payload": {"turn": {"status": "completed"}}},
+        ]
+
+    def interrupt(self) -> None:
+        pass
+
+
+class RecordingCodexRuntime:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.responses = iter(["First.", "Second."])
+        self.thread_count = 0
+
+    def account_kind(self) -> str:
+        return "chatgpt"
+
+    def start_turn(self, **kwargs: Any) -> RecordingCodexTurn:
+        call = dict(kwargs)
+        if "thread_id" in kwargs:
+            call["operation"] = "resume"
+            thread_id = str(kwargs["thread_id"])
+        else:
+            call["operation"] = "start"
+            self.thread_count += 1
+            thread_id = f"thread-{self.thread_count}"
+        self.calls.append(call)
+        return RecordingCodexTurn(thread_id, next(self.responses))
+
+    def close(self) -> None:
+        pass
+
+
 def codex_provider_settings() -> config.LLMProviderSettings:
     return config.LLMProviderSettings(
         name="openai-codex",
@@ -220,6 +261,46 @@ def test_ollama_answer_makes_no_codex_runtime_or_backfill_calls(tmp_path: Path) 
         assert runtime.account_calls == 0
         assert runtime.turn_calls == 0
         assert runtime.inject_calls == 0
+    finally:
+        client.close()
+        codex.close()
+
+
+def test_api_client_session_drives_codex_start_then_resume(tmp_path: Path) -> None:
+    runtime = RecordingCodexRuntime()
+    codex = CodexAppServerAdapter(
+        "openai-codex",
+        runtime=runtime,
+        allow_remote_context=True,
+    )
+    client = APIClient(
+        client=FakeOllamaClient(),
+        tts=FakeTTS(),
+        llm_settings=codex_routing_settings(tmp_path),
+        providers={"openai-codex": codex},
+        connectivity=Connectivity.ONLINE,
+        retry_wait=0,
+        language="en",
+    )
+    try:
+        assert client.talk("first question") == "First."
+        assert client.talk("second question") == "Second."
+
+        assert [call["operation"] for call in runtime.calls] == ["start", "resume"]
+        assert "first question" in runtime.calls[0]["prompt"]
+        assert "second question" in runtime.calls[1]["prompt"]
+        assert "first question" not in runtime.calls[1]["prompt"]
+        snapshot = client.conversation.snapshot()
+        assert snapshot.turn_count == 2
+        assert snapshot.history_message_count == 4
+        assert snapshot.provider_threads == (("openai-codex", "thread-1"),)
+        assert len(codex._context_states) == 1
+        assert next(iter(codex._context_states.values())).synced_turn == 2
+        previous_session = snapshot.session_id
+        next_session = client.reset_conversation(reason="test_boundary")
+        assert next_session != previous_session
+        assert previous_session not in codex._context_states
+        assert client.conversation.snapshot().provider_threads == ()
     finally:
         client.close()
         codex.close()

@@ -69,10 +69,21 @@ class ChatMessage:
     content: str
     origin: ContentOrigin = ContentOrigin.UNKNOWN
     redacted: bool = False
+    remote_eligible: bool = True
+    source_origins: frozenset[ContentOrigin] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.content:
             raise ValueError("message content cannot be empty")
+        if not isinstance(self.remote_eligible, bool):
+            raise TypeError("remote_eligible must be a boolean")
+        try:
+            normalized_origins = frozenset(
+                ContentOrigin(origin) for origin in self.source_origins
+            )
+        except (TypeError, ValueError):
+            raise ValueError("source_origins contains an invalid provenance") from None
+        object.__setattr__(self, "source_origins", normalized_origins)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +118,8 @@ class ChatRequest:
     required_features: frozenset[str] = frozenset()
     options: Mapping[str, Any] = field(default_factory=dict)
     remote_authorized: bool = False
+    conversation_id: str | None = None
+    conversation_turn: int | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -117,6 +130,14 @@ class ChatRequest:
             raise ValueError(f"unsupported request mode: {self.mode!r}")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be at least one")
+        if self.conversation_id is not None and not self.conversation_id.strip():
+            raise ValueError("conversation_id cannot be empty")
+        if self.conversation_turn is not None and (
+            isinstance(self.conversation_turn, bool)
+            or not isinstance(self.conversation_turn, int)
+            or self.conversation_turn < 1
+        ):
+            raise ValueError("conversation_turn must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
