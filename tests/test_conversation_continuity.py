@@ -6,7 +6,12 @@ from typing import Any
 import pytest
 
 from api.api_client import APIClient, APIClientError
-from api.conversation import ConversationSession, ConversationTurnStatus
+from api.conversation import (
+    INTERRUPTED_RESPONSE_MARKER,
+    ConversationSession,
+    ConversationTurnStatus,
+)
+from api.providers.contracts import ContentOrigin, Role
 
 
 class SilentTTS:
@@ -52,14 +57,58 @@ def test_local_model_receives_canonical_history_on_the_next_turn() -> None:
     ]
 
 
-def test_interrupted_user_turn_remains_in_history_without_partial_assistant_text() -> None:
-    def interrupted() -> Iterable[object]:
+def test_interrupted_turn_keeps_context_and_marks_the_next_user_as_active() -> None:
+    session = ConversationSession(id_factory=lambda: "stable-session")
+    interrupted = session.begin_turn("Name the first three planets")
+    session.mark_streaming(interrupted)
+    session.fail_turn(interrupted, interrupted=True)
+    ollama = SequencedOllamaClient([completed("Venus is the second planet.")])
+    client = APIClient(
+        client=ollama,
+        tts=SilentTTS(),
+        retry_attempts=1,
+        retry_wait=0,
+        conversation_session=session,
+    )
+
+    assert client.talk("Only discuss the second one") == "Venus is the second planet."
+
+    assert ollama.calls[0]["messages"] == [
+        {"role": "user", "content": "Name the first three planets"},
+        {"role": "assistant", "content": INTERRUPTED_RESPONSE_MARKER},
+        {"role": "user", "content": "Only discuss the second one"},
+    ]
+
+
+def test_interruption_marker_is_content_free_remote_safe_history() -> None:
+    session = ConversationSession(id_factory=lambda: "stable-session")
+    interrupted = session.begin_turn("private interrupted request")
+    session.mark_streaming(interrupted)
+    session.fail_turn(interrupted, interrupted=True)
+    current = session.begin_turn("new active request")
+
+    history = session.history_before(current)
+
+    assert [(message.role, message.content) for message in history] == [
+        (Role.USER, "private interrupted request"),
+        (Role.ASSISTANT, INTERRUPTED_RESPONSE_MARKER),
+    ]
+    marker = history[-1]
+    assert marker.origin is ContentOrigin.CONVERSATION_HISTORY
+    assert marker.redacted is True
+    assert marker.remote_eligible is True
+    assert marker.source_origins == frozenset({ContentOrigin.STATIC_INSTRUCTION})
+    session.fail_turn(current, interrupted=False)
+
+
+def test_failed_turn_keeps_user_context_without_partial_assistant_text() -> None:
+    def failed() -> Iterable[object]:
         yield {"message": {"content": "Mercury, Venus, and Earth."}, "done": False}
-        raise OSError("stream interrupted")
+        raise OSError("stream failed")
 
     ollama = SequencedOllamaClient(
         [
-            interrupted(),
+            failed(),
             completed("Venus is the second planet."),
         ]
     )
@@ -127,7 +176,7 @@ def test_session_history_is_bounded_without_resetting_logical_turn_count() -> No
     snapshot = session.snapshot()
     assert snapshot.turn_count == 5
     assert snapshot.retained_turn_count == 2
-    assert snapshot.history_message_count == 3
+    assert snapshot.history_message_count == 4
 
 
 def test_explicit_session_reset_does_not_reuse_prior_history() -> None:

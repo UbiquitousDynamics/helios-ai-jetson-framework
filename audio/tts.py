@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import inspect
 import logging
 import threading
 import time
@@ -144,8 +145,16 @@ class SoundDeviceBackend:
         channels: int,
         sample_width: int,
         interrupt_event: threading.Event,
+        *,
+        pause_event: threading.Event | None = None,
     ) -> int:
-        """Play PCM in bounded chunks and return the number of frames written."""
+        """Play PCM in bounded chunks and return the number of frames written.
+
+        ``pause_event`` is a response-scoped TTS duck. Unlike interruption it
+        preserves the current frame offset, allowing playback to resume when a
+        provisional STT candidate is rejected. An interrupt always wins and
+        wakes a paused playback within one short polling interval.
+        """
 
         try:
             dtype = self._DTYPE_BY_WIDTH[sample_width]
@@ -166,18 +175,28 @@ class SoundDeviceBackend:
                 stream = self._get_stream(sample_rate, channels, dtype)
                 if interrupt_event.is_set():
                     return 0
-                stream.start()
-                started = True
                 for offset in range(0, len(frames), chunk_size):
                     if interrupt_event.is_set():
                         break
+                    if pause_event is not None and pause_event.is_set():
+                        if started:
+                            stream.stop()
+                            started = False
+                        while pause_event.is_set() and not interrupt_event.wait(0.02):
+                            pass
+                        if interrupt_event.is_set():
+                            break
+                    if not started:
+                        stream.start()
+                        started = True
                     chunk = frames[offset : offset + chunk_size]
                     underflowed = stream.write(chunk)
                     frames_written += len(chunk) // bytes_per_frame
                     if underflowed:
                         logger.warning("Audio output underflow while playing TTS")
-                stream.stop()
-                started = False
+                if started:
+                    stream.stop()
+                    started = False
                 return frames_written
             except AudioPlaybackError:
                 raise
@@ -227,6 +246,7 @@ class PiperTTS:
         self._active_interrupt: threading.Event | None = None
         self._active_playback_started_at: float | None = None
         self._active_playback_text: str | None = None
+        self._playback_pause = threading.Event()
         self._last_playback_started_at: float | None = None
         self._last_playback_ended_at: float | None = None
         self._last_playback_text: str | None = None
@@ -308,10 +328,35 @@ class PiperTTS:
                 if event is not None
             }
             if not events:
+                # A future/current playback may be waiting in the response-
+                # scoped duck even when no backend buffer is active yet.
+                self._playback_pause.clear()
                 return False
             for event in events:
                 event.set()
+            self._playback_pause.clear()
             return True
+
+    def duck(self) -> bool:
+        """Pause response playback without cancelling synthesis or model work.
+
+        This is intentionally reversible: a provisional barge-in partial may
+        mute the loudspeaker so Vosk can finish the user's utterance, while a
+        rejected candidate can resume the exact PCM buffer from its prior
+        frame offset.
+        """
+
+        with self._state_lock:
+            self._ensure_open()
+            self._playback_pause.set()
+        return True
+
+    def resume(self) -> bool:
+        """Resume playback paused by :meth:`duck`."""
+
+        was_paused = self._playback_pause.is_set()
+        self._playback_pause.clear()
+        return was_paused
 
     @property
     def voice(self) -> Any:
@@ -385,11 +430,24 @@ class PiperTTS:
         output.seek(0)
         return output
 
-    def preload_phrases(self, phrases: Iterable[str]) -> tuple[str, ...]:
-        """Synthesize short phrases into memory before latency-sensitive use."""
+    def preload_phrases(
+        self,
+        phrases: Iterable[str],
+        *,
+        stop_event: threading.Event | None = None,
+    ) -> tuple[str, ...]:
+        """Synthesize phrases until complete or cooperative cancellation is requested.
+
+        Native Piper synthesis cannot be interrupted safely while it is in
+        progress.  The stop event therefore bounds cancellation at phrase
+        boundaries and prevents an in-flight result from being cached after a
+        shutdown request.
+        """
 
         loaded: list[str] = []
         for value in phrases:
+            if stop_event is not None and stop_event.is_set():
+                break
             phrase = str(value).strip()
             if not phrase:
                 raise ValueError("preloaded phrases cannot be empty")
@@ -398,6 +456,8 @@ class PiperTTS:
                     loaded.append(phrase)
                     continue
             wave_bytes = self.synthesize_wave(phrase).getvalue()
+            if stop_event is not None and stop_event.is_set():
+                break
             with self._close_lock:
                 self._ensure_open()
                 with self._cache_lock:
@@ -467,13 +527,41 @@ class PiperTTS:
                         None,
                     )
                     if callable(play_interruptibly):
-                        frames_written = play_interruptibly(
-                            frames,
-                            sample_rate,
-                            channels,
-                            sample_width,
-                            playback_interrupt,
-                        )
+                        try:
+                            signature = inspect.signature(play_interruptibly)
+                            supports_pause = "pause_event" in signature.parameters or any(
+                                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                                for parameter in signature.parameters.values()
+                            )
+                        except (TypeError, ValueError):
+                            supports_pause = False
+                        if supports_pause:
+                            frames_written = play_interruptibly(
+                                frames,
+                                sample_rate,
+                                channels,
+                                sample_width,
+                                playback_interrupt,
+                                pause_event=self._playback_pause,
+                            )
+                        else:
+                            # Compatibility for injected/legacy backends. They
+                            # cannot pause an already active write, but a duck
+                            # established before playback still blocks safely.
+                            while self._playback_pause.is_set():
+                                if playback_interrupt.wait(0.02):
+                                    break
+                            frames_written = (
+                                0
+                                if playback_interrupt.is_set()
+                                else play_interruptibly(
+                                    frames,
+                                    sample_rate,
+                                    channels,
+                                    sample_width,
+                                    playback_interrupt,
+                                )
+                            )
                         if frames_written is None:
                             frames_written = frame_count
                     elif playback_interrupt.is_set():

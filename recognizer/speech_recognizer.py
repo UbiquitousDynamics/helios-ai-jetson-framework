@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -33,6 +34,22 @@ class RecognitionResult:
     segment_id: int | None = None
     segment_started_at: float | None = None
     energy_reemit: bool = False
+    confidence: float | None = None
+    speech_duration_seconds: float | None = None
+    segment_peak_energy: float | None = None
+    word_confidences: tuple[float | None, ...] = ()
+    word_timings: tuple[tuple[float, float] | None, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ParsedRecognition:
+    """Content-free metadata extracted from one Vosk JSON payload."""
+
+    text: str
+    confidence: float | None
+    speech_duration_seconds: float | None
+    word_confidences: tuple[float | None, ...]
+    word_timings: tuple[tuple[float, float] | None, ...]
 
 
 class SpeechRecognizer:
@@ -76,6 +93,42 @@ class SpeechRecognizer:
             if word != filtered[-1]:
                 filtered.append(word)
         return " ".join(filtered)
+
+    @staticmethod
+    def _deduplicate_parsed(parsed: _ParsedRecognition) -> _ParsedRecognition:
+        """Deduplicate text and word metadata with identical index transforms."""
+
+        words = parsed.text.split()
+        if not words:
+            return parsed
+        kept_indices = [0]
+        for index in range(1, len(words)):
+            if words[index] != words[kept_indices[-1]]:
+                kept_indices.append(index)
+        text = " ".join(words[index] for index in kept_indices)
+        confidences = tuple(
+            parsed.word_confidences[index]
+            for index in kept_indices
+            if index < len(parsed.word_confidences)
+        )
+        timings = tuple(
+            parsed.word_timings[index] for index in kept_indices if index < len(parsed.word_timings)
+        )
+        known_confidences = tuple(value for value in confidences if value is not None)
+        known_timings = tuple(value for value in timings if value is not None)
+        return _ParsedRecognition(
+            text=text,
+            confidence=(
+                sum(known_confidences) / len(known_confidences) if known_confidences else None
+            ),
+            speech_duration_seconds=(
+                max(end for _, end in known_timings) - min(start for start, _ in known_timings)
+                if known_timings
+                else None
+            ),
+            word_confidences=confidences,
+            word_timings=timings,
+        )
 
     def _ensure_runtime(self) -> None:
         with self._runtime_lock:
@@ -155,12 +208,95 @@ class SpeechRecognizer:
             return thread
 
     @staticmethod
-    def _parse_result(payload: str, key: str) -> str:
+    def _parse_recognition(payload: str, key: str) -> _ParsedRecognition:
         try:
             parsed = json.loads(payload)
         except (TypeError, json.JSONDecodeError) as exc:
             raise SpeechRecognitionError("Recognizer returned invalid JSON") from exc
-        return str(parsed.get(key) or "")
+        if not isinstance(parsed, dict):
+            raise SpeechRecognitionError("Recognizer returned invalid JSON")
+
+        text = str(parsed.get(key) or "")
+        detail_key = "partial_result" if key == "partial" else "result"
+        raw_words = parsed.get(detail_key)
+        if not isinstance(raw_words, list):
+            return _ParsedRecognition(text, None, None, (), ())
+
+        confidences: list[float] = []
+        starts: list[float] = []
+        ends: list[float] = []
+        word_confidences: list[float | None] = []
+        word_timings: list[tuple[float, float] | None] = []
+        for raw_word in raw_words:
+            if not isinstance(raw_word, dict):
+                continue
+            confidence = raw_word.get("conf")
+            if (
+                isinstance(confidence, (int, float))
+                and not isinstance(confidence, bool)
+                and math.isfinite(float(confidence))
+                and 0 <= float(confidence) <= 1
+            ):
+                parsed_confidence: float | None = float(confidence)
+                confidences.append(parsed_confidence)
+            else:
+                parsed_confidence = None
+            word_confidences.append(parsed_confidence)
+            start = raw_word.get("start")
+            end = raw_word.get("end")
+            if (
+                isinstance(start, (int, float))
+                and not isinstance(start, bool)
+                and math.isfinite(float(start))
+                and float(start) >= 0
+                and isinstance(end, (int, float))
+                and not isinstance(end, bool)
+                and math.isfinite(float(end))
+                and float(end) >= float(start)
+            ):
+                parsed_timing: tuple[float, float] | None = (
+                    float(start),
+                    float(end),
+                )
+                starts.append(parsed_timing[0])
+                ends.append(parsed_timing[1])
+            else:
+                parsed_timing = None
+            word_timings.append(parsed_timing)
+
+        confidence = sum(confidences) / len(confidences) if confidences else None
+        speech_duration_seconds = max(ends) - min(starts) if starts and ends else None
+        return _ParsedRecognition(
+            text,
+            confidence,
+            speech_duration_seconds,
+            tuple(word_confidences),
+            tuple(word_timings),
+        )
+
+    @staticmethod
+    def _parse_result(payload: str, key: str) -> str:
+        """Preserve the legacy text-only parser used by injected adapters."""
+
+        return SpeechRecognizer._parse_recognition(payload, key).text
+
+    @staticmethod
+    def _enable_word_metadata(recognizer: Any) -> None:
+        """Request optional Vosk word metadata without breaking older adapters."""
+
+        for method_name in ("SetWords", "SetPartialWords"):
+            configure = getattr(recognizer, method_name, None)
+            if not callable(configure):
+                continue
+            try:
+                configure(True)
+            except Exception:
+                # Word metadata improves barge-in validation, but recognition
+                # must remain compatible with older Vosk/injected adapters.
+                logger.debug(
+                    "Recognizer does not support optional metadata method=%s",
+                    method_name,
+                )
 
     def listen_events(
         self,
@@ -195,6 +331,7 @@ class SpeechRecognizer:
         next_segment_id = 1
         active_segment_id: int | None = None
         active_segment_started_at: float | None = None
+        active_segment_peak_energy: float | None = None
 
         def ensure_active_segment(started_at: float) -> tuple[int, float]:
             nonlocal next_segment_id, active_segment_id, active_segment_started_at
@@ -208,10 +345,21 @@ class SpeechRecognizer:
         def reset_active_segment() -> None:
             nonlocal last_partial, last_partial_energy
             nonlocal active_segment_id, active_segment_started_at
+            nonlocal active_segment_peak_energy
             last_partial = ""
             last_partial_energy = None
             active_segment_id = None
             active_segment_started_at = None
+            active_segment_peak_energy = None
+
+        def observe_segment_energy(energy: float | None) -> float | None:
+            nonlocal active_segment_peak_energy
+            if energy is not None:
+                active_segment_peak_energy = max(
+                    energy,
+                    active_segment_peak_energy or energy,
+                )
+            return active_segment_peak_energy
 
         try:
             stream = self.p.open(
@@ -223,14 +371,12 @@ class SpeechRecognizer:
             )
             stream.start_stream()
             recognizer = self._recognizer_factory(self.model, self.rate)
+            self._enable_word_metadata(recognizer)
             logger.info("Listening for speech")
 
             while not (stop_event is not None and stop_event.is_set()):
                 last_frame_started_at = self._clock()
-                if (
-                    timeout is not None
-                    and last_frame_started_at - start_time >= timeout
-                ):
+                if timeout is not None and last_frame_started_at - start_time >= timeout:
                     break
                 data = stream.read(self.chunk, exception_on_overflow=False)
                 try:
@@ -239,35 +385,51 @@ class SpeechRecognizer:
                     # Preserve compatibility with synthetic/non-PCM adapters
                     # while exposing real PCM energy to barge-in consumers.
                     last_frame_energy = None
+                # Keep the peak for the current Vosk endpoint interval even
+                # before the first non-empty partial. Final-only utterances
+                # commonly end on silence; using only that last frame would
+                # discard real short commands.
+                observe_segment_energy(last_frame_energy)
                 if recognizer.AcceptWaveform(data):
-                    text = self._parse_result(recognizer.Result(), "text")
-                    clean_text = self.remove_consecutive_duplicates(text).strip()
+                    parsed_result = self._parse_recognition(recognizer.Result(), "text")
+                    parsed_result = self._deduplicate_parsed(parsed_result)
+                    clean_text = parsed_result.text.strip()
                     if clean_text:
                         segment_id, segment_started_at = ensure_active_segment(
                             last_frame_started_at
                         )
+                        segment_peak_energy = observe_segment_energy(last_frame_energy)
                         yield RecognitionResult(
                             clean_text,
                             is_final=True,
                             frame_energy=last_frame_energy,
                             segment_id=segment_id,
                             segment_started_at=segment_started_at,
+                            confidence=parsed_result.confidence,
+                            speech_duration_seconds=(parsed_result.speech_duration_seconds),
+                            segment_peak_energy=segment_peak_energy,
+                            word_confidences=parsed_result.word_confidences,
+                            word_timings=parsed_result.word_timings,
                         )
                     reset_active_segment()
                 else:
-                    partial = self._parse_result(recognizer.PartialResult(), "partial")
-                    clean_partial = self.remove_consecutive_duplicates(partial).strip()
+                    parsed_partial = self._parse_recognition(
+                        recognizer.PartialResult(),
+                        "partial",
+                    )
+                    parsed_partial = self._deduplicate_parsed(parsed_partial)
+                    clean_partial = parsed_partial.text.strip()
                     energy_advanced = (
                         clean_partial == last_partial
                         and last_frame_energy is not None
                         and last_partial_energy is not None
-                        and last_frame_energy - last_partial_energy
-                        >= _PARTIAL_ENERGY_REEMIT_DELTA
+                        and last_frame_energy - last_partial_energy >= _PARTIAL_ENERGY_REEMIT_DELTA
                     )
                     if clean_partial and (clean_partial != last_partial or energy_advanced):
                         segment_id, segment_started_at = ensure_active_segment(
                             last_frame_started_at
                         )
+                        segment_peak_energy = observe_segment_energy(last_frame_energy)
                         last_partial = clean_partial
                         last_partial_energy = last_frame_energy
                         yield RecognitionResult(
@@ -277,22 +439,32 @@ class SpeechRecognizer:
                             segment_id=segment_id,
                             segment_started_at=segment_started_at,
                             energy_reemit=energy_advanced,
+                            confidence=parsed_partial.confidence,
+                            speech_duration_seconds=(parsed_partial.speech_duration_seconds),
+                            segment_peak_energy=segment_peak_energy,
+                            word_confidences=parsed_partial.word_confidences,
+                            word_timings=parsed_partial.word_timings,
                         )
 
             final_result = getattr(recognizer, "FinalResult", None)
             if callable(final_result):
-                text = self._parse_result(final_result(), "text")
-                clean_text = self.remove_consecutive_duplicates(text).strip()
+                parsed_result = self._parse_recognition(final_result(), "text")
+                parsed_result = self._deduplicate_parsed(parsed_result)
+                clean_text = parsed_result.text.strip()
                 if clean_text:
-                    segment_id, segment_started_at = ensure_active_segment(
-                        last_frame_started_at
-                    )
+                    segment_id, segment_started_at = ensure_active_segment(last_frame_started_at)
+                    segment_peak_energy = observe_segment_energy(last_frame_energy)
                     yield RecognitionResult(
                         clean_text,
                         is_final=True,
                         frame_energy=last_frame_energy,
                         segment_id=segment_id,
                         segment_started_at=segment_started_at,
+                        confidence=parsed_result.confidence,
+                        speech_duration_seconds=(parsed_result.speech_duration_seconds),
+                        segment_peak_energy=segment_peak_energy,
+                        word_confidences=parsed_result.word_confidences,
+                        word_timings=parsed_result.word_timings,
                     )
                 reset_active_segment()
         except SpeechRecognitionError:

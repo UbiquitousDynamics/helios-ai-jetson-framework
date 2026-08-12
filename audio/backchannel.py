@@ -6,7 +6,7 @@ import logging
 import inspect
 import threading
 import time
-from concurrent.futures import CancelledError, Future
+from concurrent.futures import CancelledError, Future, TimeoutError as FutureTimeoutError
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -109,20 +109,31 @@ class BackchannelSession:
             with self._lock:
                 self._playing = False
 
-    def supersede(self) -> None:
-        """Prevent or interrupt the cue and wait until its playback has stopped."""
+    def supersede(self, timeout: float | None = None) -> bool:
+        """Prevent/interrupt the cue and optionally bound the playback barrier.
+
+        Return true only after the worker has stopped. A finite timeout is used
+        during process shutdown so a native audio call cannot prevent the CLI's
+        hard-exit fallback from running.
+        """
+
+        if timeout is not None and timeout < 0:
+            raise ValueError("timeout must be non-negative")
 
         self._cancelled.set()
         if self._future.cancel():
-            return
+            return True
         try:
-            self._future.result()
+            self._future.result(timeout=timeout)
         except CancelledError:
-            return
+            return True
+        except FutureTimeoutError:
+            return False
         except Exception:
             # ``_run`` contains its own safety boundary; retain this guard for
             # unusual executor implementations.
             logger.warning("Backchannel worker failed", exc_info=True)
+        return self._future.done()
 
 
 __all__ = ["BackchannelSession"]

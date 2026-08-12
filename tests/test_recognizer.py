@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 from array import array
 
+import pytest
+
 from recognizer.speech_recognizer import RecognitionResult, SpeechRecognizer
 
 
@@ -165,9 +167,7 @@ def test_stop_event_never_promotes_last_partial_when_vosk_flush_is_empty() -> No
 
     results = list(recognizer.listen_events(stop_event=stop_event))
 
-    assert [(result.text, result.is_final) for result in results] == [
-        ("nuova domanda", False)
-    ]
+    assert [(result.text, result.is_final) for result in results] == [("nuova domanda", False)]
     assert results[0].segment_id == 1
     assert results[0].segment_started_at is not None
 
@@ -187,9 +187,7 @@ def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
 
     results = list(recognizer.listen_events(timeout=0.5))
 
-    assert [(result.text, result.is_final) for result in results] == [
-        ("nuova domanda", False)
-    ]
+    assert [(result.text, result.is_final) for result in results] == [("nuova domanda", False)]
     assert results[0].segment_id == 1
     assert results[0].segment_started_at == 0.0
 
@@ -299,12 +297,131 @@ def test_segment_provenance_resets_after_vosk_final_boundaries() -> None:
     assert all(result.energy_reemit is False for result in results)
 
 
+def test_vosk_word_metadata_is_enabled_and_exposed_content_free() -> None:
+    stop_event = threading.Event()
+
+    class MetadataStream(FakeStream):
+        def __init__(self) -> None:
+            super().__init__()
+            self.frames = [
+                array("h", [655] * 400).tobytes(),
+                array("h", [3_277] * 400).tobytes(),
+            ]
+            self.position = 0
+
+        def read(self, _chunk: int, *, exception_on_overflow: bool) -> bytes:
+            assert exception_on_overflow is False
+            frame = self.frames[self.position]
+            self.position += 1
+            if self.position == len(self.frames):
+                stop_event.set()
+            return frame
+
+    class MetadataRecognizer:
+        instances: list[MetadataRecognizer] = []
+
+        def __init__(self, _model: object, _rate: int) -> None:
+            self.accept_calls = 0
+            self.words_enabled = False
+            self.partial_words_enabled = False
+            self.instances.append(self)
+
+        def SetWords(self, enabled: bool) -> None:
+            self.words_enabled = enabled
+
+        def SetPartialWords(self, enabled: bool) -> None:
+            self.partial_words_enabled = enabled
+
+        def AcceptWaveform(self, _data: bytes) -> bool:
+            self.accept_calls += 1
+            return self.accept_calls == 2
+
+        def PartialResult(self) -> str:
+            return (
+                '{"partial":"nuova domanda",'
+                '"partial_result":['
+                '{"word":"nuova","conf":0.8,"start":0.1,"end":0.3},'
+                '{"word":"domanda","conf":0.6,"start":0.3,"end":0.55}]}'
+            )
+
+        def Result(self) -> str:
+            return (
+                '{"text":"nuova domanda completa",'
+                '"result":['
+                '{"word":"nuova","conf":0.9,"start":0.1,"end":0.3},'
+                '{"word":"domanda","conf":0.7,"start":0.3,"end":0.55},'
+                '{"word":"completa","conf":0.8,"start":0.55,"end":0.9}]}'
+            )
+
+    audio = FakeAudio()
+    audio.stream = MetadataStream()
+    MetadataRecognizer.instances.clear()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=MetadataRecognizer,
+    )
+
+    results = list(recognizer.listen_events(stop_event=stop_event))
+
+    assert [(result.text, result.is_final) for result in results] == [
+        ("nuova domanda", False),
+        ("nuova domanda completa", True),
+    ]
+    assert results[0].confidence == pytest.approx(0.7)
+    assert results[0].speech_duration_seconds == pytest.approx(0.45)
+    assert results[0].word_confidences == pytest.approx((0.8, 0.6))
+    assert results[0].word_timings == ((0.1, 0.3), (0.3, 0.55))
+    assert results[1].confidence == pytest.approx(0.8)
+    assert results[1].speech_duration_seconds == pytest.approx(0.8)
+    assert results[1].segment_peak_energy == pytest.approx(0.1, abs=0.001)
+    assert results[1].word_confidences == pytest.approx((0.9, 0.7, 0.8))
+    assert len(MetadataRecognizer.instances) == 1
+    assert MetadataRecognizer.instances[0].words_enabled
+    assert MetadataRecognizer.instances[0].partial_words_enabled
+
+
+def test_optional_vosk_metadata_configuration_failure_is_non_fatal() -> None:
+    class LegacyRecognizer:
+        def SetWords(self, _enabled: bool) -> None:
+            raise RuntimeError("unsupported")
+
+        def SetPartialWords(self, _enabled: bool) -> None:
+            raise RuntimeError("unsupported")
+
+    SpeechRecognizer._enable_word_metadata(LegacyRecognizer())
+
+
+def test_duplicate_removal_keeps_word_metadata_aligned() -> None:
+    parsed = SpeechRecognizer._parse_recognition(
+        '{"text":"echo echo user",'
+        '"result":['
+        '{"word":"echo","conf":0.95,"start":0.0,"end":0.2},'
+        '{"word":"echo","conf":0.95,"start":0.2,"end":0.4},'
+        '{"word":"user","conf":0.1,"start":0.4,"end":0.6}]}',
+        "text",
+    )
+
+    deduplicated = SpeechRecognizer._deduplicate_parsed(parsed)
+
+    assert deduplicated.text == "echo user"
+    assert deduplicated.word_confidences == pytest.approx((0.95, 0.1))
+    assert deduplicated.confidence == pytest.approx(0.525)
+
+
+def test_legacy_text_only_result_parser_remains_compatible() -> None:
+    assert SpeechRecognizer._parse_result('{"text":"legacy text"}', "text") == "legacy text"
+
+
 def test_recognition_result_provenance_defaults_preserve_legacy_construction() -> None:
     result = RecognitionResult("legacy", is_final=False, frame_energy=0.2)
 
     assert result.segment_id is None
     assert result.segment_started_at is None
     assert result.energy_reemit is False
+    assert result.confidence is None
+    assert result.speech_duration_seconds is None
+    assert result.segment_peak_energy is None
 
 
 def test_pre_set_stop_event_does_not_open_microphone_stream() -> None:

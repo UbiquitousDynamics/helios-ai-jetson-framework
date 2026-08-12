@@ -6,10 +6,16 @@ from pathlib import Path
 
 import pytest
 
+import assistant as assistant_module
 import config
 from api.api_client import APIClient
 from api.metrics import SafeMetricsRecorder
-from assistant import AssistantState, VoiceAssistant, _BargeInCaptureStop
+from assistant import (
+    AssistantShutdownTimeout,
+    AssistantState,
+    VoiceAssistant,
+    _BargeInCaptureStop,
+)
 from audio.tts import PiperTTS
 from recognizer.barge_in_detector import BargeInDetector
 from recognizer.speech_recognizer import RecognitionResult
@@ -384,6 +390,41 @@ def test_run_finishes_backchannel_preload_before_first_listen() -> None:
     assert events == ["welcome", "preload", "listen"]
 
 
+def test_run_preloads_backchannels_on_main_thread_with_shutdown_token() -> None:
+    calling_thread = threading.get_ident()
+    observations: list[tuple[int, bool]] = []
+
+    class PreloadingTTS(FakeTTS):
+        def preload_phrases(
+            self,
+            phrases: tuple[str, ...],
+            *,
+            stop_event: threading.Event,
+        ) -> tuple[str, ...]:
+            observations.append((threading.get_ident(), stop_event.is_set()))
+            return phrases
+
+        def has_preloaded_phrase(self, _phrase: str) -> bool:
+            return True
+
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            language="it",
+            barge_in_enabled=True,
+        ),
+        tts=PreloadingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assistant.run(max_iterations=0)
+
+    assert observations == [(calling_thread, False)]
+
+
 def test_close_cancels_in_flight_response_before_joining_owned_executor() -> None:
     class BlockingAPI(FakeAPI):
         def __init__(self) -> None:
@@ -431,6 +472,96 @@ def test_close_cancels_in_flight_response_before_joining_owned_executor() -> Non
     conversation_executor.shutdown(wait=True)
 
 
+def test_close_retires_provider_before_waiting_for_model_worker() -> None:
+    events: list[str] = []
+    started = threading.Event()
+    release = threading.Event()
+
+    class CloseUnblocksAPI(FakeAPI):
+        def cancel_current(self) -> None:
+            events.append("cancel")
+
+        def close(self) -> None:
+            events.append("provider_close")
+            release.set()
+            super().close()
+
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=CloseUnblocksAPI(),
+        speech_recognizer=FakeRecognizer([]),
+    )
+
+    def blocked_model_worker() -> None:
+        started.set()
+        assert release.wait(timeout=1)
+        events.append("worker_done")
+
+    assistant._submit_task(assistant._conversation_executor, blocked_model_worker)
+    assert started.wait(timeout=1)
+
+    assistant.close()
+
+    assert events.index("provider_close") < events.index("worker_done")
+
+
+def test_close_is_retryable_if_teardown_is_interrupted(monkeypatch) -> None:
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+    )
+    real_wait = assistant_module.wait
+    calls = 0
+
+    def interrupted_wait(*args: object, **kwargs: object):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise KeyboardInterrupt
+        return real_wait(*args, **kwargs)
+
+    monkeypatch.setattr(assistant_module, "wait", interrupted_wait)
+
+    with pytest.raises(KeyboardInterrupt):
+        assistant.close()
+    assert assistant._close_complete.is_set() is False
+    assert assistant._closing is False
+
+    assistant.close()
+    assert assistant._close_complete.is_set() is True
+
+
+def test_owned_worker_shutdown_timeout_is_explicit(monkeypatch) -> None:
+    monkeypatch.setattr(assistant_module, "_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.01)
+    release = threading.Event()
+    started = threading.Event()
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+    )
+
+    def stuck_worker() -> None:
+        started.set()
+        release.wait(timeout=1)
+
+    future = assistant._submit_task(assistant._conversation_executor, stuck_worker)
+    assert started.wait(timeout=1)
+
+    with pytest.raises(AssistantShutdownTimeout):
+        assistant.close()
+
+    release.set()
+    future.result(timeout=1)
+
+
 def test_echo_epoch_tracks_active_playback_and_only_a_short_completed_tail() -> None:
     tts = FakeTTS()
     tts.active_playback_started_at = 10.0
@@ -463,7 +594,11 @@ def test_final_follow_up_before_playback_requires_detector_acceptance() -> None:
         def listen_events(self, timeout: float | None, *, stop_event: object):
             assert timeout is None
             assert getattr(stop_event, "is_set")() is False
-            yield RecognitionResult("correzione", is_final=True, frame_energy=0.5)
+            yield RecognitionResult(
+                "questa è una correzione",
+                is_final=True,
+                frame_energy=0.5,
+            )
 
     class CountingDetector:
         def __init__(self) -> None:
@@ -492,7 +627,7 @@ def test_final_follow_up_before_playback_requires_detector_acceptance() -> None:
     )
     response: Future[str] = Future()
 
-    assert assistant._listen_for_barge_in(response) == "correzione"
+    assert assistant._listen_for_barge_in(response) == "questa è una correzione"
     assert detector.calls == 1
     assert api.cancelled is True
     response.cancel()
@@ -696,8 +831,7 @@ def test_phonetically_similar_echo_with_changed_word_boundaries_is_suppressed() 
         is_speaking = True
         active_playback_started_at = 10.0
         active_playback_text = (
-            "Le stelle brillavano, un eco di possibilità infinite, "
-            "mentre il mio algoritmo."
+            "Le stelle brillavano, un eco di possibilità infinite, mentre il mio algoritmo."
         )
 
     assistant = VoiceAssistant(
@@ -725,9 +859,7 @@ def test_short_mistranscribed_echo_is_suppressed_before_partial_confirmation() -
     class SpeakingTTS(FakeTTS):
         is_speaking = True
         active_playback_started_at = 10.0
-        active_playback_text = (
-            "Marte, un deserto di rosso, con tracce di vita passata."
-        )
+        active_playback_text = "Marte, un deserto di rosso, con tracce di vita passata."
 
     class ShortEchoRecognizer(FakeRecognizer):
         def listen_events(self, timeout: float | None, *, stop_event: object):
@@ -896,7 +1028,7 @@ def test_high_energy_user_speech_can_cross_from_synthesis_into_playback() -> Non
         def listen_events(self, timeout: float | None, *, stop_event: object):
             assert timeout is None
             yield RecognitionResult(
-                "no cambia",
+                "no cambia questo",
                 is_final=False,
                 frame_energy=0.2,
                 segment_id=5,
@@ -905,7 +1037,7 @@ def test_high_energy_user_speech_can_cross_from_synthesis_into_playback() -> Non
             self.tts.is_speaking = True
             self.tts.active_playback_started_at = 10.0
             yield RecognitionResult(
-                "no cambia argomento",
+                "no cambia questo argomento",
                 is_final=True,
                 frame_energy=0.01,
                 segment_id=5,
@@ -929,7 +1061,7 @@ def test_high_energy_user_speech_can_cross_from_synthesis_into_playback() -> Non
     )
     response: Future[str] = Future()
 
-    assert assistant._listen_for_barge_in(response) == "no cambia argomento"
+    assert assistant._listen_for_barge_in(response) == "no cambia questo argomento"
     assert api.cancelled is True
     response.cancel()
     assistant.close()
@@ -1052,6 +1184,9 @@ def test_high_energy_explicit_short_final_interrupts_playback(command: str) -> N
                 frame_energy=0.2,
                 segment_id=1,
                 segment_started_at=10.1,
+                confidence=0.9,
+                speech_duration_seconds=0.2,
+                segment_peak_energy=0.2,
             )
 
     api = FakeAPI()
@@ -1150,7 +1285,7 @@ def test_real_barge_in_preserves_pending_peak_across_tts_buffers() -> None:
         def listen_events(self, timeout: float | None, *, stop_event: object):
             assert timeout is None
             yield RecognitionResult(
-                "no cambia",
+                "no cambia questo",
                 is_final=False,
                 frame_energy=0.2,
                 segment_id=7,
@@ -1159,7 +1294,7 @@ def test_real_barge_in_preserves_pending_peak_across_tts_buffers() -> None:
             self.tts.active_playback_started_at = 11.0
             self.tts.active_playback_text = "Secondo frammento ancora non correlato."
             yield RecognitionResult(
-                "no cambia argomento",
+                "no cambia questo argomento",
                 is_final=True,
                 frame_energy=0.01,
                 segment_id=7,
@@ -1196,7 +1331,7 @@ def test_real_barge_in_preserves_pending_peak_across_tts_buffers() -> None:
     )
     response: Future[str] = Future()
 
-    assert assistant._listen_for_barge_in(response) == "no cambia argomento"
+    assert assistant._listen_for_barge_in(response) == "no cambia questo argomento"
     assert api.cancelled is True
     response.cancel()
     assistant.close()
@@ -1219,6 +1354,13 @@ def test_echo_suppression_does_not_leak_into_the_next_vosk_segment() -> None:
                 segment_started_at=10.1,
             )
             # Vosk may close segment 1 with an empty final, which is not yielded.
+            yield RecognitionResult(
+                "no parlami della",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=2,
+                segment_started_at=10.5,
+            )
             yield RecognitionResult(
                 "no parlami della luna",
                 is_final=True,
@@ -1246,6 +1388,397 @@ def test_echo_suppression_does_not_leak_into_the_next_vosk_segment() -> None:
     assert assistant._listen_for_barge_in(response) == "no parlami della luna"
     assert api.cancelled is True
     response.cancel()
+    assistant.close()
+
+
+def test_tts_echo_prefix_is_removed_before_follow_up_is_returned() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Nel sistema solare ci sono otto pianeti."
+
+    class EchoThenCorrectionRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            common = {
+                "frame_energy": 0.2,
+                "segment_id": 4,
+                "segment_started_at": 10.1,
+                "confidence": 0.9,
+                "speech_duration_seconds": 0.8,
+                "segment_peak_energy": 0.2,
+            }
+            yield RecognitionResult(
+                "nel sistema solare ci sono otto pianeti",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "nel sistema solare ci sono otto pianeti no parlami della luna",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "nel sistema solare ci sono otto pianeti no parlami della luna",
+                is_final=True,
+                **common,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=EchoThenCorrectionRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "no parlami della luna"
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_short_token_is_not_removed_as_substring_of_a_tts_word() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Ora posso stoppare la riproduzione."
+
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.5,
+    )
+
+    assert assistant._remove_current_tts_echo("stop", 10.5) == ("stop", ())
+    assistant.close()
+
+
+def test_strong_final_after_short_cleaned_echo_residual_interrupts() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Nel sistema solare ci sono otto pianeti."
+
+    class JumpingRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            common = {
+                "frame_energy": 0.2,
+                "segment_id": 15,
+                "segment_started_at": 10.1,
+                "confidence": 0.9,
+                "speech_duration_seconds": 0.8,
+                "segment_peak_energy": 0.2,
+            }
+            yield RecognitionResult(
+                "nel sistema solare ci sono otto pianeti",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "nel sistema solare ci sono otto pianeti no parlami",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "nel sistema solare ci sono otto pianeti no parlami della luna",
+                is_final=True,
+                **common,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=JumpingRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "no parlami della luna"
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_low_confidence_residual_cannot_borrow_tts_word_evidence() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "risposta vecchia assistente"
+
+    class ContaminatedRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            text = "risposta vecchia assistente parole casuali qui"
+            common = {
+                "frame_energy": 0.2,
+                "segment_id": 17,
+                "segment_started_at": 10.1,
+                "confidence": 0.525,
+                "speech_duration_seconds": 0.8,
+                "segment_peak_energy": 0.2,
+                "word_confidences": (0.95, 0.95, 0.95, 0.1, 0.1, 0.1),
+                "word_timings": (
+                    (0.0, 0.1),
+                    (0.1, 0.2),
+                    (0.2, 0.3),
+                    (0.3, 0.4),
+                    (0.4, 0.5),
+                    (0.5, 0.6),
+                ),
+            }
+            yield RecognitionResult(text, is_final=False, **common)
+            yield RecognitionResult(text, is_final=True, **common)
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=ContaminatedRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_multiple_tts_fragments_are_all_removed_from_follow_up() -> None:
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    residual, removed = assistant._remove_current_tts_echo(
+        "prima frase assistente seconda frase assistente nuova domanda sulla luna",
+        10.0,
+        references=("prima frase assistente", "seconda frase assistente"),
+    )
+
+    assert residual == "nuova domanda sulla luna"
+    assert removed == (0, 1, 2, 3, 4, 5)
+    assistant.close()
+
+
+def test_tts_reference_quoted_inside_follow_up_is_not_removed() -> None:
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    residual, removed = assistant._remove_current_tts_echo(
+        "voglio citare prima frase assistente nella domanda",
+        10.0,
+        references=("prima frase assistente",),
+    )
+
+    assert residual == "voglio citare prima frase assistente nella domanda"
+    assert removed == ()
+    assistant.close()
+
+
+def test_exact_echo_prefix_wins_over_an_earlier_fuzzy_reference() -> None:
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    residual, removed = assistant._remove_current_tts_echo(
+        "seconda frase assistente nuova domanda sulla luna",
+        10.0,
+        references=(
+            "prima frase assistente nuova domanda sulla luna",
+            "seconda frase assistente",
+        ),
+    )
+
+    assert residual == "nuova domanda sulla luna"
+    assert removed == (0, 1, 2)
+    assistant.close()
+
+
+@pytest.mark.parametrize("during_playback", (False, True))
+def test_low_confidence_vosk_hallucination_never_interrupts(
+    during_playback: bool,
+) -> None:
+    class DynamicTTS(FakeTTS):
+        is_speaking = during_playback
+        active_playback_started_at = 10.0 if during_playback else None
+        active_playback_text = "Una risposta non correlata."
+
+    class HallucinationRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            common = {
+                "frame_energy": 0.4,
+                "segment_id": 12,
+                "segment_started_at": 10.1,
+                "confidence": 0.2,
+                "speech_duration_seconds": 0.6,
+                "segment_peak_energy": 0.4,
+            }
+            yield RecognitionResult(
+                "ipotesi vocale casuale",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "ipotesi vocale casuale",
+                is_final=True,
+                **common,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=DynamicTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=HallucinationRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.5,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_response_completion_after_armed_partial_does_not_lose_final_question() -> None:
+    response: Future[str] = Future()
+
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata."
+
+    class CompletionBetweenEventsRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "questa nuova domanda",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=22,
+                segment_started_at=10.2,
+                confidence=0.9,
+                speech_duration_seconds=0.5,
+                segment_peak_energy=0.2,
+            )
+            response.set_result("old response completed")
+            yield RecognitionResult(
+                "questa nuova domanda completa",
+                is_final=True,
+                frame_energy=0.01,
+                segment_id=22,
+                segment_started_at=10.2,
+                confidence=0.9,
+                speech_duration_seconds=0.7,
+                segment_peak_energy=0.2,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=CompletionBetweenEventsRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+
+    assert assistant._listen_for_barge_in(response) == "questa nuova domanda completa"
+    assert api.cancelled is True
+    assistant.close()
+
+
+def test_response_completion_before_strong_final_does_not_consume_question() -> None:
+    response: Future[str] = Future()
+
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata."
+
+    class FinalAfterCompletionRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            response.set_result("old response completed")
+            yield RecognitionResult(
+                "questa nuova domanda completa",
+                is_final=True,
+                frame_energy=0.2,
+                segment_id=30,
+                segment_started_at=10.2,
+                confidence=0.9,
+                speech_duration_seconds=0.7,
+                segment_peak_energy=0.2,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=FinalAfterCompletionRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+
+    assert assistant._listen_for_barge_in(response) == "questa nuova domanda completa"
+    assert api.cancelled is True
     assistant.close()
 
 
@@ -1326,6 +1859,181 @@ def test_partial_only_barge_in_timeout_never_executes_partial_as_follow_up() -> 
     response: Future[str] = Future()
 
     assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_partial_arms_tts_duck_before_final_model_cancellation() -> None:
+    response: Future[str] = Future()
+    events: list[str] = []
+
+    class DuckingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata."
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.paused = False
+            self.resume_calls = 0
+
+        def duck(self) -> bool:
+            events.append("tts_duck")
+            self.paused = True
+            return True
+
+        def resume(self) -> bool:
+            self.resume_calls += 1
+            was_paused = self.paused
+            self.paused = False
+            if was_paused:
+                events.append("tts_resume")
+            return was_paused
+
+        def interrupt(self) -> bool:
+            events.append("tts_interrupt")
+            self.paused = False
+            return True
+
+    class RecordingAPI(FakeAPI):
+        def cancel_current(self) -> None:
+            events.append("model_cancel")
+            super().cancel_current()
+
+    class OrderedRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "questa nuova domanda",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=40,
+                segment_started_at=10.2,
+            )
+            assert events == ["tts_duck"]
+            yield RecognitionResult(
+                "questa nuova domanda completa",
+                is_final=True,
+                frame_energy=0.01,
+                segment_id=40,
+                segment_started_at=10.2,
+            )
+
+    api = RecordingAPI()
+    tts = DuckingTTS()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=OrderedRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+
+    assert assistant._listen_for_barge_in(response) == "questa nuova domanda completa"
+    assert events == ["tts_duck", "tts_interrupt", "model_cancel"]
+    assert tts.resume_calls >= 1
+    response.cancel()
+    assistant.close()
+
+
+def test_provisional_timeout_resumes_and_restarts_capture_for_later_barge_in() -> None:
+    response: Future[str] = Future()
+    now = [10.2]
+
+    class DuckingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata."
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.paused = False
+            self.duck_calls = 0
+            self.resume_calls = 0
+            self.interrupt_calls = 0
+
+        def duck(self) -> bool:
+            self.duck_calls += 1
+            self.paused = True
+            return True
+
+        def resume(self) -> bool:
+            was_paused = self.paused
+            self.paused = False
+            if was_paused:
+                self.resume_calls += 1
+            return was_paused
+
+        def interrupt(self) -> bool:
+            self.interrupt_calls += 1
+            self.paused = False
+            return True
+
+    class RestartingRecognizer(FakeRecognizer):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.sessions = 0
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            self.sessions += 1
+            if self.sessions == 1:
+                yield RecognitionResult(
+                    "rumore casuale parole",
+                    is_final=False,
+                    frame_energy=0.2,
+                    segment_id=1,
+                    segment_started_at=10.2,
+                )
+                now[0] = 11.8
+                assert getattr(stop_event, "is_set")() is True
+                return
+
+            now[0] = 12.0
+            yield RecognitionResult(
+                "questa nuova domanda",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=12.0,
+                confidence=0.9,
+            )
+            now[0] = 12.3
+            yield RecognitionResult(
+                "questa nuova domanda completa",
+                is_final=True,
+                frame_energy=0.01,
+                segment_id=1,
+                segment_started_at=12.0,
+                confidence=0.9,
+                speech_duration_seconds=0.5,
+                segment_peak_energy=0.2,
+            )
+
+    tts = DuckingTTS()
+    recognizer = RestartingRecognizer()
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT, barge_in_enabled=True),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=recognizer,
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: now[0],
+    )
+
+    assert assistant._listen_for_barge_in(response) == "questa nuova domanda completa"
+    assert recognizer.sessions == 2
+    assert tts.duck_calls == 2
+    assert tts.resume_calls == 1
+    assert tts.interrupt_calls == 1
     assert api.cancelled is True
     response.cancel()
     assistant.close()
@@ -1418,6 +2126,23 @@ def test_post_barge_deadline_refreshes_on_recognition_activity() -> None:
     assert capture_stop.is_set() is False
     now[0] = 12.6
     assert capture_stop.is_set() is True
+
+
+def test_provisional_candidate_inactivity_ends_capture_and_can_be_cleared() -> None:
+    now = [0.0]
+    capture_stop = _BargeInCaptureStop(
+        clock=lambda: now[0],
+        follow_up_timeout_seconds=30,
+    )
+
+    capture_stop.candidate_activity()
+    now[0] = 1.4
+    assert capture_stop.is_set() is False
+    now[0] = 1.6
+    assert capture_stop.is_set() is True
+
+    capture_stop.candidate_finished()
+    assert capture_stop.is_set() is False
 
 
 def test_known_single_worker_conversation_executor_is_rejected() -> None:

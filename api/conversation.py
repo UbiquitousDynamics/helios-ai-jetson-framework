@@ -16,6 +16,11 @@ from api.providers.contracts import ChatMessage, ContentOrigin, PrivacyLevel, Ro
 
 logger = logging.getLogger(__name__)
 
+INTERRUPTED_RESPONSE_MARKER = (
+    "[Response interrupted by the user. The following user message is the active "
+    "request; answer it instead of resuming this response.]"
+)
+
 
 class ConversationTurnStatus(str, Enum):
     PENDING = "pending"
@@ -65,8 +70,10 @@ class ConversationSession:
     """Own canonical user/assistant history independently of any provider.
 
     Finalized user turns are committed before dispatch. Assistant text is
-    committed only after a successful terminal completion. Interrupted or
-    failed assistant output is deliberately omitted from canonical history.
+    committed only after a successful terminal completion. Interrupted output
+    is omitted and replaced with a content-free control marker when history is
+    rendered, so providers retain the user's context without treating an
+    unanswered request as the active turn. Failed assistant output is omitted.
     """
 
     def __init__(
@@ -177,10 +184,7 @@ class ConversationSession:
                     redacted=redacted,
                     remote_eligible=(
                         selected_privacy is PrivacyLevel.REMOTE_ALLOWED
-                        or (
-                            selected_privacy is PrivacyLevel.REMOTE_REDACTED
-                            and redacted
-                        )
+                        or (selected_privacy is PrivacyLevel.REMOTE_REDACTED and redacted)
                     ),
                 ),
                 privacy=selected_privacy,
@@ -223,9 +227,7 @@ class ConversationSession:
                         origin=ContentOrigin.CONVERSATION_HISTORY,
                         redacted=item.user.redacted,
                         remote_eligible=item.user.remote_eligible,
-                        source_origins=(
-                            item.user.source_origins | {item.user.origin}
-                        ),
+                        source_origins=(item.user.source_origins | {item.user.origin}),
                     )
                 )
                 if item.assistant is not None:
@@ -239,6 +241,17 @@ class ConversationSession:
                             source_origins=(
                                 item.assistant.source_origins | {item.assistant.origin}
                             ),
+                        )
+                    )
+                elif item.status is ConversationTurnStatus.INTERRUPTED:
+                    messages.append(
+                        ChatMessage(
+                            Role.ASSISTANT,
+                            INTERRUPTED_RESPONSE_MARKER,
+                            origin=ContentOrigin.CONVERSATION_HISTORY,
+                            redacted=True,
+                            remote_eligible=True,
+                            source_origins=frozenset({ContentOrigin.STATIC_INSTRUCTION}),
                         )
                     )
             if len(previous) > len(retained):
@@ -273,9 +286,7 @@ class ConversationSession:
                 origin=ContentOrigin.CONVERSATION_HISTORY,
                 redacted=redacted,
                 remote_eligible=(
-                    turn.user.remote_eligible
-                    if remote_eligible is None
-                    else remote_eligible
+                    turn.user.remote_eligible if remote_eligible is None else remote_eligible
                 ),
                 source_origins=source_origins,
             )
@@ -294,9 +305,7 @@ class ConversationSession:
             if self._active_turn is not turn:
                 raise ConversationSessionError("turn is not active in this session")
             turn.status = (
-                ConversationTurnStatus.INTERRUPTED
-                if interrupted
-                else ConversationTurnStatus.FAILED
+                ConversationTurnStatus.INTERRUPTED if interrupted else ConversationTurnStatus.FAILED
             )
             self._active_turn = None
             self._last_activity_at = self._clock()
@@ -371,7 +380,14 @@ class ConversationSession:
     def snapshot(self) -> ConversationSnapshot:
         with self._lock:
             history_count = sum(
-                1 + (1 if turn.assistant is not None else 0) for turn in self._turns
+                1
+                + (
+                    1
+                    if turn.assistant is not None
+                    or turn.status is ConversationTurnStatus.INTERRUPTED
+                    else 0
+                )
+                for turn in self._turns
             )
             return ConversationSnapshot(
                 session_id=self._session_id,
@@ -396,5 +412,6 @@ __all__ = [
     "ConversationSnapshot",
     "ConversationTurn",
     "ConversationTurnStatus",
+    "INTERRUPTED_RESPONSE_MARKER",
     "safe_conversation_identifier",
 ]

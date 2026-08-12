@@ -6,11 +6,13 @@ Helios uses a model-free detector with two inputs. Raw microphone frames are
 classified by normalized RMS energy, and a signal must remain above the
 configured threshold for a minimum duration before it becomes a candidate.
 The production Vosk path emits each non-empty partial or final
-`RecognitionResult` with the normalized RMS energy of its corresponding PCM
-frame. Recognized speech is a stronger signal than energy alone and becomes a
-candidate immediately, but the echo policy still receives the measured energy
-and can veto it. Legacy injected recognizers that do not expose PCM energy fall
-back to the detector's configurable event-energy value. The detector is
+`RecognitionResult` with PCM energy, a stable segment id, segment onset/peak,
+and optional per-word confidence/timing metadata. A non-echo partial can only
+arm a provisional candidate. Irreversible model cancellation requires a
+textually consistent final from the same segment, sufficient duration and,
+when Vosk supplies it, acceptable confidence. Energy-only re-emission and
+unstable hypothesis revisions cannot confirm a turn. Legacy injected
+recognizers without metadata retain their compatibility path. The detector is
 one-shot during each response interval and must be rearmed with `reset()`.
 
 The defaults match the existing recognizer's 16 kHz, signed 16-bit mono PCM.
@@ -75,14 +77,22 @@ only during actual playback and a 250 ms echo tail, while a finalized utterance
 received during thinking or synthesis explicitly supersedes the pending answer.
 This preserves Vosk decoder state
 across the whole overlap instead of repeatedly reopening 250 ms capture slices.
-A detection calls both `PiperTTS.interrupt()` and
+A stable partial reversibly pauses Piper at its current PCM offset, while the
+model and canonical turn keep running. This removes loudspeaker interference
+while Vosk finalizes the user's utterance; a rejected candidate resumes at the
+same offset. A 1.5-second candidate-inactivity deadline prevents a missing Vosk
+final from leaving playback paused. A confirmed final calls both
+`PiperTTS.interrupt()` and
 `APIClient.cancel_current()`. The same recognizer session then continues until
 Vosk emits or flushes the finalized interruption utterance. After the cancelled
 response worker unwinds, that finalized utterance becomes an authorized
 immediate follow-up. It does not require the wake word, and its response is
 monitored in the same way so more than one consecutive interruption is possible.
-The active voice session also accepts ordinary finalized follow-ups without a
-wake word until its configured idle timeout. A partial is never promoted to a
+Interrupted canonical history renders a content-free assistant control marker
+between the old user turn and the new one. That preserves useful context while
+making the latest user utterance unambiguously active for stateless Ollama and
+Codex thread recovery. The active voice session also accepts ordinary finalized
+follow-ups without a wake word until its configured idle timeout. A partial is never promoted to a
 final command when Vosk's final flush is empty; timeout therefore cancels the
 interrupted answer but executes no incomplete follow-up.
 The post-detection timeout is an inactivity deadline refreshed by each decoded

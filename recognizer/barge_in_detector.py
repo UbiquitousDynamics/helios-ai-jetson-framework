@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 from array import array
 from collections.abc import Callable
+from difflib import SequenceMatcher
 from typing import Protocol
 
 from recognizer.echo_suppression_policy import (
@@ -23,6 +25,8 @@ class RecognitionEvent(Protocol):
     is_final: bool
     segment_id: int | None
     energy_reemit: bool
+    confidence: float | None
+    speech_duration_seconds: float | None
 
 
 def pcm16_rms(frame: bytes) -> float:
@@ -45,10 +49,10 @@ class BargeInDetector:
     """One-shot detector for speech candidates observed while TTS is playing.
 
     ``process_frame`` requires sustained PCM energy before consulting the
-    suppression policy. A final recognition result is sufficient on its own,
-    while partial results must remain active across more than one recognition
-    update. This prevents a stale Vosk hypothesis re-emitted solely because
-    loudspeaker energy increased from cancelling TTS. Once either path detects
+    suppression policy. Recognition partials only arm a candidate. A final must
+    belong to the same segment and remain textually consistent with that armed
+    partial before it can commit an interruption. This prevents an unstable or
+    hallucinated Vosk hypothesis from cancelling TTS. Once either path detects
     a barge-in, further calls return false until ``reset`` is called.
     """
 
@@ -60,6 +64,7 @@ class BargeInDetector:
         minimum_active_seconds: float = 0.12,
         minimum_partial_words: int = 3,
         recognition_event_energy: float = 0.1,
+        minimum_recognition_confidence: float = 0.5,
         suppression_policy: EchoSuppressionPolicy | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
@@ -77,12 +82,18 @@ class BargeInDetector:
             raise ValueError("minimum_partial_words must be a positive integer")
         if not math.isfinite(recognition_event_energy) or not 0 <= recognition_event_energy <= 1:
             raise ValueError("recognition_event_energy must be finite and between 0 and 1")
+        if (
+            not math.isfinite(minimum_recognition_confidence)
+            or not 0 <= minimum_recognition_confidence <= 1
+        ):
+            raise ValueError("minimum_recognition_confidence must be finite and between 0 and 1")
 
         self.sample_rate = sample_rate
         self.energy_threshold = energy_threshold
         self.minimum_active_seconds = minimum_active_seconds
         self.minimum_partial_words = minimum_partial_words
         self.recognition_event_energy = recognition_event_energy
+        self.minimum_recognition_confidence = minimum_recognition_confidence
         self.suppression_policy = (
             suppression_policy if suppression_policy is not None else NoEchoSuppressionPolicy()
         )
@@ -93,6 +104,7 @@ class BargeInDetector:
         self._recognition_started_at: float | None = None
         self._recognition_peak_energy: float | None = None
         self._recognition_partial_count = 0
+        self._recognition_text = ""
 
     @property
     def detected(self) -> bool:
@@ -153,6 +165,8 @@ class BargeInDetector:
         elapsed_since_tts_start: float,
         frame_energy: float | None = None,
         observed_at: float | None = None,
+        allow_unarmed_final: bool = False,
+        allow_short_partial: bool = False,
     ) -> bool:
         """Process a Vosk partial/final event and return true for a new barge-in."""
 
@@ -168,8 +182,17 @@ class BargeInDetector:
         )
         if not math.isfinite(observation_time) or observation_time < 0:
             raise ValueError("observed_at must be finite and non-negative")
-        if self._detected or not result.text.strip():
+        candidate_text = result.text.strip()
+        if self._detected or not candidate_text:
             return False
+        confidence = self._optional_probability(
+            getattr(result, "confidence", None),
+            "confidence",
+        )
+        speech_duration_seconds = self._optional_non_negative(
+            getattr(result, "speech_duration_seconds", None),
+            "speech_duration_seconds",
+        )
         suppressed = self.suppression_policy.should_suppress(
             candidate_energy,
             elapsed_since_tts_start,
@@ -183,6 +206,38 @@ class BargeInDetector:
             or segment_id == self._recognition_segment_id
         )
         if result.is_final:
+            if not same_pending_segment and not allow_unarmed_final:
+                self._active_samples = 0
+                self._clear_recognition_candidate()
+                return False
+            if same_pending_segment and not self._texts_are_consistent(
+                self._recognition_text,
+                candidate_text,
+            ):
+                self._active_samples = 0
+                self._clear_recognition_candidate()
+                return False
+            if (
+                same_pending_segment
+                and self._recognition_started_at is not None
+                and confidence is not None
+                and speech_duration_seconds is None
+                and observation_time - self._recognition_started_at < self.minimum_active_seconds
+            ):
+                self._active_samples = 0
+                self._clear_recognition_candidate()
+                return False
+            if confidence is not None and confidence < self.minimum_recognition_confidence:
+                self._active_samples = 0
+                self._clear_recognition_candidate()
+                return False
+            if (
+                speech_duration_seconds is not None
+                and speech_duration_seconds < self.minimum_active_seconds
+            ):
+                self._active_samples = 0
+                self._clear_recognition_candidate()
+                return False
             if same_pending_segment and self._recognition_peak_energy is not None:
                 # The pending partial already passed the policy in the epoch in
                 # which the user spoke. A final commonly lands on silence, and
@@ -210,18 +265,37 @@ class BargeInDetector:
         if bool(getattr(result, "energy_reemit", False)):
             return False
 
-        if (
-            self._recognition_partial_count == 0
-            or (
-                segment_id is not None
-                and self._recognition_segment_id is not None
-                and segment_id != self._recognition_segment_id
-            )
+        if confidence is not None and confidence < self.minimum_recognition_confidence:
+            if not same_pending_segment:
+                self._clear_recognition_candidate()
+            return False
+
+        minimum_partial_words = (
+            min(self.minimum_partial_words, 2)
+            if allow_short_partial
+            else self.minimum_partial_words
+        )
+        if len(self._normalized_words(candidate_text)) < minimum_partial_words:
+            if not same_pending_segment:
+                self._clear_recognition_candidate()
+            return False
+
+        if self._recognition_partial_count == 0 or (
+            segment_id is not None
+            and self._recognition_segment_id is not None
+            and segment_id != self._recognition_segment_id
         ):
             self._recognition_segment_id = segment_id
             self._recognition_started_at = observation_time
             self._recognition_peak_energy = candidate_energy
             self._recognition_partial_count = 1
+            self._recognition_text = candidate_text
+            return False
+
+        if not self._texts_are_consistent(self._recognition_text, candidate_text):
+            # Do not immediately re-arm on a wholesale Vosk revision. A later
+            # consistent partial may establish a new candidate independently.
+            self._clear_recognition_candidate()
             return False
 
         self._recognition_partial_count += 1
@@ -229,22 +303,65 @@ class BargeInDetector:
             candidate_energy,
             self._recognition_peak_energy or candidate_energy,
         )
-        assert self._recognition_started_at is not None
-        if len(result.text.split()) < self.minimum_partial_words:
-            return False
-        if (
-            observation_time - self._recognition_started_at
-            < self.minimum_active_seconds
-        ):
-            return False
-        self._detected = True
-        return True
+        self._recognition_text = candidate_text
+        # Partial results are provisional by definition. Word-count and timing
+        # remain useful candidate metadata, but only a final can commit.
+        return False
 
     def _clear_recognition_candidate(self) -> None:
         self._recognition_segment_id = None
         self._recognition_started_at = None
         self._recognition_peak_energy = None
         self._recognition_partial_count = 0
+        self._recognition_text = ""
+
+    @staticmethod
+    def _optional_probability(value: object, name: str) -> float | None:
+        if value is None:
+            return None
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or not 0 <= float(value) <= 1
+        ):
+            raise ValueError(f"{name} must be finite and between 0 and 1")
+        return float(value)
+
+    @staticmethod
+    def _optional_non_negative(value: object, name: str) -> float | None:
+        if value is None:
+            return None
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or float(value) < 0
+        ):
+            raise ValueError(f"{name} must be finite and non-negative")
+        return float(value)
+
+    @staticmethod
+    def _normalized_words(text: str) -> tuple[str, ...]:
+        return tuple(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
+
+    @classmethod
+    def _texts_are_consistent(cls, previous: str, current: str) -> bool:
+        previous_words = cls._normalized_words(previous)
+        current_words = cls._normalized_words(current)
+        if not previous_words or not current_words:
+            return False
+        shorter, longer = (
+            (previous_words, current_words)
+            if len(previous_words) <= len(current_words)
+            else (current_words, previous_words)
+        )
+        if longer[: len(shorter)] == shorter:
+            return True
+        matcher = SequenceMatcher(None, previous_words, current_words, autojunk=False)
+        matching_words = sum(block.size for block in matcher.get_matching_blocks())
+        required_matching_words = max(1, math.ceil(len(shorter) * 0.6))
+        return matcher.ratio() >= 0.6 and matching_words >= required_matching_words
 
     def _accept_candidate(
         self,

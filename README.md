@@ -1642,6 +1642,24 @@ tail -n 0 -f app.log
 Recoverable API, recognition, TTS, sound, and assistant errors are logged. The
 assistant resets to `COMMAND` and continues when recovery is safe.
 
+For barge-in root-cause analysis, keep the content-free event fields and filter
+the live DEBUG stream without logging transcripts:
+
+```bash
+HELIOS_LOG_LEVEL=DEBUG HELIOS_LOG_FILE=- python3 scripts/run_jetson.py 2>&1 \
+  | grep -E 'barge_in_|stt_finalized|assistant_turn_|thread_(start|resume|recover)|response_cancel'
+```
+
+`barge_in_stt_decision` records only the segment id, final/partial state, word
+count, Vosk confidence/duration, RMS values, pending state, and decision. The
+associated suppression reason shows whether Helios rejected TTS echo,
+energy-only re-emission, a pre-playback segment, an unconfirmed short final, or
+an inconsistent/low-confidence final. `barge_in_candidate_armed` pauses only
+Piper playback; `barge_in_detected` is the later final-confirmed model
+cancellation. Correlate both with the content-free `conversation_session` and
+`turn` fields to verify that the next finalized utterance became the active
+request instead of a new logical chat.
+
 The TTS adapter supports both the Piper 1.2
 `synthesize(text, wav_file)` API and the Piper 1.3+
 `synthesize_wav(text, wav_file)` API. Errors raised before a WAV header exists

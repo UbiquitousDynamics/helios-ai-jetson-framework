@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import config
 from api.api_client import APIClient
-from api.conversation import safe_conversation_identifier
+from api.conversation import INTERRUPTED_RESPONSE_MARKER, safe_conversation_identifier
 from api.providers.codex_app_server import CodexAppServerAdapter
 from assistant import VoiceAssistant, VoiceConversationState
 from recognizer.barge_in_detector import BargeInDetector
@@ -105,9 +105,9 @@ class BargeInRecognizer:
         self._barge_events_emitted = True
         yield RecognitionResult("nuova", is_final=False)
         yield RecognitionResult("nuova domanda in corso", is_final=False)
-        assert self.api.response_finished.wait(timeout=1)
-        # Cancelling the first response must not stop/flush the microphone
-        # before the user finishes the interruption utterance.
+        # A provisional hypothesis must not cancel the response. The complete
+        # final is the irreversible barge-in boundary.
+        assert self.api.response_finished.is_set() is False
         assert getattr(stop_event, "is_set")() is False
         yield RecognitionResult("nuova domanda", is_final=True)
 
@@ -231,6 +231,11 @@ class RepeatedBargeInRecognizer:
             is_final=False,
             frame_energy=0.2,
         )
+        yield RecognitionResult(
+            follow_up,
+            is_final=False,
+            frame_energy=0.2,
+        )
         assert getattr(stop_event, "is_set")() is False
         yield RecognitionResult(follow_up, is_final=True, frame_energy=0.2)
 
@@ -299,6 +304,86 @@ def test_barge_in_interrupts_audio_and_stream_then_processes_follow_up() -> None
     ]
 
 
+def test_mixed_tts_echo_is_removed_before_follow_up_reaches_model() -> None:
+    class EchoAwareBlockingTTS(BlockingTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self._playback_started_at: float | None = None
+
+        @property
+        def active_playback_started_at(self) -> float | None:
+            return self._playback_started_at if self.is_speaking else None
+
+        @property
+        def active_playback_text(self) -> str:
+            return self.spoken[-1] if self.spoken else ""
+
+        def speak(self, text: str) -> None:
+            self._playback_started_at = time.monotonic()
+            super().speak(text)
+
+    class MixedEchoRecognizer:
+        def __init__(self, tts: EchoAwareBlockingTTS) -> None:
+            self.tts = tts
+            self.emitted = False
+
+        def listen_once(self, timeout: float) -> RecognitionResult:
+            assert timeout > 0
+            return RecognitionResult("Emilia, prima domanda", is_final=True)
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            if self.emitted:
+                return
+            self.emitted = True
+            assert self.tts.wait_until_speaking()
+            started_at = self.tts.active_playback_started_at
+            assert started_at is not None
+            common = {
+                "frame_energy": 0.2,
+                "segment_id": 5,
+                "segment_started_at": started_at + 0.01,
+            }
+            yield RecognitionResult(
+                "response for prima domanda",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "response for prima domanda nuova domanda sulla luna",
+                is_final=False,
+                **common,
+            )
+            yield RecognitionResult(
+                "response for prima domanda nuova domanda sulla luna",
+                is_final=True,
+                **common,
+            )
+
+        def close(self) -> None:
+            pass
+
+    tts = EchoAwareBlockingTTS()
+    api = CancellableAPI(tts)
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            language="it",
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=SilentSoundPlayer(),
+        api_client=api,
+        speech_recognizer=MixedEchoRecognizer(tts),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+    )
+
+    assert assistant.run_once()
+
+    assert api.messages == ["prima domanda", "nuova domanda sulla luna"]
+    assistant.close()
+
+
 def test_three_consecutive_barge_ins_rearm_every_turn() -> None:
     tts = RepeatedBlockingTTS(interruptions=3)
     api = RepeatedCancellableAPI(tts)
@@ -308,7 +393,7 @@ def test_three_consecutive_barge_ins_rearm_every_turn() -> None:
             "only the second one",
             "how long is its year",
             "compare it with Earth",
-        ]
+        ],
     )
     settings = config.Settings(
         project_root=config.PROJECT_ROOT,
@@ -375,13 +460,16 @@ def test_three_barge_ins_preserve_api_client_local_history_end_to_end() -> None:
     assert len(ollama.calls) == 4
     assert ollama.calls[3]["messages"] == [
         {"role": "user", "content": "initial question"},
+        {"role": "assistant", "content": INTERRUPTED_RESPONSE_MARKER},
         {"role": "user", "content": "only the second one"},
+        {"role": "assistant", "content": INTERRUPTED_RESPONSE_MARKER},
         {"role": "user", "content": "how long is its year"},
+        {"role": "assistant", "content": INTERRUPTED_RESPONSE_MARKER},
         {"role": "user", "content": "compare it with Earth"},
     ]
     snapshot = api.conversation.snapshot()
     assert snapshot.turn_count == 4
-    assert snapshot.history_message_count == 5
+    assert snapshot.history_message_count == 8
     assert snapshot.active_turn is None
     assert assistant.conversation_state is VoiceConversationState.LISTENING
     assistant.close()
@@ -418,11 +506,11 @@ def test_fifty_turn_repeated_barge_in_stress_keeps_state_bounded() -> None:
     snapshot = api.conversation.snapshot()
     assert snapshot.turn_count == turn_count
     assert snapshot.retained_turn_count == 20
-    assert snapshot.history_message_count == 21
+    assert snapshot.history_message_count == 40
     # The configured cap bounds provider input without resetting the logical
-    # session. Interrupted assistant text is absent, so 20 prior user turns plus
-    # the current user turn are transmitted on the final request.
-    assert len(ollama.calls[-1]["messages"]) == 21
+    # session. Each of the 20 prior interrupted user turns has one content-free
+    # assistant marker, followed by the current user turn.
+    assert len(ollama.calls[-1]["messages"]) == 41
     assert ollama.calls[-1]["messages"][-1] == {
         "role": "user",
         "content": "follow up 50",
@@ -580,30 +668,33 @@ def test_three_barge_ins_recover_codex_without_new_logical_conversation(
         "compare it with Earth",
     ):
         assert final_prompt.count(user_turn) == 1
+    assert final_prompt.count(INTERRUPTED_RESPONSE_MARKER) == 3
+    assert final_prompt.endswith("[user]\ncompare it with Earth")
 
     snapshot = api.conversation.snapshot()
     assert snapshot.turn_count == 4
-    assert snapshot.history_message_count == 5
+    assert snapshot.history_message_count == 8
     assert snapshot.provider_threads == (("openai-codex", "thread-4"),)
     correlation = safe_conversation_identifier(snapshot.session_id)
     trace = [record.getMessage() for record in caplog.records]
     assert any(
-        f"conversation_session={correlation}" in message
-        and "event=barge_in_detected" in message
+        f"conversation_session={correlation}" in message and "event=barge_in_detected" in message
         for message in trace
     )
     assert any(
-        f"conversation_session={correlation}" in message
-        and "action=thread_recover" in message
+        f"conversation_session={correlation}" in message and "action=thread_recover" in message
         for message in trace
     )
     assert snapshot.session_id not in caplog.text
     assert "only the second one" not in caplog.text
     deadline = time.monotonic() + 1
-    while any(
-        thread.name == "helios-codex-stream" and thread.is_alive()
-        for thread in threading.enumerate()
-    ) and time.monotonic() < deadline:
+    while (
+        any(
+            thread.name == "helios-codex-stream" and thread.is_alive()
+            for thread in threading.enumerate()
+        )
+        and time.monotonic() < deadline
+    ):
         time.sleep(0.01)
     assert not any(
         thread.name == "helios-codex-stream" and thread.is_alive()

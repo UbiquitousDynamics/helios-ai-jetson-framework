@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import random
 import re
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError, wait
+from dataclasses import replace
 from difflib import SequenceMatcher
 from enum import Enum, auto
 from typing import Any
@@ -33,10 +35,12 @@ from recognizer.speech_recognizer import (
 logger = logging.getLogger(__name__)
 
 _BARGE_IN_LISTEN_SLICE_SECONDS = 0.25
+_BARGE_IN_CANDIDATE_INACTIVITY_SECONDS = 1.5
 _TTS_ECHO_TAIL_SECONDS = 0.25
 _TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _RESPONSE_CANCEL_TIMEOUT_SECONDS = 2.5
 _EXPLICIT_SHORT_INTERRUPT_ENERGY = 0.12
+_EXPLICIT_SHORT_INTERRUPT_CONFIDENCE = 0.65
 _EXPLICIT_SHORT_INTERRUPT_COMMANDS = frozenset(
     {
         "basta",
@@ -66,6 +70,8 @@ class _BargeInCaptureStop:
         self._lock = threading.Lock()
         self._response_finished = False
         self._detected_at: float | None = None
+        self._candidate_activity_at: float | None = None
+        self._candidate_timeout_expired = False
         self._forced = False
         self._finished = threading.Event()
 
@@ -73,10 +79,10 @@ class _BargeInCaptureStop:
         with self._lock:
             self._response_finished = True
 
-    def barge_in_detected(self) -> None:
+    def barge_in_detected(self, observed_at: float | None = None) -> None:
         with self._lock:
             if self._detected_at is None:
-                self._detected_at = self._clock()
+                self._detected_at = self._clock() if observed_at is None else observed_at
 
     def recognition_activity(self) -> None:
         """Refresh the post-detection inactivity deadline."""
@@ -84,6 +90,29 @@ class _BargeInCaptureStop:
         with self._lock:
             if self._detected_at is not None:
                 self._detected_at = self._clock()
+
+    def candidate_activity(self, observed_at: float | None = None) -> None:
+        """Start or refresh the provisional-candidate inactivity deadline."""
+
+        with self._lock:
+            self._candidate_activity_at = self._clock() if observed_at is None else observed_at
+            self._candidate_timeout_expired = False
+
+    def candidate_finished(self) -> None:
+        """Clear provisional capture state after rejection or finalization."""
+
+        with self._lock:
+            self._candidate_activity_at = None
+
+    def consume_candidate_timeout(self) -> bool:
+        """Consume a provisional timeout so capture can restart cleanly."""
+
+        with self._lock:
+            expired = self._candidate_timeout_expired
+            self._candidate_timeout_expired = False
+            if expired:
+                self._candidate_activity_at = None
+            return expired
 
     def force_stop(self) -> None:
         with self._lock:
@@ -98,12 +127,20 @@ class _BargeInCaptureStop:
     def is_set(self) -> bool:
         with self._lock:
             detected_at = self._detected_at
+            candidate_activity_at = self._candidate_activity_at
             response_finished = self._response_finished
             forced = self._forced
         if forced:
             return True
         if detected_at is None:
-            return response_finished
+            candidate_expired = bool(
+                candidate_activity_at is not None
+                and self._clock() - candidate_activity_at >= _BARGE_IN_CANDIDATE_INACTIVITY_SECONDS
+            )
+            if candidate_expired:
+                with self._lock:
+                    self._candidate_timeout_expired = True
+            return response_finished or candidate_expired
         return self._clock() - detected_at >= self._follow_up_timeout_seconds
 
 
@@ -126,6 +163,10 @@ class VoiceConversationState(Enum):
 
 class AssistantRuntimeError(RuntimeError):
     """Base class for recoverable orchestration failures."""
+
+
+class AssistantShutdownTimeout(AssistantRuntimeError):
+    """Raised when an owned non-daemon worker cannot stop before process exit."""
 
 
 class RagCommandError(AssistantRuntimeError):
@@ -212,14 +253,18 @@ class VoiceAssistant:
         self._backchannel_index = 0
         self._ready_backchannel_phrases: tuple[str, ...] = ()
         self._backchannel_prepare_future: Future[Any] | None = None
+        self._preparation_stop = threading.Event()
         self._last_backchannel_session: BackchannelSession | None = None
         self._capture_lock = threading.Lock()
         self._active_capture_stop: _BargeInCaptureStop | None = None
         self._response_control_lock = threading.Lock()
         self._active_response_cancellation: CancellationController | None = None
         self._close_lock = threading.Lock()
+        self._close_complete = threading.Event()
+        self._closing = False
         self._task_lock = threading.Lock()
         self._tasks: set[Future[Any]] = set()
+        self._owned_tasks: set[Future[Any]] = set()
         self._sound_executor = sound_executor or ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="helios-sound",
@@ -305,8 +350,7 @@ class VoiceAssistant:
             last_activity = self._voice_conversation_last_activity_at
             if (
                 last_activity is not None
-                and self._clock() - last_activity
-                >= self.settings.llm.context_idle_timeout_seconds
+                and self._clock() - last_activity >= self.settings.llm.context_idle_timeout_seconds
             ):
                 self._voice_conversation_active = False
                 self._voice_conversation_last_activity_at = None
@@ -326,10 +370,18 @@ class VoiceAssistant:
     def _discard_task(self, future: Future[Any]) -> None:
         with self._task_lock:
             self._tasks.discard(future)
+            self._owned_tasks.discard(future)
 
-    def _track_task(self, future: Future[Any]) -> Future[Any]:
+    def _track_task(
+        self,
+        future: Future[Any],
+        *,
+        owned: bool = False,
+    ) -> Future[Any]:
         with self._task_lock:
             self._tasks.add(future)
+            if owned:
+                self._owned_tasks.add(future)
         add_done_callback = getattr(future, "add_done_callback", None)
         if callable(add_done_callback):
             add_done_callback(self._discard_task)
@@ -345,7 +397,11 @@ class VoiceAssistant:
             if self._closed or self._stop_requested:
                 raise AssistantRuntimeError("Voice assistant is closed")
             future = executor.submit(function, *args)
-            return self._track_task(future)
+            owned = bool(
+                (executor is self._conversation_executor and self._owns_conversation_executor)
+                or (executor is self._sound_executor and self._owns_sound_executor)
+            )
+            return self._track_task(future, owned=owned)
 
     def _speak_observed(self, text: str, *, scope: str) -> Any:
         started_at = self._clock()
@@ -544,7 +600,10 @@ class VoiceAssistant:
                 delay_seconds=self.settings.backchannel_delay_seconds,
                 executor=self._conversation_executor,
             )
-            self._track_task(session.future)
+            self._track_task(
+                session.future,
+                owned=self._owns_conversation_executor,
+            )
             with self._backchannel_lock:
                 self._last_backchannel_session = session
         return session
@@ -713,7 +772,10 @@ class VoiceAssistant:
             logger.debug("TTS backend cannot preload conversational backchannels")
             return
         try:
-            loaded = preload(self.profile.backchannel_phrases)
+            preload_kwargs: dict[str, Any] = {}
+            if self._accepts_keyword(preload, "stop_event"):
+                preload_kwargs["stop_event"] = self._preparation_stop
+            loaded = preload(self.profile.backchannel_phrases, **preload_kwargs)
             has_preloaded = getattr(self.tts, "has_preloaded_phrase", None)
             if callable(has_preloaded):
                 ready = tuple(
@@ -758,7 +820,10 @@ class VoiceAssistant:
                 if set(self._ready_backchannel_phrases) == set(self.profile.backchannel_phrases):
                     return future
                 future = self._conversation_executor.submit(self._prepare_backchannels)
-                self._backchannel_prepare_future = self._track_task(future)
+                self._backchannel_prepare_future = self._track_task(
+                    future,
+                    owned=self._owns_conversation_executor,
+                )
                 return self._backchannel_prepare_future
 
     @staticmethod
@@ -840,10 +905,67 @@ class VoiceAssistant:
         if not isinstance(segment_id, int) or isinstance(segment_id, bool):
             segment_id = None
         segment_started_at = getattr(result, "segment_started_at", None)
-        if not isinstance(segment_started_at, (int, float)) or isinstance(
-            segment_started_at, bool
-        ):
+        if not isinstance(segment_started_at, (int, float)) or isinstance(segment_started_at, bool):
             segment_started_at = None
+        confidence = getattr(result, "confidence", None)
+        if (
+            not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+            or not math.isfinite(float(confidence))
+            or not 0 <= float(confidence) <= 1
+        ):
+            confidence = None
+        speech_duration_seconds = getattr(result, "speech_duration_seconds", None)
+        if (
+            not isinstance(speech_duration_seconds, (int, float))
+            or isinstance(speech_duration_seconds, bool)
+            or not math.isfinite(float(speech_duration_seconds))
+            or float(speech_duration_seconds) < 0
+        ):
+            speech_duration_seconds = None
+        segment_peak_energy = getattr(result, "segment_peak_energy", None)
+        if (
+            not isinstance(segment_peak_energy, (int, float))
+            or isinstance(segment_peak_energy, bool)
+            or not math.isfinite(float(segment_peak_energy))
+            or not 0 <= float(segment_peak_energy) <= 1
+        ):
+            segment_peak_energy = None
+        raw_word_confidences = getattr(result, "word_confidences", ())
+        word_confidences: tuple[float | None, ...] = ()
+        if isinstance(raw_word_confidences, (tuple, list)):
+            normalized_confidences: list[float | None] = []
+            for value in raw_word_confidences:
+                if value is None:
+                    normalized_confidences.append(None)
+                elif (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                    and 0 <= float(value) <= 1
+                ):
+                    normalized_confidences.append(float(value))
+            word_confidences = tuple(normalized_confidences)
+        raw_word_timings = getattr(result, "word_timings", ())
+        word_timings: tuple[tuple[float, float] | None, ...] = ()
+        if isinstance(raw_word_timings, (tuple, list)):
+            normalized_timings: list[tuple[float, float] | None] = []
+            for value in raw_word_timings:
+                if value is None:
+                    normalized_timings.append(None)
+                elif (
+                    isinstance(value, (tuple, list))
+                    and len(value) == 2
+                    and all(
+                        isinstance(item, (int, float))
+                        and not isinstance(item, bool)
+                        and math.isfinite(float(item))
+                        for item in value
+                    )
+                    and 0 <= float(value[0]) <= float(value[1])
+                ):
+                    normalized_timings.append((float(value[0]), float(value[1])))
+            word_timings = tuple(normalized_timings)
         return RecognitionResult(
             str(getattr(result, "text", "")).strip(),
             bool(getattr(result, "is_final", True)),
@@ -853,6 +975,15 @@ class VoiceAssistant:
                 float(segment_started_at) if segment_started_at is not None else None
             ),
             energy_reemit=bool(getattr(result, "energy_reemit", False)),
+            confidence=(float(confidence) if confidence is not None else None),
+            speech_duration_seconds=(
+                float(speech_duration_seconds) if speech_duration_seconds is not None else None
+            ),
+            segment_peak_energy=(
+                float(segment_peak_energy) if segment_peak_energy is not None else None
+            ),
+            word_confidences=word_confidences,
+            word_timings=word_timings,
         )
 
     def _set_active_response_cancellation(
@@ -963,58 +1094,137 @@ class VoiceAssistant:
             return False
         current = self._current_tts_echo_references(now)
         all_references = tuple(dict.fromkeys((*references, *current)))
-        candidate_words = candidate.split()
         for reference in all_references:
-            padded_candidate = f" {candidate} "
-            padded_reference = f" {reference} "
-            if padded_candidate in padded_reference or padded_reference in padded_candidate:
-                return True
-            reference_words = reference.split()
-            if len(candidate_words) < 3 or len(reference_words) < 3:
-                continue
-            if len(reference) >= len(candidate):
-                character_windows = (
-                    reference[position : position + len(candidate)]
-                    for position in range(len(reference) - len(candidate) + 1)
-                )
-            else:
-                character_windows = (reference,)
-            character_similarity = max(
-                SequenceMatcher(
-                    None,
-                    candidate,
-                    window,
-                    autojunk=False,
-                ).ratio()
-                for window in character_windows
-            )
-            # Vosk often changes several word boundaries while preserving most
-            # phonetic characters (for example ``Marte`` -> ``parte``). A
-            # character window catches that echo without treating a semantic
-            # correction sharing only a couple of words as equivalent.
-            if character_similarity >= 0.78:
-                return True
-            if len(reference_words) >= len(candidate_words):
-                windows = (
-                    reference_words[position : position + len(candidate_words)]
-                    for position in range(
-                        len(reference_words) - len(candidate_words) + 1
-                    )
-                )
-            else:
-                windows = (reference_words,)
-            similarity = max(
-                SequenceMatcher(
-                    None,
-                    candidate_words,
-                    window,
-                    autojunk=False,
-                ).ratio()
-                for window in windows
-            )
-            if similarity >= 0.65 and character_similarity >= 0.72:
+            if self._echo_candidate_matches_reference(candidate, reference):
                 return True
         return False
+
+    @staticmethod
+    def _echo_candidate_matches_reference(candidate: str, reference: str) -> bool:
+        """Compare one normalized recognition hypothesis with one TTS phrase."""
+
+        padded_candidate = f" {candidate} "
+        padded_reference = f" {reference} "
+        if padded_candidate in padded_reference or padded_reference in padded_candidate:
+            return True
+        candidate_words = candidate.split()
+        reference_words = reference.split()
+        if len(candidate_words) < 3 or len(reference_words) < 3:
+            return False
+        if len(reference) >= len(candidate):
+            character_windows = (
+                reference[position : position + len(candidate)]
+                for position in range(len(reference) - len(candidate) + 1)
+            )
+        else:
+            character_windows = (reference,)
+        character_similarity = max(
+            SequenceMatcher(None, candidate, window, autojunk=False).ratio()
+            for window in character_windows
+        )
+        # Vosk often changes several word boundaries while preserving most
+        # phonetic characters (for example ``Marte`` -> ``parte``).
+        if character_similarity >= 0.78:
+            return True
+        if len(reference_words) >= len(candidate_words):
+            windows = (
+                reference_words[position : position + len(candidate_words)]
+                for position in range(len(reference_words) - len(candidate_words) + 1)
+            )
+        else:
+            windows = (reference_words,)
+        word_similarity = max(
+            SequenceMatcher(None, candidate_words, window, autojunk=False).ratio()
+            for window in windows
+        )
+        return word_similarity >= 0.65 and character_similarity >= 0.72
+
+    def _remove_current_tts_echo(
+        self,
+        text: str,
+        now: float,
+        *,
+        references: tuple[str, ...] = (),
+    ) -> tuple[str, tuple[int, ...]]:
+        """Return only words not attributable to current/recent TTS.
+
+        A Vosk segment can start with loudspeaker output and end with the user's
+        correction. Treating that whole segment as echo loses the correction;
+        forwarding it whole contaminates the next model prompt with the old
+        answer. This method removes an exact or strongly aligned echo prefix
+        and reports how many words were removed without logging transcript text.
+        """
+
+        candidate = self._normalized_echo_text(text)
+        if not candidate:
+            return "", ()
+        candidate_words = candidate.split()
+        current = self._current_tts_echo_references(now)
+        all_references = tuple(dict.fromkeys((*references, *current)))
+        # Echo can span multiple streamed Piper fragments. Consume only one
+        # contiguous prefix region, repeatedly searching the bounded reference
+        # set. Never delete a matching phrase from the middle of a user's new
+        # request: they may be quoting or referring to the previous answer.
+        prefix_cursor = 0
+        while prefix_cursor < len(candidate_words):
+            remaining_words = candidate_words[prefix_cursor:]
+            matched_width = 0
+
+            # Prefer exact alignment across every reference before fuzzy
+            # matching; otherwise a similar earlier fragment could consume the
+            # wrong number of words ahead of a later exact fragment.
+            for reference in all_references:
+                reference_words = reference.split()
+                if not reference_words:
+                    continue
+                width = len(reference_words)
+                if tuple(remaining_words[:width]) == tuple(reference_words):
+                    matched_width = width
+                    break
+
+            if not matched_width:
+                for reference in all_references:
+                    reference_words = reference.split()
+                    if not reference_words:
+                        continue
+
+                    # For Vosk spelling/word-boundary drift, consume only an
+                    # aligned prefix against the start of this fragment. The
+                    # general echo matcher searches arbitrary reference
+                    # windows, which is useful for suppression but unsafe for
+                    # deleting words from a user prompt.
+                    max_prefix = min(len(remaining_words), len(reference_words))
+                    for prefix_size in range(max_prefix, 2, -1):
+                        candidate_prefix_words = remaining_words[:prefix_size]
+                        reference_prefix_words = reference_words[:prefix_size]
+                        candidate_prefix = " ".join(candidate_prefix_words)
+                        reference_prefix = " ".join(reference_prefix_words)
+                        character_similarity = SequenceMatcher(
+                            None,
+                            candidate_prefix,
+                            reference_prefix,
+                            autojunk=False,
+                        ).ratio()
+                        word_similarity = SequenceMatcher(
+                            None,
+                            candidate_prefix_words,
+                            reference_prefix_words,
+                            autojunk=False,
+                        ).ratio()
+                        if character_similarity >= 0.78 or (
+                            word_similarity >= 0.65 and character_similarity >= 0.72
+                        ):
+                            matched_width = prefix_size
+                            break
+                    if matched_width:
+                        break
+
+            if not matched_width:
+                break
+            prefix_cursor += matched_width
+
+        removed_indices = tuple(range(prefix_cursor))
+        return " ".join(candidate_words[prefix_cursor:]), removed_indices
 
     @staticmethod
     def _is_short_unconfirmed_final(
@@ -1026,22 +1236,97 @@ class VoiceAssistant:
         if not result.is_final or len(result.text.split()) >= 3:
             return False
         normalized = VoiceAssistant._normalized_echo_text(result.text)
+        peak_energy = (
+            result.segment_peak_energy
+            if result.segment_peak_energy is not None
+            else result.frame_energy
+        )
         if (
             normalized in _EXPLICIT_SHORT_INTERRUPT_COMMANDS
-            and result.frame_energy is not None
-            and result.frame_energy >= _EXPLICIT_SHORT_INTERRUPT_ENERGY
+            and peak_energy is not None
+            and peak_energy >= _EXPLICIT_SHORT_INTERRUPT_ENERGY
+            and result.confidence is not None
+            and result.confidence >= _EXPLICIT_SHORT_INTERRUPT_CONFIDENCE
         ):
             return False
         if not bool(getattr(detector, "recognition_candidate_pending", False)):
             return True
-        pending_segment_id = getattr(
-            detector, "recognition_candidate_segment_id", None
-        )
+        pending_segment_id = getattr(detector, "recognition_candidate_segment_id", None)
         return (
             result.segment_id is not None
             and pending_segment_id is not None
             and result.segment_id != pending_segment_id
         )
+
+    @staticmethod
+    def _is_confirmed_explicit_interrupt(result: RecognitionResult) -> bool:
+        if not result.is_final:
+            return False
+        peak_energy = (
+            result.segment_peak_energy
+            if result.segment_peak_energy is not None
+            else result.frame_energy
+        )
+        return bool(
+            VoiceAssistant._normalized_echo_text(result.text) in _EXPLICIT_SHORT_INTERRUPT_COMMANDS
+            and peak_energy is not None
+            and peak_energy >= _EXPLICIT_SHORT_INTERRUPT_ENERGY
+            and result.confidence is not None
+            and result.confidence >= _EXPLICIT_SHORT_INTERRUPT_CONFIDENCE
+        )
+
+    @staticmethod
+    def _has_strong_vosk_final(result: RecognitionResult) -> bool:
+        """Return whether Vosk supplied enough metadata to trust a final alone."""
+
+        peak_energy = (
+            result.segment_peak_energy
+            if result.segment_peak_energy is not None
+            else result.frame_energy
+        )
+        return bool(
+            result.is_final
+            and len(result.text.split()) >= 3
+            and result.confidence is not None
+            and result.confidence >= 0.65
+            and result.speech_duration_seconds is not None
+            and result.speech_duration_seconds >= 0.2
+            and peak_energy is not None
+            and peak_energy >= _EXPLICIT_SHORT_INTERRUPT_ENERGY
+        )
+
+    def _duck_tts_for_barge_in_candidate(self, segment_id: int | None) -> None:
+        """Reversibly pause response audio while Vosk finalizes a candidate."""
+
+        duck = getattr(self.tts, "duck", None)
+        if not callable(duck):
+            # Legacy/injected TTS implementations cannot provide a reversible
+            # pause. Do not fall back to interrupt(): that would truncate a
+            # response for a provisional hypothesis and cannot be undone.
+            return
+        try:
+            duck()
+            logger.info("event=barge_in_tts_ducked segment=%s", segment_id)
+        except Exception:
+            logger.warning(
+                "Unable to duck speech for a barge-in candidate",
+                exc_info=True,
+            )
+
+    def _resume_tts_after_barge_in_candidate(self) -> None:
+        """Release a reversible TTS duck after rejection or capture teardown."""
+
+        resume = getattr(self.tts, "resume", None)
+        if not callable(resume):
+            return
+        try:
+            if resume():
+                logger.info("event=barge_in_tts_resumed reason=candidate_not_committed")
+        except Exception:
+            logger.warning(
+                "Unable to resume speech after a barge-in candidate",
+                exc_info=True,
+            )
 
     def _listen_for_barge_in(
         self,
@@ -1080,6 +1365,7 @@ class VoiceAssistant:
                 cancellation=cancellation,
             )
         finally:
+            self._resume_tts_after_barge_in_candidate()
             capture_stop.capture_finished()
             with self._capture_lock:
                 if self._active_capture_stop is capture_stop:
@@ -1095,14 +1381,13 @@ class VoiceAssistant:
         cancellation: CancellationController | None,
     ) -> str | None:
         playback_started_at: float | None = None
-        detected = False
-        latest_text = ""
-        suppressing_echo_segment = False
-        suppressed_echo_segment_id: int | None = None
         echo_references: list[str] = []
         detector_playback_epoch: float | None = None
-        while not response_future.done() or detected:
-            if capture_stop.is_set():
+        while not response_future.done() or bool(
+            getattr(detector, "recognition_candidate_pending", False)
+        ):
+            candidate_pending = bool(getattr(detector, "recognition_candidate_pending", False))
+            if capture_stop.is_set() and not candidate_pending:
                 break
             continuous = True
             events: Any = None
@@ -1122,31 +1407,104 @@ class VoiceAssistant:
                 for raw_result in events:
                     if self._stop_requested or self._closed:
                         return None
-                    if response_future.done() and not detected:
+                    result = self._coerce_recognition_result(raw_result)
+                    if not result.text:
+                        continue
+                    candidate_pending = bool(
+                        getattr(detector, "recognition_candidate_pending", False)
+                    )
+                    if (
+                        response_future.done()
+                        and not candidate_pending
+                        and not self._has_strong_vosk_final(result)
+                        and not self._is_confirmed_explicit_interrupt(result)
+                    ):
                         logger.debug(
                             "Discarding recognizer finalization after the response boundary"
                         )
                         return None
-                    result = self._coerce_recognition_result(raw_result)
-                    if not result.text:
-                        continue
                     now = self._clock()
                     actual_started_at = self._tts_echo_epoch_start(now)
-                    if (
-                        suppressing_echo_segment
-                        and suppressed_echo_segment_id is not None
-                        and result.segment_id is not None
-                        and result.segment_id != suppressed_echo_segment_id
-                    ):
-                        # Vosk can close a segment with an empty final, which
-                        # produces no event. Do not let that stale suppression
-                        # consume the next real user segment.
-                        suppressing_echo_segment = False
-                        suppressed_echo_segment_id = None
+                    for reference in self._current_tts_echo_references(now):
+                        if reference not in echo_references:
+                            echo_references.append(reference)
 
-                    pending_segment_id = getattr(
-                        detector, "recognition_candidate_segment_id", None
+                    residual, removed_echo_indices = self._remove_current_tts_echo(
+                        result.text,
+                        now,
+                        references=tuple(echo_references),
                     )
+                    echo_word_count = len(removed_echo_indices)
+                    if removed_echo_indices and not residual:
+                        discard_candidate = getattr(detector, "discard_recognition_candidate", None)
+                        if callable(discard_candidate):
+                            discard_candidate()
+                        capture_stop.candidate_finished()
+                        self._resume_tts_after_barge_in_candidate()
+                        logger.info("event=barge_in_candidate_suppressed reason=tts_text_match")
+                        continue
+                    if removed_echo_indices:
+                        candidate_word_count = len(self._normalized_echo_text(result.text).split())
+                        kept_indices = tuple(
+                            index
+                            for index in range(candidate_word_count)
+                            if index not in frozenset(removed_echo_indices)
+                        )
+                        residual_confidences = tuple(
+                            result.word_confidences[index]
+                            for index in kept_indices
+                            if index < len(result.word_confidences)
+                        )
+                        known_confidences = tuple(
+                            value for value in residual_confidences if value is not None
+                        )
+                        residual_timings = tuple(
+                            result.word_timings[index]
+                            for index in kept_indices
+                            if index < len(result.word_timings)
+                        )
+                        known_timings = tuple(
+                            value for value in residual_timings if value is not None
+                        )
+                        has_word_metadata = bool(result.word_confidences or result.word_timings)
+                        residual_metadata_complete = bool(
+                            result.word_confidences
+                            and len(residual_confidences) == len(kept_indices)
+                            and len(known_confidences) == len(kept_indices)
+                        )
+                        result = replace(
+                            result,
+                            text=residual,
+                            confidence=(
+                                sum(known_confidences) / len(known_confidences)
+                                if residual_metadata_complete
+                                else (0.0 if has_word_metadata else result.confidence)
+                            ),
+                            speech_duration_seconds=(
+                                max(end for _, end in known_timings)
+                                - min(start for start, _ in known_timings)
+                                if known_timings
+                                else (None if has_word_metadata else result.speech_duration_seconds)
+                            ),
+                            # Whole-segment RMS includes the loudspeaker. After
+                            # echo removal only per-word ASR evidence remains
+                            # trustworthy; do not let speaker energy validate
+                            # the residual as user speech.
+                            segment_peak_energy=(
+                                result.segment_peak_energy
+                                if not has_word_metadata
+                                else (result.frame_energy if residual_metadata_complete else 0.0)
+                            ),
+                            word_confidences=residual_confidences,
+                            word_timings=residual_timings,
+                        )
+                        logger.info(
+                            "event=barge_in_echo_prefix_removed echo_words=%s residual_words=%s",
+                            echo_word_count,
+                            len(result.text.split()),
+                        )
+
+                    pending_segment_id = getattr(detector, "recognition_candidate_segment_id", None)
                     same_pending_segment = bool(
                         getattr(detector, "recognition_candidate_pending", False)
                     ) and (
@@ -1172,42 +1530,9 @@ class VoiceAssistant:
                             )
                             if callable(discard_candidate):
                                 discard_candidate()
+                            capture_stop.candidate_finished()
+                            self._resume_tts_after_barge_in_candidate()
                         detector_playback_epoch = actual_started_at
-                    for reference in self._current_tts_echo_references(now):
-                        if reference not in echo_references:
-                            echo_references.append(reference)
-                    if self._matches_current_tts_echo(
-                        result.text,
-                        now,
-                        references=tuple(echo_references),
-                    ):
-                        suppressing_echo_segment = not result.is_final
-                        suppressed_echo_segment_id = (
-                            result.segment_id if suppressing_echo_segment else None
-                        )
-                        discard_candidate = getattr(
-                            detector, "discard_recognition_candidate", None
-                        )
-                        if callable(discard_candidate):
-                            discard_candidate()
-                        logger.info(
-                            "event=barge_in_candidate_suppressed reason=tts_text_match"
-                        )
-                        continue
-                    if suppressing_echo_segment:
-                        logger.info(
-                            "event=barge_in_candidate_suppressed "
-                            "reason=tts_echo_segment"
-                        )
-                        if result.is_final:
-                            suppressing_echo_segment = False
-                            suppressed_echo_segment_id = None
-                            discard_candidate = getattr(
-                                detector, "discard_recognition_candidate", None
-                            )
-                            if callable(discard_candidate):
-                                discard_candidate()
-                        continue
 
                     crossed_playback_boundary = (
                         actual_started_at is not None
@@ -1219,161 +1544,166 @@ class VoiceAssistant:
                         # because the latest PCM frame became louder. At TTS
                         # onset that energy is the loudspeaker, not independent
                         # evidence that the user started speaking.
-                        if crossed_playback_boundary and not carry_pending_across_epoch:
-                            suppressing_echo_segment = not result.is_final
-                            suppressed_echo_segment_id = (
-                                result.segment_id if suppressing_echo_segment else None
-                            )
+                        logger.info("event=barge_in_candidate_suppressed reason=energy_only_reemit")
+                        continue
+                    if crossed_playback_boundary and not carry_pending_across_epoch:
+                        # A hypothesis first observed only after its segment
+                        # crossed into loudspeaker playback has no independent
+                        # pre-playback evidence. Re-evaluate every revision so a
+                        # later cleaned user segment is still eligible, but do
+                        # not arm this stale segment from speaker energy.
                         logger.info(
-                            "event=barge_in_candidate_suppressed "
-                            "reason=energy_only_reemit"
+                            "event=barge_in_candidate_suppressed reason=pre_playback_segment"
                         )
                         continue
-                    if (
-                        actual_started_at is not None
-                        and self._is_short_unconfirmed_final(result, detector)
-                    ):
+                    if self._is_short_unconfirmed_final(result, detector):
                         # A first-event one/two-word final during playback is a
                         # common Vosk rendering of a short TTS/backchannel echo.
                         # Require an earlier high-energy partial from the same
                         # segment; otherwise keep speaking.
+                        discard_candidate = getattr(
+                            detector,
+                            "discard_recognition_candidate",
+                            None,
+                        )
+                        if callable(discard_candidate):
+                            discard_candidate()
+                        capture_stop.candidate_finished()
+                        self._resume_tts_after_barge_in_candidate()
                         logger.info(
-                            "event=barge_in_candidate_suppressed "
-                            "reason=short_unconfirmed_final"
+                            "event=barge_in_candidate_suppressed reason=short_unconfirmed_final"
                         )
                         continue
-                    if crossed_playback_boundary and not carry_pending_across_epoch:
-                        # A Vosk segment first observed before this playback
-                        # buffer can carry stale text into the first loud frame.
-                        # Only a policy-approved pending user candidate may
-                        # cross that boundary. Discard every other segment
-                        # through its final boundary.
-                        suppressing_echo_segment = not result.is_final
-                        suppressed_echo_segment_id = (
-                            result.segment_id if suppressing_echo_segment else None
-                        )
-                        logger.info(
-                            "event=barge_in_candidate_suppressed "
-                            "reason=pre_playback_segment"
-                        )
-                        continue
-                    latest_text = result.text
-                    if not detected:
-                        if actual_started_at is not None:
-                            playback_started_at = actual_started_at
-                        elif self._tts_is_speaking():
-                            if playback_started_at is None:
-                                playback_started_at = now
-                        else:
-                            playback_started_at = None
+
+                    if actual_started_at is not None:
+                        playback_started_at = actual_started_at
+                    elif self._tts_is_speaking():
                         if playback_started_at is None:
-                            # Final recognizer output during generation can be a
-                            # real correction, but it can also be a delayed flush
-                            # of the local backchannel ("One moment", etc.). Run
-                            # it through the same production echo/energy policy as
-                            # playback candidates. Treat this as the conservative
-                            # start of an unknown playback epoch so an event with
-                            # no measured frame energy cannot cancel the model.
-                            can_arm_partial = hasattr(
-                                detector, "recognition_candidate_pending"
-                            )
-                            candidate_pending = bool(
-                                getattr(
-                                    detector,
-                                    "recognition_candidate_pending",
-                                    False,
-                                )
-                            )
-                            should_process = result.is_final or (
-                                can_arm_partial and not candidate_pending
-                            )
-                            accepted_candidate = (
-                                should_process
-                                and detector.process_recognition(
-                                    result,
-                                    elapsed_since_tts_start=0.0,
-                                    frame_energy=result.frame_energy,
-                                    observed_at=now,
-                                )
-                            )
-                            accepted = result.is_final and accepted_candidate
-                            if accepted:
-                                detected = True
-                                session_id, turn_number = self._conversation_coordinates()
-                                logger.info(
-                                    "conversation_session=%s turn=%s "
-                                    "event=barge_in_detected phase=pre_playback",
-                                    session_id,
-                                    turn_number,
-                                )
-                                capture_stop.barge_in_detected()
-                                self._transition_voice_conversation(
-                                    VoiceConversationState.BARGE_IN_DETECTED
-                                )
-                                logger.info(
-                                    "User follow-up finalized before playback; "
-                                    "interrupting the active response"
-                                )
-                                self._transition_voice_conversation(
-                                    VoiceConversationState.CANCELLING
-                                )
-                                self._interrupt_current_response(cancellation)
-                                self._transition_voice_conversation(
-                                    VoiceConversationState.FOLLOW_UP_FINALIZED
-                                )
-                                next_session, next_turn = self._conversation_coordinates(
-                                    next_turn=True
-                                )
-                                logger.info(
-                                    "conversation_session=%s turn=%s event=stt_finalized "
-                                    "source=barge_in",
-                                    next_session,
-                                    next_turn,
-                                )
-                                return result.text
-                            continue
-                        self._transition_voice_conversation(VoiceConversationState.SPEAKING)
-                        elapsed = max(0.0, now - playback_started_at)
-                        detected = detector.process_recognition(
-                            result,
-                            elapsed_since_tts_start=elapsed,
-                            frame_energy=result.frame_energy,
-                            observed_at=now,
-                        )
-                        if detected:
-                            session_id, turn_number = self._conversation_coordinates()
-                            logger.info(
-                                "conversation_session=%s turn=%s event=barge_in_detected "
-                                "phase=playback",
-                                session_id,
-                                turn_number,
-                            )
-                            capture_stop.barge_in_detected()
-                            self._transition_voice_conversation(
-                                VoiceConversationState.BARGE_IN_DETECTED
-                            )
-                            logger.info("Barge-in detected; interrupting the active response")
-                            self._transition_voice_conversation(
-                                VoiceConversationState.CANCELLING
-                            )
-                            self._interrupt_current_response(cancellation)
-                            self._transition_voice_conversation(
-                                VoiceConversationState.CAPTURING_FOLLOW_UP
-                            )
+                            playback_started_at = now
                     else:
-                        capture_stop.recognition_activity()
-                    if detected and result.is_final:
-                        self._transition_voice_conversation(
-                            VoiceConversationState.FOLLOW_UP_FINALIZED
-                        )
-                        next_session, next_turn = self._conversation_coordinates(next_turn=True)
+                        playback_started_at = None
+                    if playback_started_at is not None:
+                        self._transition_voice_conversation(VoiceConversationState.SPEAKING)
+                    elapsed = (
+                        max(0.0, now - playback_started_at)
+                        if playback_started_at is not None
+                        else 0.0
+                    )
+                    acoustic_energy = (
+                        result.segment_peak_energy
+                        if result.segment_peak_energy is not None
+                        else result.frame_energy
+                    )
+                    process_recognition = detector.process_recognition
+                    detector_kwargs: dict[str, Any] = {
+                        "elapsed_since_tts_start": elapsed,
+                        "frame_energy": acoustic_energy,
+                        "observed_at": now,
+                    }
+                    if (
+                        removed_echo_indices
+                        and not result.is_final
+                        and result.confidence is not None
+                        and result.confidence >= _EXPLICIT_SHORT_INTERRUPT_CONFIDENCE
+                        and self._accepts_keyword(process_recognition, "allow_short_partial")
+                    ):
+                        # Echo stripping may leave only the first two words of
+                        # the actual correction. The residual still cannot
+                        # cancel anything: it only arms a same-segment final.
+                        detector_kwargs["allow_short_partial"] = True
+                    allow_strong_completed_final = bool(
+                        response_future.done() and self._has_strong_vosk_final(result)
+                    )
+                    if (
+                        self._is_confirmed_explicit_interrupt(result)
+                        or allow_strong_completed_final
+                    ) and self._accepts_keyword(process_recognition, "allow_unarmed_final"):
+                        detector_kwargs["allow_unarmed_final"] = True
+                    was_pending = bool(getattr(detector, "recognition_candidate_pending", False))
+                    accepted = bool(process_recognition(result, **detector_kwargs))
+                    is_pending = bool(getattr(detector, "recognition_candidate_pending", False))
+                    logger.debug(
+                        "event=barge_in_stt_decision segment=%s final=%s words=%s "
+                        "confidence=%s duration_ms=%s frame_rms=%s peak_rms=%s "
+                        "pending=%s accepted=%s crossed_playback=%s",
+                        result.segment_id,
+                        result.is_final,
+                        len(result.text.split()),
+                        (round(result.confidence, 3) if result.confidence is not None else None),
+                        (
+                            round(result.speech_duration_seconds * 1_000, 1)
+                            if result.speech_duration_seconds is not None
+                            else None
+                        ),
+                        (
+                            round(result.frame_energy, 3)
+                            if result.frame_energy is not None
+                            else None
+                        ),
+                        (
+                            round(result.segment_peak_energy, 3)
+                            if result.segment_peak_energy is not None
+                            else None
+                        ),
+                        is_pending,
+                        accepted,
+                        crossed_playback_boundary,
+                    )
+                    if not result.is_final:
+                        if is_pending and not was_pending:
+                            logger.info(
+                                "event=barge_in_candidate_armed segment=%s words=%s",
+                                result.segment_id,
+                                len(result.text.split()),
+                            )
+                            # Pause only the loudspeaker. The model turn and
+                            # canonical history remain untouched until a final
+                            # confirms this segment.
+                            self._duck_tts_for_barge_in_candidate(result.segment_id)
+                            capture_stop.candidate_activity(now)
+                        elif is_pending:
+                            capture_stop.candidate_activity(now)
+                        elif was_pending and not is_pending:
+                            capture_stop.candidate_finished()
+                            self._resume_tts_after_barge_in_candidate()
+                        # Partial hypotheses are never an irreversible action.
+                        continue
+                    if not accepted:
+                        capture_stop.candidate_finished()
+                        self._resume_tts_after_barge_in_candidate()
                         logger.info(
-                            "conversation_session=%s turn=%s event=stt_finalized "
-                            "source=barge_in",
-                            next_session,
-                            next_turn,
+                            "event=barge_in_candidate_suppressed "
+                            "reason=final_not_confirmed segment=%s",
+                            result.segment_id,
                         )
-                        return result.text
+                        continue
+
+                    phase = "playback" if playback_started_at is not None else "pre_playback"
+                    capture_stop.candidate_finished()
+                    session_id, turn_number = self._conversation_coordinates()
+                    logger.info(
+                        "conversation_session=%s turn=%s event=barge_in_detected "
+                        "phase=%s segment=%s",
+                        session_id,
+                        turn_number,
+                        phase,
+                        result.segment_id,
+                    )
+                    capture_stop.barge_in_detected(now)
+                    self._transition_voice_conversation(VoiceConversationState.BARGE_IN_DETECTED)
+                    self._transition_voice_conversation(VoiceConversationState.CANCELLING)
+                    self._interrupt_current_response(cancellation)
+                    self._transition_voice_conversation(VoiceConversationState.FOLLOW_UP_FINALIZED)
+                    next_session, next_turn = self._conversation_coordinates(next_turn=True)
+                    logger.info(
+                        "conversation_session=%s turn=%s event=stt_finalized "
+                        "source=barge_in words=%s segment=%s",
+                        next_session,
+                        next_turn,
+                        len(result.text.split()),
+                        result.segment_id,
+                    )
+                    return result.text
             except Exception:
                 self._interrupt_current_response(cancellation)
                 raise
@@ -1381,12 +1711,33 @@ class VoiceAssistant:
                 close_events = getattr(events, "close", None)
                 if callable(close_events):
                     close_events()
-            if detected:
-                # Continuous Vosk capture flushes FinalResult when cancellation
-                # stops the session. Retain a partial only for legacy injected
-                # recognizers that cannot provide that finalization contract.
-                return (latest_text or None) if not continuous else None
             if continuous:
+                if capture_stop.consume_candidate_timeout():
+                    discard_candidate = getattr(
+                        detector,
+                        "discard_recognition_candidate",
+                        None,
+                    )
+                    if callable(discard_candidate):
+                        discard_candidate()
+                    self._resume_tts_after_barge_in_candidate()
+                    logger.info(
+                        "event=barge_in_candidate_suppressed reason=provisional_inactivity_timeout"
+                    )
+                    if not response_future.done() and not self._stop_requested and not self._closed:
+                        # Reopen one continuous Vosk session. A provisional
+                        # timeout must not disable barge-in for the rest of the
+                        # response after playback has safely resumed.
+                        continue
+                return None
+            if response_future.done():
+                discard_candidate = getattr(
+                    detector,
+                    "discard_recognition_candidate",
+                    None,
+                )
+                if callable(discard_candidate):
+                    discard_candidate()
                 return None
         return None
 
@@ -1462,6 +1813,13 @@ class VoiceAssistant:
                 model_prompt = self._without_wake_word(model_prompt)
             if not model_prompt:
                 return None
+            if self._normalized_echo_text(model_prompt) in _EXPLICIT_SHORT_INTERRUPT_COMMANDS:
+                # An explicit stop is control input, not a new conversational
+                # request. The interrupted turn marker is committed by the API
+                # cancellation path; return to listening without asking a model
+                # to answer "stop".
+                self._transition_voice_conversation(VoiceConversationState.LISTENING)
+                return None
             if self._stop_requested or self._closed:
                 logger.info("event=follow_up_discarded reason=assistant_stopping")
                 return None
@@ -1527,7 +1885,9 @@ class VoiceAssistant:
                 and self._voice_conversation_is_active()
             )
             if has_wake_word or is_follow_up:
-                model_prompt = self._without_wake_word(command) if has_wake_word else command.strip()
+                model_prompt = (
+                    self._without_wake_word(command) if has_wake_word else command.strip()
+                )
                 if not model_prompt:
                     return False
                 selected_mode = "think" if self._think_prompt(model_prompt) is not None else "talk"
@@ -1627,6 +1987,7 @@ class VoiceAssistant:
             success=True,
         )
         self._stop_requested = False
+        self._preparation_stop.clear()
         self._running = True
         iterations = 0
         recoverable_errors = (
@@ -1651,13 +2012,12 @@ class VoiceAssistant:
                 self.profile.welcome_message.format(wake_word=self.profile.wake_word),
                 scope="welcome",
             )
-            backchannel_preparation = self.prepare_backchannels_async()
-            if backchannel_preparation is not None:
-                # The latency-sensitive turn path must only ever use cached
-                # waves. Finish the one-time startup work before accepting a
-                # first command so the first slow answer receives the same cue
-                # behavior as every later one.
-                backchannel_preparation.result()
+            # This work is immediately required before accepting the first
+            # command, so keep it on the main thread. If startup is interrupted,
+            # there is no non-daemon executor worker left behind for CPython's
+            # atexit hook to join indefinitely.
+            if self.settings.barge_in_enabled:
+                self._prepare_backchannels()
             while self._running and (max_iterations is None or iterations < max_iterations):
                 iterations += 1
                 try:
@@ -1688,6 +2048,7 @@ class VoiceAssistant:
     def stop(self) -> None:
         self._stop_requested = True
         self._running = False
+        self._preparation_stop.set()
         with self._capture_lock:
             capture_stop = self._active_capture_stop
         if capture_stop is not None:
@@ -1704,83 +2065,142 @@ class VoiceAssistant:
 
     def close(self) -> None:
         with self._close_lock:
-            if self._closed:
+            if self._close_complete.is_set():
                 return
+            if self._closing:
+                close_complete = self._close_complete
+                owns_close = False
+            else:
+                self._closing = True
+                close_complete = self._close_complete
+                owns_close = True
             self._closed = True
             self._stop_requested = True
-            self._running = False
-        self._deactivate_voice_conversation()
+        if not owns_close:
+            if not close_complete.wait(_TASK_SHUTDOWN_TIMEOUT_SECONDS):
+                logger.warning("event=assistant_concurrent_close_timeout")
+            return
 
-        with self._capture_lock:
-            capture_stop = self._active_capture_stop
-        if capture_stop is not None:
-            capture_stop.force_stop()
+        self._running = False
+        self._preparation_stop.set()
+        close_succeeded = False
+        shutdown_timed_out = False
+        try:
+            self._deactivate_voice_conversation()
 
-        self._interrupt_current_response()
+            with self._capture_lock:
+                capture_stop = self._active_capture_stop
+            if capture_stop is not None:
+                capture_stop.force_stop()
 
-        with self._backchannel_lock:
-            backchannel = self._last_backchannel_session
-        if backchannel is not None:
-            backchannel.supersede()
+            self._interrupt_current_response()
 
-        with self._task_lock:
-            tasks = tuple(self._tasks)
-        for future in tasks:
-            future.cancel()
-        completed, pending = wait(tasks, timeout=_TASK_SHUTDOWN_TIMEOUT_SECONDS)
-        for future in completed:
-            try:
-                future.result()
-            except Exception:
-                # Cancellation and response failures are expected during
-                # teardown; all contentful errors were already observed by the
-                # owning runtime path.
-                pass
-        if pending:
-            logger.warning(
-                "event=assistant_task_shutdown_timeout pending_tasks=%s",
-                len(pending),
-            )
+            with self._backchannel_lock:
+                backchannel = self._last_backchannel_session
+            if backchannel is not None:
+                stopped = backchannel.supersede(
+                    timeout=_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+                )
+                if not stopped and self._owns_conversation_executor:
+                    shutdown_timed_out = True
+                    logger.warning("event=backchannel_shutdown_timeout")
 
-        if capture_stop is not None:
-            # Do not terminate PyAudio while listen_events() may still be in a
-            # device read or generator cleanup. The stop token makes the next
-            # bounded frame read exit; this wait is the teardown barrier.
-            if not capture_stop.wait_finished(_TASK_SHUTDOWN_TIMEOUT_SECONDS):
-                logger.warning("event=capture_shutdown_timeout")
-
-        if self._owns_conversation_executor:
-            self._conversation_executor.shutdown(
-                wait=not pending,
-                cancel_futures=True,
-            )
-        if self._owns_sound_executor:
-            self._sound_executor.shutdown(
-                wait=not pending,
-                cancel_futures=True,
-            )
-
-        closed_ids: set[int] = set()
-        for service in (
-            self.speech_recognizer,
-            self.api_client,
-            self.tts,
-            self.sound_player,
-            self._rag_searcher,
-        ):
-            if service is None or id(service) in closed_ids:
-                continue
-            closed_ids.add(id(service))
-            close = getattr(service, "close", None)
-            if callable(close):
+            # Retire model transports before waiting for their workers. This is
+            # the operation that unblocks an Ollama HTTP read or Codex app-server
+            # turn; waiting first leaves a non-daemon executor alive at exit.
+            closed_ids: set[int] = set()
+            api_close = getattr(self.api_client, "close", None)
+            if callable(api_close):
                 try:
-                    close()
+                    api_close()
                 except Exception:
                     logger.warning(
                         "Unable to close %s",
-                        type(service).__name__,
+                        type(self.api_client).__name__,
                         exc_info=True,
                     )
+            closed_ids.add(id(self.api_client))
+
+            with self._task_lock:
+                tasks = tuple(self._tasks)
+                owned_tasks = frozenset(self._owned_tasks)
+            for future in tasks:
+                future.cancel()
+            completed, pending = wait(
+                tasks,
+                timeout=_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+            )
+            for future in completed:
+                try:
+                    future.result()
+                except Exception:
+                    # Cancellation and response failures are expected during
+                    # teardown; contentful errors were observed by their owner.
+                    pass
+            if pending:
+                logger.warning(
+                    "event=assistant_task_shutdown_timeout pending_tasks=%s",
+                    len(pending),
+                )
+                shutdown_timed_out = shutdown_timed_out or any(
+                    future in owned_tasks for future in pending
+                )
+
+            if capture_stop is not None:
+                # Do not terminate PyAudio while listen_events() may still be in
+                # a device read or generator cleanup.
+                if not capture_stop.wait_finished(_TASK_SHUTDOWN_TIMEOUT_SECONDS):
+                    logger.warning("event=capture_shutdown_timeout")
+                    shutdown_timed_out = True
+
+            if self._owns_conversation_executor:
+                self._conversation_executor.shutdown(
+                    wait=not pending,
+                    cancel_futures=True,
+                )
+            if self._owns_sound_executor:
+                self._sound_executor.shutdown(
+                    wait=not pending,
+                    cancel_futures=True,
+                )
+
+            if shutdown_timed_out:
+                # Service close methods may acquire locks held by the same
+                # native worker (notably Piper synthesis). Let the CLI's
+                # bounded hard-exit path run instead of blocking here forever.
+                close_succeeded = True
+                raise AssistantShutdownTimeout(
+                    "Owned background workers did not stop before the shutdown deadline"
+                )
+
+            for service in (
+                self.speech_recognizer,
+                self.tts,
+                self.sound_player,
+                self._rag_searcher,
+            ):
+                if service is None or id(service) in closed_ids:
+                    continue
+                closed_ids.add(id(service))
+                close = getattr(service, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        logger.warning(
+                            "Unable to close %s",
+                            type(service).__name__,
+                            exc_info=True,
+                        )
+            close_succeeded = True
+        finally:
+            with self._close_lock:
+                self._closing = False
+                # A KeyboardInterrupt must leave teardown retryable. The main
+                # entry point force-exits on a repeated signal, while tests and
+                # embedding callers can call close() again safely.
+                if close_succeeded:
+                    self._close_complete.set()
 
     def __enter__(self) -> VoiceAssistant:
         return self

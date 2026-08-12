@@ -94,7 +94,7 @@ def test_injected_policy_is_consulted_and_can_veto_detection() -> None:
     assert not detector.detected
 
 
-def test_partial_recognition_requires_two_sustained_updates() -> None:
+def test_partial_recognition_only_arms_until_consistent_final() -> None:
     policy = RecordingPolicy(suppress=False)
     detector = BargeInDetector(
         minimum_active_seconds=0.12,
@@ -113,12 +113,22 @@ def test_partial_recognition_requires_two_sustained_updates() -> None:
         frame_energy=0.12,
         elapsed_since_tts_start=0.7,
     )
-    assert detector.process_recognition(
+    assert not detector.process_recognition(
         RecognitionResult("hello from the user again", is_final=False, segment_id=1),
         frame_energy=0.12,
         elapsed_since_tts_start=0.73,
     )
-    assert policy.calls == [(0.12, 0.6), (0.12, 0.7), (0.12, 0.73)]
+    assert detector.process_recognition(
+        RecognitionResult("hello from the user again", is_final=True, segment_id=1),
+        frame_energy=0.01,
+        elapsed_since_tts_start=0.8,
+    )
+    assert policy.calls == [
+        (0.12, 0.6),
+        (0.12, 0.7),
+        (0.12, 0.73),
+        (0.01, 0.8),
+    ]
 
 
 def test_recognition_event_uses_configured_nominal_energy_when_pcm_is_unavailable() -> None:
@@ -128,11 +138,15 @@ def test_recognition_event_uses_configured_nominal_energy_when_pcm_is_unavailabl
         suppression_policy=policy,
     )
 
-    assert detector.process_recognition(
-        RecognitionResult("hello", is_final=True),
+    assert not detector.process_recognition(
+        RecognitionResult("hello from user", is_final=False),
         elapsed_since_tts_start=0.6,
     )
-    assert policy.calls == [(0.14, 0.6)]
+    assert detector.process_recognition(
+        RecognitionResult("hello from user now", is_final=True),
+        elapsed_since_tts_start=0.8,
+    )
+    assert policy.calls == [(0.14, 0.6), (0.14, 0.8)]
 
 
 def test_empty_recognition_event_is_ignored() -> None:
@@ -194,16 +208,20 @@ def test_new_recognition_segment_must_be_confirmed_independently() -> None:
         RecognitionResult("second segment words", is_final=False, segment_id=2),
         elapsed_since_tts_start=0.2,
     )
-    assert detector.process_recognition(
+    assert not detector.process_recognition(
         RecognitionResult("second segment words grow", is_final=False, segment_id=2),
         elapsed_since_tts_start=0.3,
+    )
+    assert detector.process_recognition(
+        RecognitionResult("second segment words grow", is_final=True, segment_id=2),
+        elapsed_since_tts_start=0.4,
     )
 
 
 def test_short_partial_waits_for_final_even_after_confirmation_interval() -> None:
     detector = BargeInDetector(
         minimum_active_seconds=0.0,
-        minimum_partial_words=3,
+        minimum_partial_words=2,
         suppression_policy=ThresholdPolicy(0.1),
     )
 
@@ -237,7 +255,7 @@ def test_low_energy_final_without_an_armed_partial_is_suppressed() -> None:
     )
 
 
-def test_partial_duration_uses_absolute_observation_time_across_tts_epochs() -> None:
+def test_vosk_duration_must_reach_confirmation_interval() -> None:
     detector = BargeInDetector(minimum_active_seconds=0.12)
 
     assert not detector.process_recognition(
@@ -245,16 +263,165 @@ def test_partial_duration_uses_absolute_observation_time_across_tts_epochs() -> 
         elapsed_since_tts_start=4.0,
         observed_at=100.0,
     )
-    assert detector.process_recognition(
+    assert not detector.process_recognition(
         RecognitionResult("correction begins right now", is_final=False, segment_id=1),
         elapsed_since_tts_start=0.3,
         observed_at=100.15,
     )
+    assert not detector.process_recognition(
+        RecognitionResult(
+            "correction begins right now",
+            is_final=True,
+            segment_id=1,
+            speech_duration_seconds=0.1,
+        ),
+        elapsed_since_tts_start=0.4,
+        observed_at=100.2,
+    )
+
+
+def test_low_confidence_vosk_final_cannot_commit_armed_candidate() -> None:
+    detector = BargeInDetector(
+        minimum_active_seconds=0.0,
+        minimum_recognition_confidence=0.6,
+    )
+
+    assert not detector.process_recognition(
+        RecognitionResult(
+            "background vocalization",
+            is_final=False,
+            segment_id=3,
+            confidence=0.8,
+        ),
+        elapsed_since_tts_start=0.2,
+    )
+    assert not detector.process_recognition(
+        RecognitionResult(
+            "background vocalization words",
+            is_final=True,
+            segment_id=3,
+            confidence=0.25,
+            speech_duration_seconds=0.5,
+        ),
+        elapsed_since_tts_start=0.5,
+    )
+    assert not detector.detected
+    assert not detector.recognition_candidate_pending
+
+
+def test_high_confidence_vosk_final_commits_consistent_armed_candidate() -> None:
+    detector = BargeInDetector(
+        minimum_active_seconds=0.12,
+        minimum_recognition_confidence=0.6,
+    )
+
+    assert not detector.process_recognition(
+        RecognitionResult(
+            "actual user question",
+            is_final=False,
+            segment_id=6,
+            confidence=0.75,
+        ),
+        elapsed_since_tts_start=0.2,
+    )
+    assert detector.process_recognition(
+        RecognitionResult(
+            "actual user question continues",
+            is_final=True,
+            segment_id=6,
+            confidence=0.85,
+            speech_duration_seconds=0.7,
+        ),
+        elapsed_since_tts_start=0.7,
+    )
+
+
+def test_high_confidence_final_without_partial_cannot_interrupt() -> None:
+    detector = BargeInDetector(minimum_active_seconds=0.0)
+
+    assert not detector.process_recognition(
+        RecognitionResult(
+            "unconfirmed high confidence final",
+            is_final=True,
+            frame_energy=0.4,
+            segment_id=7,
+            confidence=0.95,
+            speech_duration_seconds=0.8,
+        ),
+        frame_energy=0.4,
+        elapsed_since_tts_start=0.8,
+    )
+    assert not detector.detected
+
+
+def test_explicitly_allowed_strong_final_can_interrupt_without_partial() -> None:
+    detector = BargeInDetector(minimum_active_seconds=0.0)
+
+    assert detector.process_recognition(
+        RecognitionResult(
+            "new complete question",
+            is_final=True,
+            frame_energy=0.4,
+            segment_id=7,
+            confidence=0.95,
+            speech_duration_seconds=0.8,
+        ),
+        frame_energy=0.4,
+        elapsed_since_tts_start=0.8,
+        allow_unarmed_final=True,
+    )
+
+
+def test_metadata_free_injected_final_remains_backwards_compatible() -> None:
+    detector = BargeInDetector(minimum_active_seconds=0.12)
+
+    assert not detector.process_recognition(
+        RecognitionResult("legacy follow up", is_final=False, segment_id=4),
+        elapsed_since_tts_start=0.1,
+    )
+    assert detector.process_recognition(
+        RecognitionResult("legacy follow up complete", is_final=True, segment_id=4),
+        elapsed_since_tts_start=0.11,
+    )
+
+
+def test_unrelated_vosk_revision_clears_candidate_instead_of_interrupting() -> None:
+    detector = BargeInDetector(minimum_active_seconds=0.0)
+
+    assert not detector.process_recognition(
+        RecognitionResult("first unstable hypothesis", is_final=False, segment_id=5),
+        elapsed_since_tts_start=0.1,
+    )
+    assert not detector.process_recognition(
+        RecognitionResult("completely different revision", is_final=False, segment_id=5),
+        elapsed_since_tts_start=0.2,
+    )
+    assert not detector.recognition_candidate_pending
+    assert not detector.process_recognition(
+        RecognitionResult("completely different revision", is_final=True, segment_id=5),
+        elapsed_since_tts_start=0.3,
+    )
+    assert not detector.detected
+
+
+def test_final_from_different_segment_cannot_commit_pending_candidate() -> None:
+    detector = BargeInDetector(minimum_active_seconds=0.0)
+
+    assert not detector.process_recognition(
+        RecognitionResult("real question begins", is_final=False, segment_id=8),
+        elapsed_since_tts_start=0.1,
+    )
+    assert not detector.process_recognition(
+        RecognitionResult("real question begins", is_final=True, segment_id=9),
+        elapsed_since_tts_start=0.2,
+    )
+    assert not detector.detected
 
 
 def test_final_in_new_tts_startup_window_inherits_accepted_pending_partial() -> None:
     detector = BargeInDetector(
         minimum_active_seconds=0.0,
+        minimum_partial_words=2,
         suppression_policy=ConservativeEchoSuppressionPolicy(),
     )
 
