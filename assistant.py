@@ -997,14 +997,19 @@ class VoiceAssistant:
                         else:
                             playback_started_at = None
                         if playback_started_at is None:
-                            # A finalized utterance during the thinking/synthesis
-                            # gap supersedes the active response even though no
-                            # playback epoch exists yet. Ignoring that final used
-                            # to consume the user's follow-up and leave the next
-                            # response blocked before it could be interrupted.
-                            # Partials remain gated on real playback so ambient
-                            # decoder noise cannot cancel generation by itself.
-                            if result.is_final:
+                            # Final recognizer output during generation can be a
+                            # real correction, but it can also be a delayed flush
+                            # of the local backchannel ("One moment", etc.). Run
+                            # it through the same production echo/energy policy as
+                            # playback candidates. Treat this as the conservative
+                            # start of an unknown playback epoch so an event with
+                            # no measured frame energy cannot cancel the model.
+                            accepted = result.is_final and detector.process_recognition(
+                                result,
+                                elapsed_since_tts_start=0.0,
+                                frame_energy=result.frame_energy,
+                            )
+                            if accepted:
                                 detected = True
                                 session_id, turn_number = self._conversation_coordinates()
                                 logger.info(

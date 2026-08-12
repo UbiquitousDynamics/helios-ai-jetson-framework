@@ -452,7 +452,7 @@ def test_echo_epoch_tracks_active_playback_and_only_a_short_completed_tail() -> 
     assistant.close()
 
 
-def test_final_follow_up_before_playback_supersedes_generation_without_detector() -> None:
+def test_final_follow_up_before_playback_requires_detector_acceptance() -> None:
     class IdleTTS(FakeTTS):
         is_speaking = False
         active_playback_started_at = None
@@ -492,8 +492,39 @@ def test_final_follow_up_before_playback_supersedes_generation_without_detector(
     response: Future[str] = Future()
 
     assert assistant._listen_for_barge_in(response) == "correzione"
-    assert detector.calls == 0
+    assert detector.calls == 1
     assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_low_energy_final_before_playback_does_not_cancel_generation() -> None:
+    class IdleTTS(FakeTTS):
+        is_speaking = False
+        active_playback_started_at = None
+        last_playback_window = None
+
+    class EventRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult("certo un momento", is_final=True, frame_energy=None)
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=IdleTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=EventRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
     response.cancel()
     assistant.close()
 
