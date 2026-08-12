@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from array import array
 
 from recognizer.speech_recognizer import RecognitionResult, SpeechRecognizer
 
@@ -132,7 +133,7 @@ def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
     assert audio.stream.closed
 
 
-def test_stop_event_promotes_last_partial_when_vosk_flush_is_empty() -> None:
+def test_stop_event_never_promotes_last_partial_when_vosk_flush_is_empty() -> None:
     stop_event = threading.Event()
 
     class EmptyFlushRecognizer(PendingRecognizer):
@@ -156,7 +157,6 @@ def test_stop_event_promotes_last_partial_when_vosk_flush_is_empty() -> None:
 
     assert list(recognizer.listen_events(stop_event=stop_event)) == [
         RecognitionResult("nuova domanda", is_final=False),
-        RecognitionResult("nuova domanda", is_final=True),
     ]
 
 
@@ -176,6 +176,51 @@ def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
     assert list(recognizer.listen_events(timeout=0.5)) == [
         RecognitionResult("nuova domanda", is_final=False)
     ]
+
+
+def test_identical_partial_is_reemitted_when_pcm_energy_rises_materially() -> None:
+    stop_event = threading.Event()
+
+    class EnergyStream(FakeStream):
+        def __init__(self) -> None:
+            super().__init__()
+            self.frames = [
+                array("h", [655] * 400).tobytes(),
+                array("h", [3277] * 400).tobytes(),
+            ]
+            self.position = 0
+
+        def read(self, _chunk: int, *, exception_on_overflow: bool) -> bytes:
+            assert exception_on_overflow is False
+            frame = self.frames[self.position]
+            self.position += 1
+            if self.position == len(self.frames):
+                stop_event.set()
+            return frame
+
+    class RepeatedPartialRecognizer(PendingRecognizer):
+        def FinalResult(self) -> str:
+            return '{"text": ""}'
+
+    audio = FakeAudio()
+    audio.stream = EnergyStream()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=RepeatedPartialRecognizer,
+    )
+
+    results = list(recognizer.listen_events(stop_event=stop_event))
+
+    assert [result.text for result in results] == [
+        "nuova domanda",
+        "nuova domanda",
+    ]
+    assert results[0].is_final is False
+    assert results[1].is_final is False
+    assert results[1].frame_energy is not None
+    assert results[0].frame_energy is not None
+    assert results[1].frame_energy > results[0].frame_energy
 
 
 def test_pre_set_stop_event_does_not_open_microphone_stream() -> None:

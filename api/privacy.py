@@ -67,32 +67,39 @@ class PrivacyGuard:
 
         canonical_messages: list[ChatMessage] | None = None
         for index, message in enumerate(request.messages):
+            if message.remote_eligible is not True:
+                self._deny(request, "conversation contains local-only content")
             try:
                 origin = ContentOrigin(message.origin)
             except (TypeError, ValueError):
                 self._deny(request, "message provenance is invalid")
-            if origin is ContentOrigin.UNKNOWN:
-                self._deny(request, "message provenance is unknown")
-            if origin is ContentOrigin.RAW_TRANSCRIPT and not self._policy.allow_remote_transcripts:
-                self._deny(request, "remote transcript processing is disabled")
-            if (
-                origin
-                in {
-                    ContentOrigin.CONVERSATION_HISTORY,
-                    ContentOrigin.TOOL_RESULT,
-                }
-                and not self._policy.allow_remote_context
-            ):
-                self._deny(request, "remote context processing is disabled")
-            if (
-                origin
-                in {
-                    ContentOrigin.LOCAL_DOCUMENT,
-                    ContentOrigin.LOCAL_DOCUMENT_DERIVATIVE,
-                }
-                and not self._policy.allow_remote_rag_context
-            ):
-                self._deny(request, "remote local-document processing is disabled")
+            effective_origins = {origin, *message.source_origins}
+            for effective_origin in effective_origins:
+                if effective_origin is ContentOrigin.UNKNOWN:
+                    self._deny(request, "message provenance is unknown")
+                if (
+                    effective_origin is ContentOrigin.RAW_TRANSCRIPT
+                    and not self._policy.allow_remote_transcripts
+                ):
+                    self._deny(request, "remote transcript processing is disabled")
+                if (
+                    effective_origin
+                    in {
+                        ContentOrigin.CONVERSATION_HISTORY,
+                        ContentOrigin.TOOL_RESULT,
+                    }
+                    and not self._policy.allow_remote_context
+                ):
+                    self._deny(request, "remote context processing is disabled")
+                if (
+                    effective_origin
+                    in {
+                        ContentOrigin.LOCAL_DOCUMENT,
+                        ContentOrigin.LOCAL_DOCUMENT_DERIVATIVE,
+                    }
+                    and not self._policy.allow_remote_rag_context
+                ):
+                    self._deny(request, "remote local-document processing is disabled")
             if (
                 privacy is PrivacyLevel.REMOTE_REDACTED
                 and origin is not ContentOrigin.STATIC_INSTRUCTION

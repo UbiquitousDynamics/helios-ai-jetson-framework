@@ -26,6 +26,7 @@ from api.providers.contracts import (
     Timeouts,
 )
 from api.routing import Connectivity
+from api.streaming import CancellationController
 
 
 @dataclass
@@ -109,6 +110,20 @@ def test_child_environment_prevents_api_key_auth() -> None:
         "OPENAI_API_KEY": "",
         "CODEX_API_KEY": "",
     }
+
+
+def test_remote_context_disabled_emits_an_explicit_startup_warning(caplog) -> None:
+    caplog.set_level("WARNING")
+
+    provider = CodexAppServerAdapter(
+        "openai-codex",
+        runtime=FakeRuntime("chatgpt", []),
+        allow_remote_context=False,
+    )
+
+    assert "event=remote_context_disabled" in caplog.text
+    assert "fresh_thread" in caplog.text
+    provider.close()
 
 
 def test_isolated_codex_home_copies_auth_but_not_user_configuration(
@@ -258,7 +273,15 @@ def test_prepare_rejects_non_chatgpt_auth_before_transmission() -> None:
 def test_timeout_while_prepare_holds_auth_lock_never_starts_orphan_turn() -> None:
     runtime = BlockingAuthRuntime()
     provider = CodexAppServerAdapter("openai-codex", runtime=runtime)
-    prepare_thread = threading.Thread(target=provider.prepare)
+    prepare_errors: list[BaseException] = []
+
+    def prepare() -> None:
+        try:
+            provider.prepare()
+        except BaseException as error:
+            prepare_errors.append(error)
+
+    prepare_thread = threading.Thread(target=prepare)
     prepare_thread.start()
     assert runtime.auth_entered.wait(timeout=1)
 
@@ -284,6 +307,7 @@ def test_timeout_while_prepare_holds_auth_lock_never_starts_orphan_turn() -> Non
         time.sleep(0.01)
     time.sleep(0.05)
     assert runtime.started is None
+    assert prepare_errors
 
 
 def test_hidden_reasoning_does_not_reset_visible_first_token_timeout() -> None:
@@ -312,6 +336,240 @@ def test_hidden_reasoning_does_not_reset_visible_first_token_timeout() -> None:
 
     assert captured.value.category is ErrorCategory.FIRST_TOKEN_TIMEOUT
     assert runtime.turn.interrupted
+
+
+def test_cancellation_waits_for_codex_worker_to_finish_unwinding() -> None:
+    class BlockingTurn:
+        id = "blocking-turn"
+        thread_id = "blocking-thread"
+
+        def __init__(self) -> None:
+            self.entered = threading.Event()
+            self.release = threading.Event()
+            self.exited = threading.Event()
+            self.interrupted = False
+
+        def stream(self):
+            self.entered.set()
+            try:
+                assert self.release.wait(timeout=2)
+            finally:
+                self.exited.set()
+            if False:
+                yield None
+
+        def interrupt(self) -> None:
+            self.interrupted = True
+            self.release.set()
+
+    class BlockingRuntime:
+        def __init__(self) -> None:
+            self.turn = BlockingTurn()
+
+        def account_kind(self) -> str:
+            return "chatgpt"
+
+        def start_turn(self, **_kwargs: Any) -> BlockingTurn:
+            return self.turn
+
+        def close(self) -> None:
+            self.turn.release.set()
+
+    runtime = BlockingRuntime()
+    provider = CodexAppServerAdapter(
+        "openai-codex",
+        runtime=runtime,
+        interrupt_ack_timeout_seconds=0.5,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(provider.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    assert runtime.turn.entered.wait(timeout=1)
+
+    cancellation.cancel()
+    consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert runtime.turn.interrupted
+    assert runtime.turn.exited.is_set()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+
+
+def test_blocking_interrupt_rpc_cannot_defeat_cancellation_timeout() -> None:
+    class HungInterruptTurn:
+        id = "hung-interrupt-turn"
+        thread_id = "hung-interrupt-thread"
+
+        def __init__(self) -> None:
+            self.stream_entered = threading.Event()
+            self.stream_release = threading.Event()
+            self.interrupt_entered = threading.Event()
+            self.interrupt_release = threading.Event()
+
+        def stream(self):
+            self.stream_entered.set()
+            self.stream_release.wait(timeout=2)
+            if False:
+                yield None
+
+        def interrupt(self) -> None:
+            self.interrupt_entered.set()
+            self.interrupt_release.wait(timeout=2)
+
+    class HungInterruptRuntime:
+        def __init__(self) -> None:
+            self.turn = HungInterruptTurn()
+
+        def account_kind(self) -> str:
+            return "chatgpt"
+
+        def start_turn(self, **_kwargs: Any) -> HungInterruptTurn:
+            return self.turn
+
+        def close(self) -> None:
+            self.turn.stream_release.set()
+
+    runtime = HungInterruptRuntime()
+    provider = CodexAppServerAdapter(
+        "openai-codex",
+        runtime=runtime,
+        interrupt_ack_timeout_seconds=0.05,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(provider.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    assert runtime.turn.stream_entered.wait(timeout=1)
+
+    started = time.monotonic()
+    cancellation.cancel()
+    consumer.join(timeout=0.5)
+    elapsed = time.monotonic() - started
+
+    assert not consumer.is_alive()
+    assert elapsed < 0.4
+    assert runtime.turn.interrupt_entered.wait(timeout=0.2)
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    runtime.turn.interrupt_release.set()
+
+
+def test_cancelled_blocking_runtime_factory_does_not_poison_follow_up() -> None:
+    factory_entered = threading.Event()
+    factory_release = threading.Event()
+    first = FakeRuntime("chatgpt", [])
+    healthy = FakeRuntime(
+        "chatgpt",
+        [
+            notification("item/agentMessage/delta", {"delta": "Recovered"}),
+            notification("turn/completed", {"turn": {"status": "completed"}}),
+        ],
+    )
+    factory_calls = 0
+
+    def factory() -> FakeRuntime:
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls == 1:
+            factory_entered.set()
+            factory_release.wait(timeout=2)
+            return first
+        return healthy
+
+    provider = CodexAppServerAdapter(
+        "openai-codex",
+        runtime_factory=factory,
+        interrupt_ack_timeout_seconds=0.05,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(provider.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    assert factory_entered.wait(timeout=1)
+    cancellation.cancel()
+    consumer.join(timeout=0.5)
+
+    assert not consumer.is_alive()
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    assert [event.text for event in provider.stream(request()) if isinstance(event, TextDelta)] == [
+        "Recovered"
+    ]
+    factory_release.set()
+
+
+def test_cancelled_blocking_account_check_does_not_poison_follow_up() -> None:
+    auth_entered = threading.Event()
+    auth_release = threading.Event()
+
+    class FirstRuntime(FakeRuntime):
+        def account_kind(self) -> str | None:
+            self.account_checks += 1
+            auth_entered.set()
+            auth_release.wait(timeout=2)
+            return "chatgpt"
+
+    first = FirstRuntime("chatgpt", [])
+    healthy = FakeRuntime(
+        "chatgpt",
+        [
+            notification("item/agentMessage/delta", {"delta": "Recovered"}),
+            notification("turn/completed", {"turn": {"status": "completed"}}),
+        ],
+    )
+    runtimes = iter([first, healthy])
+    provider = CodexAppServerAdapter(
+        "openai-codex",
+        runtime_factory=lambda: next(runtimes),
+        interrupt_ack_timeout_seconds=0.05,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(provider.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    assert auth_entered.wait(timeout=1)
+    cancellation.cancel()
+    consumer.join(timeout=0.5)
+
+    assert not consumer.is_alive()
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    assert [event.text for event in provider.stream(request()) if isinstance(event, TextDelta)] == [
+        "Recovered"
+    ]
+    auth_release.set()
 
 
 def test_close_does_not_wait_for_blocked_account_validation() -> None:

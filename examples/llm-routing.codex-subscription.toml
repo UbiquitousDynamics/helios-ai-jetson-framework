@@ -10,7 +10,9 @@ unknown_connectivity = "prefer_local"
 [privacy]
 default = "remote_allowed"
 allow_remote_transcripts = true
-allow_remote_context = false
+# Enabled by default for natural multi-turn voice conversation. Set false when
+# prior turns must remain local; local fallback still keeps canonical history.
+allow_remote_context = true
 allow_remote_rag_context = false
 redaction_failure = "local_only"
 

@@ -14,7 +14,7 @@ unknown_connectivity = "allow_remote"
 [privacy]
 default = "remote_allowed"
 allow_remote_transcripts = true
-allow_remote_context = false
+allow_remote_context = true
 allow_remote_rag_context = false
 redaction_failure = "local_only"
 

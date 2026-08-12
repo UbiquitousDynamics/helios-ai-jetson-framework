@@ -183,7 +183,7 @@ class LLMTimeoutSettings:
 class LLMPrivacySettings:
     default: str = "local_only"
     allow_remote_transcripts: bool = False
-    allow_remote_context: bool = False
+    allow_remote_context: bool = True
     allow_remote_rag_context: bool = False
     redaction_failure: str = "local_only"
 
@@ -1015,7 +1015,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "privacy.allow_remote_transcripts",
         ),
         allow_remote_context=_toml_bool(
-            privacy_table.get("allow_remote_context", False),
+            privacy_table.get("allow_remote_context", True),
             "privacy.allow_remote_context",
         ),
         allow_remote_rag_context=_toml_bool(
@@ -1607,7 +1607,7 @@ class Settings:
     language: str = "it"
     name: str = "emilia"
     listen_timeout: float = 6.5
-    barge_in_enabled: bool = False
+    barge_in_enabled: bool = True
     barge_in_event_energy: float = 0.08
     barge_in_expected_echo_energy: float = 0.04
     barge_in_minimum_interrupt_energy: float = 0.06
@@ -1715,7 +1715,7 @@ class Settings:
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
             barge_in_enabled=_bool_from_env(
-                env.get("HELIOS_BARGE_IN_ENABLED", "false"),
+                env.get("HELIOS_BARGE_IN_ENABLED", "true"),
                 "HELIOS_BARGE_IN_ENABLED",
             ),
             barge_in_event_energy=_float_from_env(

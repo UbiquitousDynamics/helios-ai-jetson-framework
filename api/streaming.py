@@ -119,17 +119,27 @@ class CancellationController:
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._commit_lock = threading.Lock()
 
     @property
     def cancelled(self) -> bool:
         return self._event.is_set()
 
     def cancel(self) -> None:
-        self._event.set()
+        with self._commit_lock:
+            self._event.set()
 
     def raise_if_cancelled(self) -> None:
         if self.cancelled:
             raise RuntimeError("request cancelled")
+
+    def commit_if_not_cancelled(self, operation: Callable[[], Any]) -> Any:
+        """Linearize logical completion against a concurrent cancellation."""
+
+        with self._commit_lock:
+            if self._event.is_set():
+                raise RuntimeError("request cancelled")
+            return operation()
 
 
 @dataclass(slots=True)
