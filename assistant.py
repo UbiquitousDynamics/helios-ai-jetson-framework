@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError, wait
+from difflib import SequenceMatcher
 from enum import Enum, auto
 from typing import Any
 
@@ -908,23 +909,51 @@ class VoiceAssistant:
             return ""
         return " ".join(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
 
-    def _matches_current_tts_echo(self, text: str, now: float) -> bool:
-        """Return whether recognizer text is contained in current/recent TTS."""
-
-        playback_text = getattr(self.tts, "active_playback_text", None)
-        if callable(playback_text):
-            playback_text = playback_text()
-        if not playback_text and self._tts_echo_epoch_start(now) is not None:
-            playback_text = getattr(self.tts, "last_playback_text", None)
+    def _current_tts_echo_references(self, now: float) -> tuple[str, ...]:
+        if self._tts_echo_epoch_start(now) is None:
+            return ()
+        references: list[str] = []
+        for attribute in ("active_playback_text", "last_playback_text"):
+            playback_text = getattr(self.tts, attribute, None)
             if callable(playback_text):
                 playback_text = playback_text()
+            normalized = self._normalized_echo_text(playback_text)
+            if normalized and normalized not in references:
+                references.append(normalized)
+        return tuple(references)
+
+    def _matches_current_tts_echo(
+        self,
+        text: str,
+        now: float,
+        *,
+        references: tuple[str, ...] = (),
+    ) -> bool:
+        """Return whether recognizer text resembles current/recent TTS."""
+
         candidate = self._normalized_echo_text(text)
-        reference = self._normalized_echo_text(playback_text)
-        if not candidate or not reference:
+        if not candidate:
             return False
-        padded_candidate = f" {candidate} "
-        padded_reference = f" {reference} "
-        return padded_candidate in padded_reference or padded_reference in padded_candidate
+        current = self._current_tts_echo_references(now)
+        all_references = tuple(dict.fromkeys((*references, *current)))
+        candidate_words = candidate.split()
+        for reference in all_references:
+            padded_candidate = f" {candidate} "
+            padded_reference = f" {reference} "
+            if padded_candidate in padded_reference or padded_reference in padded_candidate:
+                return True
+            reference_words = reference.split()
+            if len(candidate_words) < 3 or len(reference_words) < 3:
+                continue
+            similarity = SequenceMatcher(
+                None,
+                candidate_words,
+                reference_words,
+                autojunk=False,
+            ).ratio()
+            if similarity >= 0.65:
+                return True
+        return False
 
     def _listen_for_barge_in(
         self,
@@ -980,6 +1009,8 @@ class VoiceAssistant:
         playback_started_at: float | None = None
         detected = False
         latest_text = ""
+        suppressing_echo_segment = False
+        echo_references: list[str] = []
         while not response_future.done() or detected:
             if capture_stop.is_set():
                 break
@@ -1010,10 +1041,26 @@ class VoiceAssistant:
                     if not result.text:
                         continue
                     now = self._clock()
-                    if self._matches_current_tts_echo(result.text, now):
+                    for reference in self._current_tts_echo_references(now):
+                        if reference not in echo_references:
+                            echo_references.append(reference)
+                    if self._matches_current_tts_echo(
+                        result.text,
+                        now,
+                        references=tuple(echo_references),
+                    ):
+                        suppressing_echo_segment = not result.is_final
                         logger.info(
                             "event=barge_in_candidate_suppressed reason=tts_text_match"
                         )
+                        continue
+                    if suppressing_echo_segment:
+                        logger.info(
+                            "event=barge_in_candidate_suppressed "
+                            "reason=tts_echo_segment"
+                        )
+                        if result.is_final:
+                            suppressing_echo_segment = False
                         continue
                     latest_text = result.text
                     if not detected:
