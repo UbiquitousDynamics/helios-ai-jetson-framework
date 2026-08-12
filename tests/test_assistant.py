@@ -11,6 +11,7 @@ from api.api_client import APIClient
 from api.metrics import SafeMetricsRecorder
 from assistant import AssistantState, VoiceAssistant, _BargeInCaptureStop
 from audio.tts import PiperTTS
+from recognizer.barge_in_detector import BargeInDetector
 from recognizer.speech_recognizer import RecognitionResult
 
 
@@ -686,6 +687,564 @@ def test_first_mistranscribed_tts_candidate_is_suppressed_by_word_similarity() -
     assert assistant._listen_for_barge_in(response) is None
     assert detector.calls == 0
     assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_phonetically_similar_echo_with_changed_word_boundaries_is_suppressed() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = (
+            "Le stelle brillavano, un eco di possibilità infinite, "
+            "mentre il mio algoritmo."
+        )
+
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+
+    assert assistant._matches_current_tts_echo(
+        "le stalle brillava eco possibilità finite mentre mio algoritmo",
+        10.8,
+    )
+    assert not assistant._matches_current_tts_echo(
+        "no parlami soltanto di marte",
+        10.8,
+    )
+    assistant.close()
+
+
+def test_short_mistranscribed_echo_is_suppressed_before_partial_confirmation() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = (
+            "Marte, un deserto di rosso, con tracce di vita passata."
+        )
+
+    class ShortEchoRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "parte un",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+            yield RecognitionResult(
+                "parte un deserto",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+            yield RecognitionResult(
+                "parte un deserto di rosso",
+                is_final=True,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=ShortEchoRecognizer([]),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_energy_only_reemit_crossing_playback_onset_suppresses_whole_segment() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una frase diversa riprodotta dall'altoparlante."
+
+    class StaleRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "vecchia ipotesi incompleta",
+                is_final=False,
+                frame_energy=0.3,
+                segment_id=4,
+                segment_started_at=9.5,
+                energy_reemit=True,
+            )
+            yield RecognitionResult(
+                "vecchia ipotesi diventata testo eco",
+                is_final=True,
+                frame_energy=0.3,
+                segment_id=4,
+                segment_started_at=9.5,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=StaleRecognizer([]),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.1,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_low_energy_pre_playback_partial_cannot_arm_post_playback_echo() -> None:
+    class StartingTTS(FakeTTS):
+        is_speaking = False
+        active_playback_started_at = None
+        active_playback_text = "Una frase pronunciata dall'altoparlante."
+
+    class BoundaryRecognizer(FakeRecognizer):
+        def __init__(self, tts: StartingTTS) -> None:
+            super().__init__([])
+            self.tts = tts
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "ipotesi ambientale vecchia",
+                is_final=False,
+                frame_energy=0.05,
+                segment_id=3,
+                segment_started_at=9.5,
+            )
+            self.tts.is_speaking = True
+            self.tts.active_playback_started_at = 10.0
+            yield RecognitionResult(
+                "ipotesi ambientale diventata eco",
+                is_final=False,
+                frame_energy=0.5,
+                segment_id=3,
+                segment_started_at=9.5,
+            )
+            yield RecognitionResult(
+                "ipotesi ambientale diventata eco finale",
+                is_final=True,
+                frame_energy=0.5,
+                segment_id=3,
+                segment_started_at=9.5,
+            )
+
+    tts = StartingTTS()
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=BoundaryRecognizer(tts),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.2,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_high_energy_user_speech_can_cross_from_synthesis_into_playback() -> None:
+    class StartingTTS(FakeTTS):
+        is_speaking = False
+        active_playback_started_at = None
+        active_playback_text = "Una risposta non correlata."
+
+    class CrossOnsetUserRecognizer(FakeRecognizer):
+        def __init__(self, tts: StartingTTS) -> None:
+            super().__init__([])
+            self.tts = tts
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "no cambia",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=5,
+                segment_started_at=9.5,
+            )
+            self.tts.is_speaking = True
+            self.tts.active_playback_started_at = 10.0
+            yield RecognitionResult(
+                "no cambia argomento",
+                is_final=True,
+                frame_energy=0.01,
+                segment_id=5,
+                segment_started_at=9.5,
+            )
+
+    tts = StartingTTS()
+    api = FakeAPI()
+    observed = iter([9.8, 10.2, 10.2])
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=CrossOnsetUserRecognizer(tts),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: next(observed),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "no cambia argomento"
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_pending_user_speech_survives_playback_gap_without_early_detection() -> None:
+    class FragmentedTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Un frammento non correlato."
+
+    class GapRecognizer(FakeRecognizer):
+        def __init__(self, tts: FragmentedTTS) -> None:
+            super().__init__([])
+            self.tts = tts
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "no cambia",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=6,
+                segment_started_at=10.2,
+            )
+            self.tts.is_speaking = False
+            self.tts.active_playback_started_at = None
+            yield RecognitionResult(
+                "no cambia argomento",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=6,
+                segment_started_at=10.2,
+            )
+            self.tts.is_speaking = True
+            self.tts.active_playback_started_at = 11.0
+            yield RecognitionResult(
+                "no cambia argomento adesso",
+                is_final=True,
+                frame_energy=0.01,
+                segment_id=6,
+                segment_started_at=10.2,
+            )
+
+    tts = FragmentedTTS()
+    api = FakeAPI()
+    observed = iter([10.3, 10.8, 11.2, 11.2])
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=GapRecognizer(tts),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: next(observed),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "no cambia argomento adesso"
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_first_event_short_final_during_playback_does_not_interrupt() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Certo."
+
+    class ShortEchoRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "cerco",
+                is_final=True,
+                frame_energy=0.5,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=ShortEchoRecognizer([]),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.2,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+@pytest.mark.parametrize("command", ("stop", "basta", "fermati"))
+def test_high_energy_explicit_short_final_interrupts_playback(command: str) -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata continua."
+
+    class CommandRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                command,
+                is_final=True,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=CommandRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.2,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == command
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_stale_segment_is_suppressed_across_a_new_tts_buffer() -> None:
+    class FragmentedTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Primo frammento pronunciato."
+
+    class FragmentBoundaryRecognizer(FakeRecognizer):
+        def __init__(self, tts: FragmentedTTS) -> None:
+            super().__init__([])
+            self.tts = tts
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "ipotesi non confermata qui",
+                is_final=False,
+                frame_energy=0.5,
+                segment_id=9,
+                segment_started_at=9.5,
+            )
+            self.tts.active_playback_started_at = 11.0
+            self.tts.active_playback_text = "Secondo frammento pronunciato."
+            yield RecognitionResult(
+                "ipotesi non confermata diventata eco",
+                is_final=False,
+                frame_energy=0.5,
+                segment_id=9,
+                segment_started_at=9.5,
+            )
+            yield RecognitionResult(
+                "ipotesi non confermata diventata eco finale",
+                is_final=True,
+                frame_energy=0.5,
+                segment_id=9,
+                segment_started_at=9.5,
+            )
+
+    tts = FragmentedTTS()
+    api = FakeAPI()
+    observed = iter([10.2, 11.2, 11.3])
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=FragmentBoundaryRecognizer(tts),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: next(observed),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
+def test_real_barge_in_preserves_pending_peak_across_tts_buffers() -> None:
+    class FragmentedTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Primo frammento senza parole correlate."
+
+    class UserAcrossBoundaryRecognizer(FakeRecognizer):
+        def __init__(self, tts: FragmentedTTS) -> None:
+            super().__init__([])
+            self.tts = tts
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "no cambia",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=7,
+                segment_started_at=10.2,
+            )
+            self.tts.active_playback_started_at = 11.0
+            self.tts.active_playback_text = "Secondo frammento ancora non correlato."
+            yield RecognitionResult(
+                "no cambia argomento",
+                is_final=True,
+                frame_energy=0.01,
+                segment_id=7,
+                segment_started_at=10.2,
+            )
+
+    class ThresholdPolicy:
+        def should_suppress(
+            self,
+            frame_energy: float,
+            elapsed_since_tts_start: float,
+        ) -> bool:
+            del elapsed_since_tts_start
+            return frame_energy < 0.1
+
+    tts = FragmentedTTS()
+    api = FakeAPI()
+    observed = iter([10.3, 11.2, 11.2])
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=UserAcrossBoundaryRecognizer(tts),
+        barge_in_detector=BargeInDetector(
+            minimum_active_seconds=0.0,
+            suppression_policy=ThresholdPolicy(),
+        ),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: next(observed),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "no cambia argomento"
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_echo_suppression_does_not_leak_into_the_next_vosk_segment() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Questa frase arriva dall'altoparlante."
+
+    class EchoThenUserRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "questa frase arriva",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+            # Vosk may close segment 1 with an empty final, which is not yielded.
+            yield RecognitionResult(
+                "no parlami della luna",
+                is_final=True,
+                frame_energy=0.2,
+                segment_id=2,
+                segment_started_at=10.5,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=EchoThenUserRecognizer([]),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "no parlami della luna"
+    assert api.cancelled is True
     response.cancel()
     assistant.close()
 

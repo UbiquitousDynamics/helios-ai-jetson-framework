@@ -506,10 +506,13 @@ class OllamaAdapter:
                 return
             cancelled_worker = True
             stop_requested.set()
-            chunks = holder.get("chunks")
-            close_chunks = getattr(chunks, "close", None)
-            if callable(close_chunks):
-                self._start_control_operation(close_chunks, "stream_close")
+            # ``chunks`` is commonly a Python generator owned by the stream
+            # worker. Closing it from this consumer thread while ``__next__``
+            # is blocked in HTTP I/O raises ``ValueError: generator already
+            # executing`` and leaves cancellation waiting for the transport
+            # anyway. Retiring the client closes the underlying transport and
+            # unblocks the worker; ``_stream_events`` then closes ``chunks`` in
+            # its own ``finally`` block on the worker thread.
             self._retire_client(holder.get("client"))
             if not worker_done.wait(self._cancellation_ack_timeout_seconds):
                 logger.warning(

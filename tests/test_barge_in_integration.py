@@ -104,6 +104,7 @@ class BargeInRecognizer:
             return
         self._barge_events_emitted = True
         yield RecognitionResult("nuova", is_final=False)
+        yield RecognitionResult("nuova domanda in corso", is_final=False)
         assert self.api.response_finished.wait(timeout=1)
         # Cancelling the first response must not stop/flush the microphone
         # before the user finishes the interruption utterance.
@@ -279,7 +280,7 @@ def test_barge_in_interrupts_audio_and_stream_then_processes_follow_up() -> None
             sound_player=SilentSoundPlayer(),
             api_client=api,
             speech_recognizer=BargeInRecognizer(api),
-            barge_in_detector=BargeInDetector(),
+            barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
             sound_executor=executor,
         )
 

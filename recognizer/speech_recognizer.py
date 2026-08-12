@@ -30,6 +30,9 @@ class RecognitionResult:
     text: str
     is_final: bool
     frame_energy: float | None = None
+    segment_id: int | None = None
+    segment_started_at: float | None = None
+    energy_reemit: bool = False
 
 
 class SpeechRecognizer:
@@ -187,9 +190,29 @@ class SpeechRecognizer:
         stream: Any | None = None
         last_partial = ""
         last_partial_energy: float | None = None
-        last_final = ""
         last_frame_energy: float | None = None
-        start_time = self._clock()
+        last_frame_started_at = start_time = self._clock()
+        next_segment_id = 1
+        active_segment_id: int | None = None
+        active_segment_started_at: float | None = None
+
+        def ensure_active_segment(started_at: float) -> tuple[int, float]:
+            nonlocal next_segment_id, active_segment_id, active_segment_started_at
+            if active_segment_id is None:
+                active_segment_id = next_segment_id
+                next_segment_id += 1
+                active_segment_started_at = started_at
+            assert active_segment_started_at is not None
+            return active_segment_id, active_segment_started_at
+
+        def reset_active_segment() -> None:
+            nonlocal last_partial, last_partial_energy
+            nonlocal active_segment_id, active_segment_started_at
+            last_partial = ""
+            last_partial_energy = None
+            active_segment_id = None
+            active_segment_started_at = None
+
         try:
             stream = self.p.open(
                 format=self._audio_format,
@@ -202,9 +225,13 @@ class SpeechRecognizer:
             recognizer = self._recognizer_factory(self.model, self.rate)
             logger.info("Listening for speech")
 
-            while (timeout is None or self._clock() - start_time < timeout) and not (
-                stop_event is not None and stop_event.is_set()
-            ):
+            while not (stop_event is not None and stop_event.is_set()):
+                last_frame_started_at = self._clock()
+                if (
+                    timeout is not None
+                    and last_frame_started_at - start_time >= timeout
+                ):
+                    break
                 data = stream.read(self.chunk, exception_on_overflow=False)
                 try:
                     last_frame_energy = pcm16_rms(data)
@@ -215,13 +242,18 @@ class SpeechRecognizer:
                 if recognizer.AcceptWaveform(data):
                     text = self._parse_result(recognizer.Result(), "text")
                     clean_text = self.remove_consecutive_duplicates(text).strip()
-                    if clean_text and clean_text != last_final:
-                        last_final = clean_text
+                    if clean_text:
+                        segment_id, segment_started_at = ensure_active_segment(
+                            last_frame_started_at
+                        )
                         yield RecognitionResult(
                             clean_text,
                             is_final=True,
                             frame_energy=last_frame_energy,
+                            segment_id=segment_id,
+                            segment_started_at=segment_started_at,
                         )
+                    reset_active_segment()
                 else:
                     partial = self._parse_result(recognizer.PartialResult(), "partial")
                     clean_partial = self.remove_consecutive_duplicates(partial).strip()
@@ -233,24 +265,36 @@ class SpeechRecognizer:
                         >= _PARTIAL_ENERGY_REEMIT_DELTA
                     )
                     if clean_partial and (clean_partial != last_partial or energy_advanced):
+                        segment_id, segment_started_at = ensure_active_segment(
+                            last_frame_started_at
+                        )
                         last_partial = clean_partial
                         last_partial_energy = last_frame_energy
                         yield RecognitionResult(
                             clean_partial,
                             is_final=False,
                             frame_energy=last_frame_energy,
+                            segment_id=segment_id,
+                            segment_started_at=segment_started_at,
+                            energy_reemit=energy_advanced,
                         )
 
             final_result = getattr(recognizer, "FinalResult", None)
             if callable(final_result):
                 text = self._parse_result(final_result(), "text")
                 clean_text = self.remove_consecutive_duplicates(text).strip()
-                if clean_text and clean_text != last_final:
+                if clean_text:
+                    segment_id, segment_started_at = ensure_active_segment(
+                        last_frame_started_at
+                    )
                     yield RecognitionResult(
                         clean_text,
                         is_final=True,
                         frame_energy=last_frame_energy,
+                        segment_id=segment_id,
+                        segment_started_at=segment_started_at,
                     )
+                reset_active_segment()
         except SpeechRecognitionError:
             raise
         except Exception as exc:

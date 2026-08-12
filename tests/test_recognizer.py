@@ -86,7 +86,12 @@ def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
 
     result = recognizer.listen_once(timeout=1)
 
-    assert result == RecognitionResult("ciao equipaggio", is_final=True)
+    assert result is not None
+    assert result.text == "ciao equipaggio"
+    assert result.is_final is True
+    assert result.segment_id == 1
+    assert result.segment_started_at is not None
+    assert result.energy_reemit is False
     assert audio.stream.started
     assert audio.stream.stopped
     assert audio.stream.closed
@@ -121,10 +126,13 @@ def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
 
     results = list(recognizer.listen_events(stop_event=stop_event))
 
-    assert results == [
-        RecognitionResult("nuova domanda", is_final=False),
-        RecognitionResult("nuova domanda completa", is_final=True),
+    assert [(result.text, result.is_final) for result in results] == [
+        ("nuova domanda", False),
+        ("nuova domanda completa", True),
     ]
+    assert [result.segment_id for result in results] == [1, 1]
+    assert results[0].segment_started_at == results[1].segment_started_at
+    assert [result.energy_reemit for result in results] == [False, False]
     assert audio.stream.read_calls == 1
     assert len(PendingRecognizer.instances) == 1
     assert PendingRecognizer.instances[0].final_result_calls == 1
@@ -155,9 +163,13 @@ def test_stop_event_never_promotes_last_partial_when_vosk_flush_is_empty() -> No
         recognizer_factory=EmptyFlushRecognizer,
     )
 
-    assert list(recognizer.listen_events(stop_event=stop_event)) == [
-        RecognitionResult("nuova domanda", is_final=False),
+    results = list(recognizer.listen_events(stop_event=stop_event))
+
+    assert [(result.text, result.is_final) for result in results] == [
+        ("nuova domanda", False)
     ]
+    assert results[0].segment_id == 1
+    assert results[0].segment_started_at is not None
 
 
 def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
@@ -173,9 +185,13 @@ def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
         clock=lambda: next(observed),
     )
 
-    assert list(recognizer.listen_events(timeout=0.5)) == [
-        RecognitionResult("nuova domanda", is_final=False)
+    results = list(recognizer.listen_events(timeout=0.5))
+
+    assert [(result.text, result.is_final) for result in results] == [
+        ("nuova domanda", False)
     ]
+    assert results[0].segment_id == 1
+    assert results[0].segment_started_at == 0.0
 
 
 def test_identical_partial_is_reemitted_when_pcm_energy_rises_materially() -> None:
@@ -221,6 +237,74 @@ def test_identical_partial_is_reemitted_when_pcm_energy_rises_materially() -> No
     assert results[1].frame_energy is not None
     assert results[0].frame_energy is not None
     assert results[1].frame_energy > results[0].frame_energy
+    assert [result.segment_id for result in results] == [1, 1]
+    assert results[0].segment_started_at == results[1].segment_started_at
+    assert [result.energy_reemit for result in results] == [False, True]
+
+
+def test_segment_provenance_resets_after_vosk_final_boundaries() -> None:
+    stop_event = threading.Event()
+
+    class ThreeFrameStream(FakeStream):
+        def __init__(self) -> None:
+            super().__init__()
+            self.read_calls = 0
+
+        def read(self, chunk: int, *, exception_on_overflow: bool) -> bytes:
+            self.read_calls += 1
+            data = super().read(chunk, exception_on_overflow=exception_on_overflow)
+            if self.read_calls == 3:
+                stop_event.set()
+            return data
+
+    class SegmentedRecognizer:
+        def __init__(self, _model: object, _rate: int) -> None:
+            self.accept_calls = 0
+
+        def AcceptWaveform(self, _data: bytes) -> bool:
+            self.accept_calls += 1
+            return self.accept_calls == 2
+
+        def PartialResult(self) -> str:
+            if self.accept_calls == 1:
+                return '{"partial": "prima"}'
+            return '{"partial": "seconda"}'
+
+        def Result(self) -> str:
+            return '{"text": "prima completa"}'
+
+        def FinalResult(self) -> str:
+            return '{"text": "seconda completa"}'
+
+    audio = FakeAudio()
+    audio.stream = ThreeFrameStream()
+    observed = iter([0.0, 1.0, 2.0, 3.0])
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=SegmentedRecognizer,
+        clock=lambda: next(observed),
+    )
+
+    results = list(recognizer.listen_events(stop_event=stop_event))
+
+    assert [(result.text, result.is_final) for result in results] == [
+        ("prima", False),
+        ("prima completa", True),
+        ("seconda", False),
+        ("seconda completa", True),
+    ]
+    assert [result.segment_id for result in results] == [1, 1, 2, 2]
+    assert [result.segment_started_at for result in results] == [1.0, 1.0, 3.0, 3.0]
+    assert all(result.energy_reemit is False for result in results)
+
+
+def test_recognition_result_provenance_defaults_preserve_legacy_construction() -> None:
+    result = RecognitionResult("legacy", is_final=False, frame_energy=0.2)
+
+    assert result.segment_id is None
+    assert result.segment_started_at is None
+    assert result.energy_reemit is False
 
 
 def test_pre_set_stop_event_does_not_open_microphone_stream() -> None:

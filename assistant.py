@@ -36,6 +36,20 @@ _BARGE_IN_LISTEN_SLICE_SECONDS = 0.25
 _TTS_ECHO_TAIL_SECONDS = 0.25
 _TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _RESPONSE_CANCEL_TIMEOUT_SECONDS = 2.5
+_EXPLICIT_SHORT_INTERRUPT_ENERGY = 0.12
+_EXPLICIT_SHORT_INTERRUPT_COMMANDS = frozenset(
+    {
+        "basta",
+        "cancella",
+        "fermati",
+        "interrompi",
+        "silenzio",
+        "stop",
+        "cancel",
+        "enough",
+        "pause",
+    }
+)
 
 
 class _BargeInCaptureStop:
@@ -822,10 +836,23 @@ class VoiceAssistant:
         frame_energy = getattr(result, "frame_energy", None)
         if not isinstance(frame_energy, (int, float)) or isinstance(frame_energy, bool):
             frame_energy = None
+        segment_id = getattr(result, "segment_id", None)
+        if not isinstance(segment_id, int) or isinstance(segment_id, bool):
+            segment_id = None
+        segment_started_at = getattr(result, "segment_started_at", None)
+        if not isinstance(segment_started_at, (int, float)) or isinstance(
+            segment_started_at, bool
+        ):
+            segment_started_at = None
         return RecognitionResult(
             str(getattr(result, "text", "")).strip(),
             bool(getattr(result, "is_final", True)),
             frame_energy=(float(frame_energy) if frame_energy is not None else None),
+            segment_id=segment_id,
+            segment_started_at=(
+                float(segment_started_at) if segment_started_at is not None else None
+            ),
+            energy_reemit=bool(getattr(result, "energy_reemit", False)),
         )
 
     def _set_active_response_cancellation(
@@ -945,15 +972,76 @@ class VoiceAssistant:
             reference_words = reference.split()
             if len(candidate_words) < 3 or len(reference_words) < 3:
                 continue
-            similarity = SequenceMatcher(
-                None,
-                candidate_words,
-                reference_words,
-                autojunk=False,
-            ).ratio()
-            if similarity >= 0.65:
+            if len(reference) >= len(candidate):
+                character_windows = (
+                    reference[position : position + len(candidate)]
+                    for position in range(len(reference) - len(candidate) + 1)
+                )
+            else:
+                character_windows = (reference,)
+            character_similarity = max(
+                SequenceMatcher(
+                    None,
+                    candidate,
+                    window,
+                    autojunk=False,
+                ).ratio()
+                for window in character_windows
+            )
+            # Vosk often changes several word boundaries while preserving most
+            # phonetic characters (for example ``Marte`` -> ``parte``). A
+            # character window catches that echo without treating a semantic
+            # correction sharing only a couple of words as equivalent.
+            if character_similarity >= 0.78:
+                return True
+            if len(reference_words) >= len(candidate_words):
+                windows = (
+                    reference_words[position : position + len(candidate_words)]
+                    for position in range(
+                        len(reference_words) - len(candidate_words) + 1
+                    )
+                )
+            else:
+                windows = (reference_words,)
+            similarity = max(
+                SequenceMatcher(
+                    None,
+                    candidate_words,
+                    window,
+                    autojunk=False,
+                ).ratio()
+                for window in windows
+            )
+            if similarity >= 0.65 and character_similarity >= 0.72:
                 return True
         return False
+
+    @staticmethod
+    def _is_short_unconfirmed_final(
+        result: RecognitionResult,
+        detector: Any,
+    ) -> bool:
+        """Treat a short final as unsafe unless its partial was already armed."""
+
+        if not result.is_final or len(result.text.split()) >= 3:
+            return False
+        normalized = VoiceAssistant._normalized_echo_text(result.text)
+        if (
+            normalized in _EXPLICIT_SHORT_INTERRUPT_COMMANDS
+            and result.frame_energy is not None
+            and result.frame_energy >= _EXPLICIT_SHORT_INTERRUPT_ENERGY
+        ):
+            return False
+        if not bool(getattr(detector, "recognition_candidate_pending", False)):
+            return True
+        pending_segment_id = getattr(
+            detector, "recognition_candidate_segment_id", None
+        )
+        return (
+            result.segment_id is not None
+            and pending_segment_id is not None
+            and result.segment_id != pending_segment_id
+        )
 
     def _listen_for_barge_in(
         self,
@@ -1010,7 +1098,9 @@ class VoiceAssistant:
         detected = False
         latest_text = ""
         suppressing_echo_segment = False
+        suppressed_echo_segment_id: int | None = None
         echo_references: list[str] = []
+        detector_playback_epoch: float | None = None
         while not response_future.done() or detected:
             if capture_stop.is_set():
                 break
@@ -1041,6 +1131,48 @@ class VoiceAssistant:
                     if not result.text:
                         continue
                     now = self._clock()
+                    actual_started_at = self._tts_echo_epoch_start(now)
+                    if (
+                        suppressing_echo_segment
+                        and suppressed_echo_segment_id is not None
+                        and result.segment_id is not None
+                        and result.segment_id != suppressed_echo_segment_id
+                    ):
+                        # Vosk can close a segment with an empty final, which
+                        # produces no event. Do not let that stale suppression
+                        # consume the next real user segment.
+                        suppressing_echo_segment = False
+                        suppressed_echo_segment_id = None
+
+                    pending_segment_id = getattr(
+                        detector, "recognition_candidate_segment_id", None
+                    )
+                    same_pending_segment = bool(
+                        getattr(detector, "recognition_candidate_pending", False)
+                    ) and (
+                        result.segment_id is None
+                        or pending_segment_id is None
+                        or result.segment_id == pending_segment_id
+                    )
+                    epoch_changed = actual_started_at != detector_playback_epoch
+                    carry_pending_across_epoch = bool(
+                        epoch_changed
+                        and same_pending_segment
+                        and result.segment_started_at is not None
+                        and (
+                            detector_playback_epoch is None
+                            or result.segment_started_at >= detector_playback_epoch
+                        )
+                        and not result.energy_reemit
+                    )
+                    if epoch_changed:
+                        if not carry_pending_across_epoch:
+                            discard_candidate = getattr(
+                                detector, "discard_recognition_candidate", None
+                            )
+                            if callable(discard_candidate):
+                                discard_candidate()
+                        detector_playback_epoch = actual_started_at
                     for reference in self._current_tts_echo_references(now):
                         if reference not in echo_references:
                             echo_references.append(reference)
@@ -1050,6 +1182,14 @@ class VoiceAssistant:
                         references=tuple(echo_references),
                     ):
                         suppressing_echo_segment = not result.is_final
+                        suppressed_echo_segment_id = (
+                            result.segment_id if suppressing_echo_segment else None
+                        )
+                        discard_candidate = getattr(
+                            detector, "discard_recognition_candidate", None
+                        )
+                        if callable(discard_candidate):
+                            discard_candidate()
                         logger.info(
                             "event=barge_in_candidate_suppressed reason=tts_text_match"
                         )
@@ -1061,10 +1201,64 @@ class VoiceAssistant:
                         )
                         if result.is_final:
                             suppressing_echo_segment = False
+                            suppressed_echo_segment_id = None
+                            discard_candidate = getattr(
+                                detector, "discard_recognition_candidate", None
+                            )
+                            if callable(discard_candidate):
+                                discard_candidate()
+                        continue
+
+                    crossed_playback_boundary = (
+                        actual_started_at is not None
+                        and result.segment_started_at is not None
+                        and result.segment_started_at < actual_started_at
+                    )
+                    if result.energy_reemit:
+                        # Vosk can re-emit an unchanged hypothesis solely
+                        # because the latest PCM frame became louder. At TTS
+                        # onset that energy is the loudspeaker, not independent
+                        # evidence that the user started speaking.
+                        if crossed_playback_boundary and not carry_pending_across_epoch:
+                            suppressing_echo_segment = not result.is_final
+                            suppressed_echo_segment_id = (
+                                result.segment_id if suppressing_echo_segment else None
+                            )
+                        logger.info(
+                            "event=barge_in_candidate_suppressed "
+                            "reason=energy_only_reemit"
+                        )
+                        continue
+                    if (
+                        actual_started_at is not None
+                        and self._is_short_unconfirmed_final(result, detector)
+                    ):
+                        # A first-event one/two-word final during playback is a
+                        # common Vosk rendering of a short TTS/backchannel echo.
+                        # Require an earlier high-energy partial from the same
+                        # segment; otherwise keep speaking.
+                        logger.info(
+                            "event=barge_in_candidate_suppressed "
+                            "reason=short_unconfirmed_final"
+                        )
+                        continue
+                    if crossed_playback_boundary and not carry_pending_across_epoch:
+                        # A Vosk segment first observed before this playback
+                        # buffer can carry stale text into the first loud frame.
+                        # Only a policy-approved pending user candidate may
+                        # cross that boundary. Discard every other segment
+                        # through its final boundary.
+                        suppressing_echo_segment = not result.is_final
+                        suppressed_echo_segment_id = (
+                            result.segment_id if suppressing_echo_segment else None
+                        )
+                        logger.info(
+                            "event=barge_in_candidate_suppressed "
+                            "reason=pre_playback_segment"
+                        )
                         continue
                     latest_text = result.text
                     if not detected:
-                        actual_started_at = self._tts_echo_epoch_start(now)
                         if actual_started_at is not None:
                             playback_started_at = actual_started_at
                         elif self._tts_is_speaking():
@@ -1080,11 +1274,29 @@ class VoiceAssistant:
                             # playback candidates. Treat this as the conservative
                             # start of an unknown playback epoch so an event with
                             # no measured frame energy cannot cancel the model.
-                            accepted = result.is_final and detector.process_recognition(
-                                result,
-                                elapsed_since_tts_start=0.0,
-                                frame_energy=result.frame_energy,
+                            can_arm_partial = hasattr(
+                                detector, "recognition_candidate_pending"
                             )
+                            candidate_pending = bool(
+                                getattr(
+                                    detector,
+                                    "recognition_candidate_pending",
+                                    False,
+                                )
+                            )
+                            should_process = result.is_final or (
+                                can_arm_partial and not candidate_pending
+                            )
+                            accepted_candidate = (
+                                should_process
+                                and detector.process_recognition(
+                                    result,
+                                    elapsed_since_tts_start=0.0,
+                                    frame_energy=result.frame_energy,
+                                    observed_at=now,
+                                )
+                            )
+                            accepted = result.is_final and accepted_candidate
                             if accepted:
                                 detected = True
                                 session_id, turn_number = self._conversation_coordinates()
@@ -1126,6 +1338,7 @@ class VoiceAssistant:
                             result,
                             elapsed_since_tts_start=elapsed,
                             frame_energy=result.frame_energy,
+                            observed_at=now,
                         )
                         if detected:
                             session_id, turn_number = self._conversation_coordinates()
@@ -1233,8 +1446,14 @@ class VoiceAssistant:
                 raise AssistantRuntimeError(
                     "Interrupted response did not stop before the cancellation deadline"
                 ) from None
-            except Exception:
-                logger.debug("Interrupted response finished with cancellation", exc_info=True)
+            except Exception as exc:
+                # The provider surfaces cancellation by raising from the
+                # response worker. This is the expected barge-in terminal path,
+                # not an application failure that warrants a traceback.
+                logger.debug(
+                    "event=interrupted_response_unwound outcome=%s",
+                    type(exc).__name__,
+                )
             finally:
                 self._set_active_response_cancellation(None)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -120,6 +121,59 @@ def test_cancellation_aborts_blocked_first_token_and_recreates_owned_client() ->
     events = list(adapter.stream(request()))
     assert events[0] == TextDelta("Recovered")
     assert isinstance(events[1], Completed)
+
+
+def test_cancellation_leaves_generator_cleanup_to_stream_worker(caplog) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    cleanup_threads: list[str] = []
+
+    def blocking_chunks():
+        try:
+            entered.set()
+            release.wait(timeout=2)
+            yield {"message": {"content": "stale"}, "done": True}
+        finally:
+            cleanup_threads.append(threading.current_thread().name)
+
+    class BlockingClient(FakeClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            return blocking_chunks()
+
+        def close(self) -> None:
+            super().close()
+            release.set()
+
+    raw_client = BlockingClient()
+    adapter = OllamaAdapter(
+        "127.0.0.1:11434",
+        client_factory=lambda _host: raw_client,
+        cancellation_ack_timeout_seconds=0.5,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(adapter.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume, name="test-ollama-consumer")
+    with caplog.at_level(logging.WARNING, logger="api.providers.ollama"):
+        consumer.start()
+        assert entered.wait(timeout=1)
+        cancellation.cancel()
+        consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    assert raw_client.close_calls == 1
+    assert cleanup_threads == ["helios-ollama-stream"]
+    assert not any("stream_close_failed" in record.message for record in caplog.records)
 
 
 def test_constructor_is_lazy_and_normalizes_legacy_endpoint() -> None:

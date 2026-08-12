@@ -100,23 +100,40 @@ def _content_safe_jsonl_sink(
         if not path.exists():
             return
         cutoff = now - timedelta(days=retention_days)
-        retained: list[str] = []
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.endswith("\n"):
-                    raise ValueError("metric file has a truncated record")
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    raise ValueError("metric file has a malformed record") from None
-                if not isinstance(payload, Mapping):
-                    raise ValueError("metric file record must be an object")
-                if parse_timestamp(payload.get("timestamp")) >= cutoff:
-                    retained.append(line)
         temporary = path.with_name(path.name + ".retention.tmp")
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.writelines(retained)
-            handle.flush()
+        try:
+            with path.open("rb") as source, temporary.open(
+                "w", encoding="utf-8", newline="\n"
+            ) as destination:
+                record = source.readline()
+                while record:
+                    next_record = source.readline()
+                    is_final_record = not next_record
+                    try:
+                        line = record.decode("utf-8").rstrip("\r\n")
+                        payload = json.loads(line)
+                        if not isinstance(payload, Mapping):
+                            raise ValueError("metric file record must be an object")
+                        record_timestamp = parse_timestamp(payload.get("timestamp"))
+                    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                        if is_final_record:
+                            # The JSONL append and its trailing newline are
+                            # separate writes. A hard kill can therefore leave
+                            # only the final physical record incomplete. Drop
+                            # that tail, while never masking corruption in an
+                            # earlier durable record.
+                            break
+                        raise ValueError(
+                            "metric file has a malformed interior record"
+                        ) from None
+                    if record_timestamp >= cutoff:
+                        destination.write(line)
+                        destination.write("\n")
+                    record = next_record
+                destination.flush()
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
         temporary.replace(path)
 
     def write(payload: Mapping[str, Any]) -> None:
