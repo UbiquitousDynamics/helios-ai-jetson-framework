@@ -902,6 +902,30 @@ class VoiceAssistant:
             return float(started_at)
         return None
 
+    @staticmethod
+    def _normalized_echo_text(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        return " ".join(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+    def _matches_current_tts_echo(self, text: str, now: float) -> bool:
+        """Return whether recognizer text is contained in current/recent TTS."""
+
+        playback_text = getattr(self.tts, "active_playback_text", None)
+        if callable(playback_text):
+            playback_text = playback_text()
+        if not playback_text and self._tts_echo_epoch_start(now) is not None:
+            playback_text = getattr(self.tts, "last_playback_text", None)
+            if callable(playback_text):
+                playback_text = playback_text()
+        candidate = self._normalized_echo_text(text)
+        reference = self._normalized_echo_text(playback_text)
+        if not candidate or not reference:
+            return False
+        padded_candidate = f" {candidate} "
+        padded_reference = f" {reference} "
+        return padded_candidate in padded_reference or padded_reference in padded_candidate
+
     def _listen_for_barge_in(
         self,
         response_future: Future[Any],
@@ -985,9 +1009,14 @@ class VoiceAssistant:
                     result = self._coerce_recognition_result(raw_result)
                     if not result.text:
                         continue
+                    now = self._clock()
+                    if self._matches_current_tts_echo(result.text, now):
+                        logger.info(
+                            "event=barge_in_candidate_suppressed reason=tts_text_match"
+                        )
+                        continue
                     latest_text = result.text
                     if not detected:
-                        now = self._clock()
                         actual_started_at = self._tts_echo_epoch_start(now)
                         if actual_started_at is not None:
                             playback_started_at = actual_started_at

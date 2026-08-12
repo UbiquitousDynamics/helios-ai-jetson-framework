@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import wave
 from pathlib import Path
 
@@ -55,6 +56,24 @@ class CapturingBackend:
         self.calls.append((frames, sample_rate, channels, sample_width))
 
 
+class BlockingBackend(CapturingBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def play(
+        self,
+        frames: bytes,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> None:
+        super().play(frames, sample_rate, channels, sample_width)
+        self.started.set()
+        assert self.release.wait(timeout=1)
+
+
 class FakeRawOutputStream:
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
@@ -95,6 +114,23 @@ def test_piper_plays_pcm_frames_not_the_wav_header() -> None:
 
     assert backend.calls == [(b"\x01\x00\x02\x00", 16_000, 1, 2)]
     assert not backend.calls[0][0].startswith(b"RIFF")
+
+
+def test_piper_exposes_only_active_and_most_recent_playback_text() -> None:
+    backend = BlockingBackend()
+    tts = PiperTTS("unused.onnx", voice=FakeVoice(), audio_backend=backend)
+    speaker = threading.Thread(target=tts.speak, args=("hello",))
+
+    speaker.start()
+    assert backend.started.wait(timeout=1)
+    assert tts.active_playback_text == "hello"
+    assert tts.last_playback_text == "hello"
+
+    backend.release.set()
+    speaker.join(timeout=1)
+    assert not speaker.is_alive()
+    assert tts.active_playback_text is None
+    assert tts.last_playback_text == "hello"
 
 
 def test_piper_supports_modern_synthesize_wav_api() -> None:

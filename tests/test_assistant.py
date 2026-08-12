@@ -529,6 +529,57 @@ def test_low_energy_final_before_playback_does_not_cancel_generation() -> None:
     assistant.close()
 
 
+def test_recognized_tts_text_during_playback_does_not_trigger_barge_in() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Ci sono otto pianeti del sistema solare."
+
+    class EchoRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult("ci sono otto", is_final=False, frame_energy=0.2)
+            yield RecognitionResult(
+                "ci sono otto pianeti del sistema solare",
+                is_final=True,
+                frame_energy=0.2,
+            )
+
+    class CountingDetector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def reset(self) -> None:
+            pass
+
+        def process_recognition(self, *_args: object, **_kwargs: object) -> bool:
+            self.calls += 1
+            return True
+
+    detector = CountingDetector()
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=EchoRecognizer([]),
+        barge_in_detector=detector,
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.8,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) is None
+    assert detector.calls == 0
+    assert api.cancelled is False
+    response.cancel()
+    assistant.close()
+
+
 def test_partial_only_barge_in_timeout_never_executes_partial_as_follow_up() -> None:
     class SpeakingTTS(FakeTTS):
         is_speaking = True

@@ -226,8 +226,10 @@ class PiperTTS:
         self._active_speech_interrupt: threading.Event | None = None
         self._active_interrupt: threading.Event | None = None
         self._active_playback_started_at: float | None = None
+        self._active_playback_text: str | None = None
         self._last_playback_started_at: float | None = None
         self._last_playback_ended_at: float | None = None
+        self._last_playback_text: str | None = None
         self._last_playback_frame_count = 0
         self._last_playback_total_frames = 0
         self._closed = False
@@ -270,6 +272,20 @@ class PiperTTS:
 
         with self._state_lock:
             return self._active_playback_started_at
+
+    @property
+    def active_playback_text(self) -> str | None:
+        """Text represented by the active TTS buffer, if known."""
+
+        with self._state_lock:
+            return self._active_playback_text
+
+    @property
+    def last_playback_text(self) -> str | None:
+        """Text represented by the most recently started TTS buffer, if known."""
+
+        with self._state_lock:
+            return self._last_playback_text
 
     @property
     def last_playback_window(self) -> tuple[float, float | None] | None:
@@ -408,7 +424,11 @@ class PiperTTS:
             wave_bytes = self._preloaded_waves.get(phrase)
         if wave_bytes is None or (cancellation is not None and cancellation.is_set()):
             return False
-        self._play_wave(io.BytesIO(wave_bytes), interrupt_event=cancellation)
+        self._play_wave(
+            io.BytesIO(wave_bytes),
+            interrupt_event=cancellation,
+            playback_text=phrase,
+        )
         return True
 
     def _play_wave(
@@ -416,6 +436,7 @@ class PiperTTS:
         source: Any,
         *,
         interrupt_event: threading.Event | None = None,
+        playback_text: str | None = None,
     ) -> tuple[float, float, float]:
         try:
             self._ensure_open()
@@ -433,8 +454,10 @@ class PiperTTS:
                 with self._state_lock:
                     self._active_interrupt = playback_interrupt
                     self._active_playback_started_at = audio_started_at
+                    self._active_playback_text = playback_text
                     self._last_playback_started_at = audio_started_at
                     self._last_playback_ended_at = None
+                    self._last_playback_text = playback_text
                     self._last_playback_frame_count = 0
                     self._last_playback_total_frames = frame_count
                 try:
@@ -469,6 +492,7 @@ class PiperTTS:
                         if self._active_interrupt is playback_interrupt:
                             self._active_interrupt = None
                             self._active_playback_started_at = None
+                            self._active_playback_text = None
                             self._last_playback_ended_at = playback_ended_at
                 with self._state_lock:
                     self._last_playback_frame_count = min(
@@ -501,6 +525,7 @@ class PiperTTS:
                 playback_ms, audio_duration_ms, audio_started_at = self._play_wave(
                     output,
                     interrupt_event=speech_interrupt,
+                    playback_text=text,
                 )
                 return SpeechTiming(
                     synthesis_ms=synthesis_ms,
