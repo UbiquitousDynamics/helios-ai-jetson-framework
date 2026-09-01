@@ -847,8 +847,7 @@ class CodexAppServerAdapter:
             self._context_states.move_to_end(key)
         self._clear_mirrored_thread(key, reason)
         logger.info(
-            "conversation_session=%s turn=%s provider=%s "
-            "event=thread_invalidated reason=%s",
+            "conversation_session=%s turn=%s provider=%s event=thread_invalidated reason=%s",
             _safe_identifier(key),
             conversation_turn,
             self.identity.name,
