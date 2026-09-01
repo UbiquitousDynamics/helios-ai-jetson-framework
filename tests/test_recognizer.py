@@ -487,3 +487,56 @@ def test_prepare_does_not_open_microphone_stream() -> None:
 
     assert recognizer.prepare_async() is None
     assert audio.open_kwargs == {}
+
+
+class _DeadlineStream(FakeStream):
+    """Stream whose reads consume simulated time proportional to frame count."""
+
+    def __init__(self, clock: _SimulatedClock, rate: int) -> None:
+        super().__init__()
+        self._clock = clock
+        self._rate = rate
+        self.requested_frames: list[int] = []
+
+    def read(self, chunk: int, *, exception_on_overflow: bool) -> bytes:
+        assert exception_on_overflow is False
+        self.requested_frames.append(chunk)
+        self._clock.advance(chunk / self._rate)
+        return b"\x00\x00" * chunk
+
+
+class _SimulatedClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_capture_does_not_overshoot_timeout_by_a_whole_chunk() -> None:
+    """A blocking read must not extend the nominal listening deadline."""
+
+    clock = _SimulatedClock()
+    audio = FakeAudio()
+    rate = 16_000
+    chunk = 1_600
+    audio.stream = _DeadlineStream(clock, rate)
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=PendingRecognizer,
+        rate=rate,
+        chunk=chunk,
+        clock=clock,
+    )
+
+    timeout = 0.25
+    list(recognizer.listen_events(timeout=timeout))
+
+    # Every read is clamped to the time actually remaining, so total simulated
+    # capture time stays within the deadline plus the 10 ms read floor.
+    assert clock.now <= timeout + (160 / rate) + 1e-9
+    assert max(audio.stream.requested_frames) <= chunk

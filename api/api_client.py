@@ -48,6 +48,7 @@ from api.streaming import (
     StreamingResponseCoordinator,
 )
 from api.target_compiler import TargetCompiler
+from audio.speech_pipeline import SpeechPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ class APIClient:
         network_monitor: Any | None = None,
         kpi_settings: config.KPISettings | None = None,
         conversation_session: ConversationSession | None = None,
+        # Escape hatch: forces the fully synchronous speech path if a device
+        # turns out to misbehave with concurrent synthesis and playback.
+        overlapped_speech: bool = True,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
@@ -239,6 +243,9 @@ class APIClient:
         self._owns_tts = False
         self._closed = False
         self._cancellation_lock = threading.Lock()
+        self._speech_pipeline_lock = threading.Lock()
+        self._speech_pipeline: SpeechPipeline | None = None
+        self._overlapped_speech_enabled = overlapped_speech
         self._active_cancellations: list[CancellationToken] = []
         self._remote_prepare_lock = threading.Lock()
         self._remote_prepare_thread: threading.Thread | None = None
@@ -658,7 +665,23 @@ class APIClient:
             raise ValueError(f"Unknown model mode: {mode!r}") from None
 
     def _speech_callable(self) -> Callable[[str], Any]:
-        """Prefer timing-aware speech while supporting legacy TTS implementations."""
+        """Prefer overlapped speech, then timing-aware, then legacy TTS.
+
+        When the backend exposes the two-stage API, wrap it in a SpeechPipeline
+        so synthesis of the next fragment runs during playback of the current
+        one and provider events keep being read while audio plays. Backends
+        without that API keep the fully synchronous behaviour.
+        """
+
+        with self._speech_pipeline_lock:
+            if self._speech_pipeline is not None:
+                return self._speech_pipeline
+            synthesize = getattr(self.tts, "synthesize_fragment", None)
+            play = getattr(self.tts, "play_fragment", None)
+            if self._overlapped_speech_enabled and callable(synthesize) and callable(play):
+                self._speech_pipeline = SpeechPipeline(synthesize=synthesize, play=play)
+                logger.info("Overlapped speech pipeline enabled")
+                return self._speech_pipeline
 
         speak_with_timing = getattr(self.tts, "speak_with_timing", None)
         return speak_with_timing if callable(speak_with_timing) else self.tts.speak
@@ -1655,6 +1678,13 @@ class APIClient:
             cancel = getattr(token, "cancel", None)
             if callable(cancel):
                 cancel()
+        # Cancelling the model stream is not enough on its own: audio already
+        # dispatched to the speech pipeline would otherwise keep playing after
+        # a barge-in.
+        with self._speech_pipeline_lock:
+            pipeline = self._speech_pipeline
+        if pipeline is not None:
+            pipeline.cancel()
 
     def close(self) -> None:
         with self._cancellation_lock:
@@ -1662,6 +1692,14 @@ class APIClient:
                 return
             self._closed = True
         self.cancel_current()
+        with self._speech_pipeline_lock:
+            pipeline = self._speech_pipeline
+            self._speech_pipeline = None
+        if pipeline is not None:
+            try:
+                pipeline.close()
+            except Exception:
+                logger.warning("Unable to close the speech pipeline")
         if self._owns_network_monitor and self._network_monitor is not None:
             close_monitor = getattr(self._network_monitor, "close", None)
             if callable(close_monitor):

@@ -20,7 +20,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_LLM_CONFIG = Path("examples/llm-routing.codex-subscription.toml")
+# Suggested hybrid profile, referenced by documentation and tooling. It is NOT
+# loaded implicitly: remote routing requires HELIOS_LLM_CONFIG to name a file.
+SUGGESTED_LLM_CONFIG = Path("examples/llm-routing.codex-subscription.toml")
+# Deprecated alias retained for callers that imported the old name.
+DEFAULT_LLM_CONFIG = SUGGESTED_LLM_CONFIG
 logger = logging.getLogger(__name__)
 
 
@@ -182,8 +186,12 @@ class LLMTimeoutSettings:
 @dataclass(frozen=True)
 class LLMPrivacySettings:
     default: str = "local_only"
+    # Every field fails closed. A routing file that opts into remote inference
+    # can re-enable context sharing explicitly; the in-code default must not,
+    # or enabling remote routing via the environment alone would silently start
+    # forwarding prior conversation turns.
     allow_remote_transcripts: bool = False
-    allow_remote_context: bool = True
+    allow_remote_context: bool = False
     allow_remote_rag_context: bool = False
     redaction_failure: str = "local_only"
 
@@ -584,7 +592,6 @@ class LanguageProfile:
     code: str
     vosk_model: Path
     tts_model: Path
-    voice: str
     wake_word: str
     wake_word_aliases: tuple[str, ...]
     think_words: tuple[str, ...]
@@ -604,7 +611,6 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             code="en",
             vosk_model=root / "recognizer/models/vosk-model-small-en-us-0.15",
             tts_model=root / "audio/models/en_GB-alba-medium.onnx",
-            voice="mb-us1",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
             think_words=("think", "reason"),
@@ -635,7 +641,6 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             code="it",
             vosk_model=root / "recognizer/models/vosk-model-small-it-0.22",
             tts_model=root / "audio/models/it_IT-paola-medium.onnx",
-            voice="mb-it4",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
             think_words=("pensa", "ragiona"),
@@ -1618,7 +1623,6 @@ class Settings:
     ollama_host: str = "http://localhost:11434"
     think_model: str = "qwen3:0.6b"
     top_k: int = 4
-    embedding_model: str = "mxbai-embed-large"
     llm: LLMSettings = field(default_factory=LLMSettings)
     kpi: KPISettings = field(default_factory=KPISettings)
 
@@ -1680,11 +1684,13 @@ class Settings:
         root = Path(project_root).expanduser().resolve()
         llm = LLMSettings()
         routing_override = env.get("HELIOS_LLM_CONFIG")
-        if routing_override is None:
-            default_routing_path = root / DEFAULT_LLM_CONFIG
-            routing_value = str(DEFAULT_LLM_CONFIG) if default_routing_path.is_file() else ""
-        else:
-            routing_value = routing_override.strip()
+        # Remote routing is opt-in. Files under examples/ are documentation, not
+        # active configuration: auto-selecting one meant that cloning the
+        # repository and running it sent voice transcripts to a remote provider
+        # without the operator ever choosing to. A clean checkout now stays on
+        # the local_only defaults of LLMSettings() until HELIOS_LLM_CONFIG names
+        # a routing file explicitly.
+        routing_value = "" if routing_override is None else routing_override.strip()
         configuration_valid = True
         if routing_value:
             routing_path = Path(routing_value).expanduser()
@@ -1704,6 +1710,17 @@ class Settings:
                 llm = LLMSettings(emergency_local_only=True)
         else:
             llm = LLMSettings(emergency_local_only=True)
+
+        # Transcript egress is the single most consequential setting in an
+        # in-vehicle voice deployment, so make it visible at startup instead of
+        # leaving it implicit in a routing file.
+        if llm.remote_enabled and llm.privacy.allow_remote_transcripts:
+            logger.warning(
+                "Remote routing is enabled and voice transcripts may be sent off-device "
+                "(routing file: %s). Set HELIOS_LLM_ALLOW_REMOTE_TRANSCRIPTS=false to keep "
+                "recognized speech local.",
+                llm.routing_file,
+            )
 
         try:
             kpi = _kpi_from_env(env, project_root=root)
@@ -1754,10 +1771,6 @@ class Settings:
         return self.project_root / "uploads"
 
     @property
-    def tts_folder(self) -> Path:
-        return self.project_root / "tts_audio"
-
-    @property
     def wake_sound(self) -> Path:
         return self.project_root / "sounds/wake_up.wav"
 
@@ -1773,10 +1786,6 @@ class Settings:
     def sentence_transformer_model(self) -> Path:
         return self.project_root / "models/all-MiniLM-L6-v2"
 
-    @property
-    def qa_json_path(self) -> Path:
-        return self.project_root / "document/q&a/IT-WSC_25.json"
-
 
 SETTINGS = Settings.from_env()
 PROFILE = SETTINGS.profile
@@ -1790,7 +1799,6 @@ LOG_FILE = str(SETTINGS.log_file) if SETTINGS.log_file else None
 
 NAME = SETTINGS.name
 LANGUAGE = SETTINGS.language
-TTS_FOLDER = str(SETTINGS.tts_folder)
 TTS_MODEL = str(PROFILE.tts_model)
 
 WAKE_WORD = PROFILE.wake_word
@@ -1804,7 +1812,6 @@ TIMEOUT_SOUND = STOP_SOUND
 UPLOAD_FOLDER = str(SETTINGS.upload_folder)
 
 VOSK_MODEL_PATH = str(PROFILE.vosk_model)
-VOICE = PROFILE.voice
 MODEL_TALK = PROFILE.talk_model
 MODEL_THINK = SETTINGS.think_model
 
@@ -1815,6 +1822,4 @@ PRES_A_SWITCH = {1: PRES_A_1, 2: PRES_A_2, 3: PRES_A_3}
 OLLAMA_HOST = SETTINGS.ollama_host
 # Legacy callers may still pass the generate endpoint; APIClient normalizes it.
 OLLAMA_API_URL = f"{OLLAMA_HOST}/api/generate"
-QA_JSON_PATH = str(SETTINGS.qa_json_path)
 TOP_K = SETTINGS.top_k
-EMBEDDING_MODEL = SETTINGS.embedding_model
