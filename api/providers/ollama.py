@@ -328,11 +328,7 @@ class OllamaAdapter:
         except Exception as exc:
             raise _provider_error(exc, model=None, transmitted=False) from None
         with self._client_lock:
-            stale = (
-                self._closed
-                or self._client_unusable
-                or self._client_epoch != epoch
-            )
+            stale = self._closed or self._client_unusable or self._client_epoch != epoch
             if not stale and self._client is None:
                 self._client = candidate
                 return candidate

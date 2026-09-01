@@ -357,9 +357,7 @@ def test_local_only_turn_cannot_egress_as_later_remote_history(tmp_path: Path) -
 def test_local_document_taint_survives_into_later_assistant_history(
     tmp_path: Path,
 ) -> None:
-    remote = FakeRemoteProvider(
-        [[TextDelta("Remote."), completed("remote", "remote-model")]]
-    )
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, _tts = make_client(tmp_path, remote)
 
     assert (

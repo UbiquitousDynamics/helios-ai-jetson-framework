@@ -472,11 +472,7 @@ class CodexAppServerAdapter:
                 transmitted=False,
             ) from None
         with self._runtime_lock:
-            valid = (
-                not self._closed
-                and not self._runtime_unusable
-                and self._runtime is runtime
-            )
+            valid = not self._closed and not self._runtime_unusable and self._runtime is runtime
         if not valid:
             raise self._error(
                 ErrorCategory.PROVIDER_UNAVAILABLE,

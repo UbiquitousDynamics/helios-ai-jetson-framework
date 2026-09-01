@@ -125,9 +125,7 @@ def _content_safe_jsonl_sink(
                             # that tail, while never masking corruption in an
                             # earlier durable record.
                             break
-                        raise ValueError(
-                            "metric file has a malformed interior record"
-                        ) from None
+                        raise ValueError("metric file has a malformed interior record") from None
                     if record_timestamp >= cutoff:
                         destination.write(line)
                         destination.write("\n")
