@@ -38,6 +38,9 @@ _BARGE_IN_LISTEN_SLICE_SECONDS = 0.25
 _BARGE_IN_CANDIDATE_INACTIVITY_SECONDS = 1.5
 _TTS_ECHO_TAIL_SECONDS = 0.25
 _TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+# Minimum gap between spoken failure notices, so a provider outage does not
+# turn the recovery loop into a stream of identical announcements.
+_FAILURE_NOTICE_MIN_INTERVAL = 15.0
 _RESPONSE_CANCEL_TIMEOUT_SECONDS = 2.5
 _EXPLICIT_SHORT_INTERRUPT_ENERGY = 0.12
 _EXPLICIT_SHORT_INTERRUPT_CONFIDENCE = 0.65
@@ -249,6 +252,7 @@ class VoiceAssistant:
         self._rag_lock = threading.RLock()
         self._rag_prepare_future: Future[Any] | None = None
         self._rag_prepared = False
+        self._last_failure_announced_at: float | None = None
         self._backchannel_lock = threading.RLock()
         self._backchannel_index = 0
         self._ready_backchannel_phrases: tuple[str, ...] = ()
@@ -501,6 +505,16 @@ class VoiceAssistant:
         pipeline_started_at: float | None = None,
         cancellation: CancellationController | None = None,
     ) -> str | None:
+        """Authorize and process one command string.
+
+        Public entry point kept for embedders and tests. ``run_once`` does not
+        call it: it needs to tell a wake-word activation apart from a barge-in
+        follow-up and to record different metrics for each. Both paths share the
+        primitives below (``contains_wake_word``, ``_without_wake_word``,
+        ``_process_model_prompt``), so the wake-word rules themselves are
+        defined once.
+        """
+
         if not command:
             logger.warning("No command to process")
             return None
@@ -747,6 +761,18 @@ class VoiceAssistant:
                 searcher = self._get_rag_searcher()
                 prepare = getattr(searcher, "prepare", None)
                 prepared = True if not callable(prepare) else prepare() is not False
+                if not prepared:
+                    # ``prepare()`` deliberately refuses to build a missing
+                    # index, so without this the first query paid for the whole
+                    # embedding pass while the user waited in silence -- tens of
+                    # seconds on Jetson. Build here instead: preparation is
+                    # queued when RAG mode is entered, which leaves the entry
+                    # cue plus the user's next utterance to finish the work.
+                    build_index = getattr(searcher, "index_database", None)
+                    if callable(build_index):
+                        logger.info("Building missing RAG index in the background")
+                        build_index()
+                        prepared = True
                 self._rag_prepared = prepared
                 logger.info("RAG background preparation completed (ready=%s)", prepared)
         except Exception:
@@ -765,6 +791,36 @@ class VoiceAssistant:
                 self._prepare_rag,
             )
             return self._rag_prepare_future
+
+    def _announce_recoverable_failure(self) -> None:
+        """Tell the user a turn failed, instead of going silent.
+
+        ``LanguageProfile.model_error_message`` existed but had no caller, so a
+        provider or recognition failure produced a log line and nothing audible:
+        indistinguishable from the assistant simply not having heard. The phrase
+        is preloaded at startup because a failure is exactly the moment when
+        synthesis may also be unhealthy or slow, and it is rate limited so a
+        provider outage cannot turn every loop iteration into an announcement.
+        """
+
+        message = getattr(self.profile, "model_error_message", "")
+        if not message:
+            return
+        now = self._clock()
+        last_announced = self._last_failure_announced_at
+        if last_announced is not None and now - last_announced < _FAILURE_NOTICE_MIN_INTERVAL:
+            logger.debug("Suppressing repeated spoken failure notice")
+            return
+        self._last_failure_announced_at = now
+        try:
+            speak_preloaded = getattr(self.tts, "speak_preloaded", None)
+            if callable(speak_preloaded) and speak_preloaded(message):
+                return
+            self._speak_observed(message, scope="error")
+        except Exception:
+            # The failure notice is best effort: it must never replace the
+            # original error or break the main loop's recovery path.
+            logger.warning("Unable to announce the recoverable failure", exc_info=True)
 
     def _prepare_backchannels(self) -> None:
         preload = getattr(self.tts, "preload_phrases", None)
@@ -2025,6 +2081,7 @@ class VoiceAssistant:
                 except recoverable_errors:
                     logger.exception("Recoverable runtime error")
                     self.state = AssistantState.COMMAND
+                    self._announce_recoverable_failure()
                     self._sleep(1.0)
         except KeyboardInterrupt:
             logger.info("Voice assistant interrupted")

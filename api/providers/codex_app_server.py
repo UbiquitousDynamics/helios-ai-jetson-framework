@@ -440,11 +440,7 @@ class CodexAppServerAdapter:
             ) from None
 
         with self._runtime_lock:
-            stale = (
-                self._closed
-                or self._runtime_unusable
-                or self._runtime_epoch != epoch
-            )
+            stale = self._closed or self._runtime_unusable or self._runtime_epoch != epoch
             if not stale and self._runtime is None:
                 self._runtime = candidate
                 return candidate

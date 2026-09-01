@@ -154,10 +154,25 @@ def test_remote_file_uses_its_enabled_default_and_environment_can_disable_it(
     assert disabled.llm.routing_policy == "local_only"
 
 
-def test_repository_defaults_to_codex_remote_first_with_local_fallback() -> None:
+def test_clean_checkout_is_local_only_without_explicit_routing_file() -> None:
+    """A clone must not send transcripts off-device before anyone opts in."""
+
     settings = config.Settings.from_env(PROJECT_ROOT, environ={})
 
-    assert settings.llm.routing_file == (PROJECT_ROOT / config.DEFAULT_LLM_CONFIG).resolve()
+    assert settings.llm.routing_file is None
+    assert not settings.llm.remote_enabled
+    assert settings.llm.routing_policy == "local_only"
+    assert not settings.llm.privacy.allow_remote_transcripts
+    assert not settings.llm.privacy.allow_remote_context
+
+
+def test_suggested_codex_profile_enables_remote_first_when_named_explicitly() -> None:
+    settings = config.Settings.from_env(
+        PROJECT_ROOT,
+        environ={"HELIOS_LLM_CONFIG": str(config.SUGGESTED_LLM_CONFIG)},
+    )
+
+    assert settings.llm.routing_file == (PROJECT_ROOT / config.SUGGESTED_LLM_CONFIG).resolve()
     assert settings.llm.remote_enabled
     assert settings.llm.routing_policy == "remote_first"
     assert settings.llm.talk.candidates[-1] == "local-talk"

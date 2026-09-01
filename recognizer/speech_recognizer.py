@@ -18,6 +18,9 @@ from recognizer.barge_in_detector import pcm16_rms
 logger = logging.getLogger(__name__)
 
 _PARTIAL_ENERGY_REEMIT_DELTA = 0.02
+# Floor for deadline-clamped microphone reads (10 ms at 16 kHz). Prevents the
+# capture loop from degenerating into single-frame reads near the deadline.
+_MINIMUM_READ_FRAMES = 160
 
 
 class SpeechRecognitionError(RuntimeError):
@@ -62,7 +65,12 @@ class SpeechRecognizer:
         recognizer_factory: Callable[[Any, int], Any] | None = None,
         audio_format: Any | None = None,
         rate: int = 16_000,
-        chunk: int = 4_000,
+        # 100 ms at 16 kHz. The previous 4,000-sample (250 ms) buffer set the
+        # floor for barge-in reaction time and for the RMS averaging window
+        # feeding echo suppression: an interruption could not be noticed sooner
+        # than the frame carrying it. Vosk accepts smaller buffers unchanged and
+        # per-sample cost is identical, so only loop overhead grows.
+        chunk: int = 1_600,
         clock: Callable[[], float] = time.monotonic,
         owns_audio: bool | None = None,
     ) -> None:
@@ -378,7 +386,18 @@ class SpeechRecognizer:
                 last_frame_started_at = self._clock()
                 if timeout is not None and last_frame_started_at - start_time >= timeout:
                     break
-                data = stream.read(self.chunk, exception_on_overflow=False)
+                # ``stream.read`` blocks for the duration of the frames it is
+                # asked for, so checking the deadline only before the call let
+                # the effective timeout overshoot by a whole chunk. Shrink the
+                # final read to whatever time is actually left instead.
+                frames_to_read = self.chunk
+                if timeout is not None:
+                    remaining = timeout - (last_frame_started_at - start_time)
+                    frames_to_read = max(
+                        _MINIMUM_READ_FRAMES,
+                        min(self.chunk, int(remaining * self.rate)),
+                    )
+                data = stream.read(frames_to_read, exception_on_overflow=False)
                 try:
                     last_frame_energy = pcm16_rms(data)
                 except (TypeError, ValueError):
