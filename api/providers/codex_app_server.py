@@ -837,10 +837,7 @@ class CodexAppServerAdapter:
             state = self._context_states.get(key)
             if state is None:
                 return
-            if (
-                conversation_turn is not None
-                and state.synced_turn < conversation_turn
-            ):
+            if conversation_turn is not None and state.synced_turn < conversation_turn:
                 return
             state.thread_id = None
             state.turn_count = 0
