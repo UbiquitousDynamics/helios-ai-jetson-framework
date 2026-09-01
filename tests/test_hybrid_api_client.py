@@ -378,9 +378,7 @@ def test_local_document_taint_survives_into_later_assistant_history(
 def test_unredacted_remote_redacted_turn_stays_ineligible_for_later_egress(
     tmp_path: Path,
 ) -> None:
-    remote = FakeRemoteProvider(
-        [[TextDelta("Remote."), completed("remote", "remote-model")]]
-    )
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, _tts = make_client(tmp_path, remote)
 
     assert client.talk("unredacted secret", privacy="remote_redacted") == "Local."

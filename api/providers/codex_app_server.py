@@ -706,8 +706,7 @@ class CodexAppServerAdapter:
                 else "thread_start"
             )
             logger.info(
-                "conversation_session=%s turn=%s provider=%s action=%s "
-                "thread=%s reason=%s",
+                "conversation_session=%s turn=%s provider=%s action=%s thread=%s reason=%s",
                 _safe_identifier(request.conversation_id),
                 request.conversation_turn,
                 self.identity.name,
@@ -771,8 +770,7 @@ class CodexAppServerAdapter:
             if key != "__default_conversation__":
                 self._clear_mirrored_thread(key, state.invalid_reason)
             logger.info(
-                "conversation_session=%s turn=%s provider=%s "
-                "event=thread_invalidated reason=%s",
+                "conversation_session=%s turn=%s provider=%s event=thread_invalidated reason=%s",
                 _safe_identifier(request.conversation_id),
                 request.conversation_turn,
                 self.identity.name,

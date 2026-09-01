@@ -737,19 +737,11 @@ class APIClient:
         request_options: Mapping[str, Any] | None,
     ) -> ChatRequest:
         selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
-        message_remote_eligible = (
-            selected_privacy is PrivacyLevel.REMOTE_ALLOWED
-            or (
-                selected_privacy is PrivacyLevel.REMOTE_REDACTED
-                and message_redacted
-            )
+        message_remote_eligible = selected_privacy is PrivacyLevel.REMOTE_ALLOWED or (
+            selected_privacy is PrivacyLevel.REMOTE_REDACTED and message_redacted
         )
-        context_remote_eligible = (
-            selected_privacy is PrivacyLevel.REMOTE_ALLOWED
-            or (
-                selected_privacy is PrivacyLevel.REMOTE_REDACTED
-                and context_redacted
-            )
+        context_remote_eligible = selected_privacy is PrivacyLevel.REMOTE_ALLOWED or (
+            selected_privacy is PrivacyLevel.REMOTE_REDACTED and context_redacted
         )
         messages: list[ChatMessage] = (
             [self._hybrid_system_message] if self._hybrid_system_message is not None else []
