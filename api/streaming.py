@@ -1320,7 +1320,14 @@ class StreamingResponseCoordinator:
         provider_attempt: int,
         execution: ExecutionTarget,
     ) -> bool:
-        return error.retryable_same_provider and provider_attempt < execution.retry_attempts
+        if not error.retryable_same_provider or provider_attempt >= execution.retry_attempts:
+            return False
+        # Once a request may have reached a provider, a local retry can run
+        # concurrently with the old worker after an HTTP timeout. Besides
+        # wasting scarce Jetson resources, that makes command-like prompts
+        # unsafe to replay. The caller can still use an explicitly configured
+        # fallback route; only the same-provider retry is suppressed.
+        return error.transmitted is not True
 
     @staticmethod
     def _elapsed_seconds(started_at: float, observed_at: float | None) -> float | None:

@@ -172,16 +172,20 @@ From that moment:
 
 Before speech commits, partial text is discarded when an attempt fails.
 Retrying the same provider requires a normalized
-`retryable_same_provider = true` error and an available retry slot. Retry-After
-delays above the configured coordinator cap are not slept; the next candidate
-is preferred. A safety refusal and cancellation are terminal. A TTS exception
-is returned unchanged and is never relabeled as a provider error.
+`retryable_same_provider = true` error, an available retry slot, and proof that
+the request was not transmitted. Once the provider may have received it, Helios
+does not replay it on that provider: the original worker may still be running
+after an HTTP timeout. An explicitly configured fallback target remains
+eligible before speech commits. Retry-After delays above the configured
+coordinator cap are not slept; the next candidate is preferred. A safety
+refusal and cancellation are terminal. A TTS exception is returned unchanged
+and is never relabeled as a provider error.
 
 | Failure | Same provider | Next target/local fallback | After speech |
 |---|---|---|---|
 | Offline/DNS/TLS/connect failure | If classified transient and retry slot remains | Yes | Stop |
-| First-token/read timeout | Yes, before speech | Yes | Stop |
-| Stream interruption | Yes, before speech | Yes | Stop |
+| First-token/read timeout after transmission | No | Yes | Stop |
+| Stream interruption after transmission | No | Yes | Stop |
 | 401/403 | No; health blocks until reset/restart | Yes | Stop |
 | 408/425/429/5xx | Bounded retry when safe | Yes; cooldown recorded | Stop |
 | Quota exhausted | No; quota health block | Yes | Stop |

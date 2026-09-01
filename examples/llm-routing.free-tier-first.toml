@@ -20,9 +20,9 @@ redaction_failure = "local_only"
 
 [timeouts]
 connect_seconds = 2.0
-first_token_seconds = 4.0
-read_seconds = 12.0
-total_seconds = 30.0
+first_token_seconds = 20.0
+read_seconds = 15.0
+total_seconds = 45.0
 
 [health]
 failures_to_open = 3

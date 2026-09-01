@@ -164,6 +164,7 @@ def test_sounddevice_backend_reuses_stream_for_matching_pcm_format() -> None:
         "samplerate": 16_000,
         "channels": 1,
         "dtype": "int16",
+        "latency": "high",
     }
     assert stream.writes == [b"\x01\x00", b"\x02\x00"]
     assert stream.started == 2
@@ -182,6 +183,20 @@ def test_sounddevice_backend_reopens_stream_when_pcm_format_changes() -> None:
 
     assert len(module.streams) == 2
     assert module.streams[0].closed == 1
+
+
+def test_sounddevice_backend_honors_explicit_output_device() -> None:
+    module = FakeSoundDevice()
+    backend = SoundDeviceBackend(
+        sounddevice_module=module,
+        device="Tegra Analog",
+        latency="low",
+    )
+
+    backend.play(b"\x01\x00", 16_000, 1, 2)
+
+    assert module.streams[0].kwargs["device"] == "Tegra Analog"
+    assert module.streams[0].kwargs["latency"] == "low"
 
 
 def test_piper_preserves_failure_that_occurs_before_wav_header() -> None:

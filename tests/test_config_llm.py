@@ -105,6 +105,29 @@ def test_environment_controls_log_level_and_destination(tmp_path: Path) -> None:
     assert file_logging.log_file == tmp_path / "logs/helios.log"
 
 
+def test_environment_configures_explicit_audio_devices(tmp_path: Path) -> None:
+    settings = config.Settings.from_env(
+        tmp_path,
+        environ={
+            "HELIOS_AUDIO_INPUT_DEVICE": "USB PnP Audio Device",
+            "HELIOS_AUDIO_OUTPUT_DEVICE": "3",
+            "HELIOS_AUDIO_OUTPUT_LATENCY": "low",
+        },
+    )
+
+    assert settings.audio_input_device == "USB PnP Audio Device"
+    assert settings.audio_output_device == 3
+    assert settings.audio_output_latency == "low"
+
+
+def test_invalid_audio_device_configuration_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_INPUT_DEVICE"):
+        config.Settings.from_env(
+            tmp_path,
+            environ={"HELIOS_AUDIO_INPUT_DEVICE": "-1"},
+        )
+
+
 def test_invalid_environment_log_level_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(config.ConfigurationError, match="HELIOS_LOG_LEVEL"):
         config.Settings.from_env(

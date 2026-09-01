@@ -90,6 +90,11 @@ interface_allowlist = ["wlan0"]
 Use the actual predictable interface name reported by the Jetson; do not
 assume it is always `wlan0`.
 
+Do not place Ethernet and Wi-Fi in the same IPv4 subnet unless policy routing
+has been validated. Linux can choose the directly connected Ethernet route for
+the gateway while the usable default route is Wi-Fi, producing intermittent
+local gateway failures that an HTTPS-only probe cannot fully explain.
+
 The initial/recovery probe measures the bounded payload immediately. Subsequent
 three-second checks use HTTPS `HEAD`; the larger payload sample is repeated
 only every `goodput_probe_interval_seconds`. This preserves fast failure

@@ -166,9 +166,12 @@ class KPISettings:
 @dataclass(frozen=True)
 class LLMTimeoutSettings:
     connect_seconds: float = 2.0
-    first_token_seconds: float = 4.0
-    read_seconds: float = 12.0
-    total_seconds: float = 30.0
+    # Loading a local model after boot can take more than ten seconds on a
+    # memory-constrained Jetson.  Four seconds caused a request to be retried
+    # while Ollama was still loading the first one.
+    first_token_seconds: float = 20.0
+    read_seconds: float = 15.0
+    total_seconds: float = 45.0
 
     def __post_init__(self) -> None:
         values = (
@@ -768,6 +771,29 @@ def _float_from_env(value: str, name: str) -> float:
     return parsed
 
 
+def _audio_device_from_env(value: str | None, name: str) -> int | str | None:
+    """Parse an optional PyAudio/sounddevice device selector.
+
+    A numeric selector remains stable for fixed installations; a non-empty
+    name is resolved by the recognizer or passed to sounddevice unchanged.
+    Empty values deliberately mean "use the platform default".
+    """
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if re.fullmatch(r"[+-]?\d+", normalized):
+        parsed = _int_from_env(normalized, name)
+        if parsed < 0:
+            raise ConfigurationError(f"{name} must be a non-negative device index")
+        return parsed
+    if len(normalized) > 256:
+        raise ConfigurationError(f"{name} is not a valid device selector")
+    return normalized
+
+
 def _kpi_from_env(
     env: Mapping[str, str],
     *,
@@ -1050,15 +1076,15 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "timeouts.connect_seconds",
         ),
         first_token_seconds=_toml_float(
-            timeout_table.get("first_token_seconds", 4.0),
+            timeout_table.get("first_token_seconds", 20.0),
             "timeouts.first_token_seconds",
         ),
         read_seconds=_toml_float(
-            timeout_table.get("read_seconds", 12.0),
+            timeout_table.get("read_seconds", 15.0),
             "timeouts.read_seconds",
         ),
         total_seconds=_toml_float(
-            timeout_table.get("total_seconds", 30.0),
+            timeout_table.get("total_seconds", 45.0),
             "timeouts.total_seconds",
         ),
     )
@@ -1620,6 +1646,9 @@ class Settings:
     log_level: int = logging.INFO
     log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     log_file_name: str | None = "app.log"
+    audio_input_device: int | str | None = None
+    audio_output_device: int | str | None = None
+    audio_output_latency: str = "high"
     ollama_host: str = "http://localhost:11434"
     think_model: str = "qwen3:0.6b"
     top_k: int = 4
@@ -1658,8 +1687,29 @@ class Settings:
         if self.top_k < 1:
             raise ConfigurationError("top_k must be at least one")
 
+        for name, value in (
+            ("audio_input_device", self.audio_input_device),
+            ("audio_output_device", self.audio_output_device),
+        ):
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ConfigurationError(f"{name} must be a device index or name")
+            if isinstance(value, int):
+                if value < 0:
+                    raise ConfigurationError(f"{name} must be a non-negative device index")
+                continue
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 256:
+                raise ConfigurationError(f"{name} must be a device index or name")
+            object.__setattr__(self, name, value.strip())
+
+        latency = self.audio_output_latency.strip().lower()
+        if latency not in {"low", "high"}:
+            raise ConfigurationError("audio_output_latency must be 'low' or 'high'")
+
         object.__setattr__(self, "project_root", root)
         object.__setattr__(self, "language", language)
+        object.__setattr__(self, "audio_output_latency", latency)
         object.__setattr__(self, "ollama_host", normalize_ollama_host(self.ollama_host))
         kpi_path = self.kpi.storage_path.expanduser()
         if not kpi_path.is_absolute():
@@ -1753,6 +1803,15 @@ class Settings:
             ),
             log_level=_log_level_from_env(env.get("HELIOS_LOG_LEVEL", "INFO")),
             log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
+            audio_input_device=_audio_device_from_env(
+                env.get("HELIOS_AUDIO_INPUT_DEVICE"),
+                "HELIOS_AUDIO_INPUT_DEVICE",
+            ),
+            audio_output_device=_audio_device_from_env(
+                env.get("HELIOS_AUDIO_OUTPUT_DEVICE"),
+                "HELIOS_AUDIO_OUTPUT_DEVICE",
+            ),
+            audio_output_latency=env.get("HELIOS_AUDIO_OUTPUT_LATENCY", "high"),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
             kpi=kpi,

@@ -87,9 +87,9 @@ class ChatMessage:
 @dataclass(frozen=True, slots=True)
 class Timeouts:
     connect_seconds: float = 2.0
-    first_token_seconds: float = 4.0
-    read_seconds: float = 12.0
-    total_seconds: float = 30.0
+    first_token_seconds: float = 20.0
+    read_seconds: float = 15.0
+    total_seconds: float = 45.0
 
     def __post_init__(self) -> None:
         values = (

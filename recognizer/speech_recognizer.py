@@ -64,6 +64,7 @@ class SpeechRecognizer:
         audio_interface: Any | None = None,
         recognizer_factory: Callable[[Any, int], Any] | None = None,
         audio_format: Any | None = None,
+        input_device: int | str | None = None,
         rate: int = 16_000,
         # 100 ms at 16 kHz. The previous 4,000-sample (250 ms) buffer set the
         # floor for barge-in reaction time and for the RMS averaging window
@@ -76,12 +77,23 @@ class SpeechRecognizer:
     ) -> None:
         if rate <= 0 or chunk <= 0:
             raise ValueError("rate and chunk must be greater than zero")
+        if isinstance(input_device, bool) or (
+            input_device is not None and not isinstance(input_device, (int, str))
+        ):
+            raise ValueError("input_device must be an integer index, a name, or None")
+        if isinstance(input_device, int) and input_device < 0:
+            raise ValueError("input_device index must be non-negative")
+        if isinstance(input_device, str):
+            input_device = input_device.strip()
+            if not input_device:
+                raise ValueError("input_device name cannot be empty")
 
         self.model_path = Path(model_path)
         self.model = model
         self.p = audio_interface
         self._recognizer_factory = recognizer_factory
         self._audio_format = audio_format
+        self.input_device = input_device
         self.rate = rate
         self.chunk = chunk
         self._clock = clock
@@ -306,6 +318,49 @@ class SpeechRecognizer:
                     method_name,
                 )
 
+    def _resolve_input_device_index(self) -> int | None:
+        """Resolve a configured microphone name without silently falling back.
+
+        PyAudio accepts only an index. A deployment can therefore use either a
+        stable index or a readable device name; name matching requires exactly
+        one capture-capable device so an unplugged USB microphone cannot be
+        mistaken for the system default.
+        """
+
+        configured = self.input_device
+        if configured is None:
+            return None
+        if isinstance(configured, int):
+            return configured
+        assert isinstance(configured, str)
+        assert self.p is not None
+        get_count = getattr(self.p, "get_device_count", None)
+        get_info = getattr(self.p, "get_device_info_by_index", None)
+        if not callable(get_count) or not callable(get_info):
+            raise SpeechRecognitionError("Audio backend cannot resolve the configured microphone")
+        try:
+            device_count = int(get_count())
+            matches: list[tuple[int, str]] = []
+            target = configured.casefold()
+            for index in range(device_count):
+                info = get_info(index)
+                if not isinstance(info, dict):
+                    continue
+                name = str(info.get("name", "")).strip()
+                channels = info.get("maxInputChannels", 0)
+                if not name or not isinstance(channels, (int, float)) or channels < 1:
+                    continue
+                normalized_name = name.casefold()
+                if normalized_name == target or target in normalized_name:
+                    matches.append((index, name))
+        except Exception as exc:
+            raise SpeechRecognitionError("Unable to inspect configured microphone devices") from exc
+        if len(matches) != 1:
+            raise SpeechRecognitionError("Configured microphone device is unavailable or ambiguous")
+        index, name = matches[0]
+        logger.info("Using configured microphone device index=%s name=%s", index, name)
+        return index
+
     def listen_events(
         self,
         timeout: float | None = None,
@@ -370,17 +425,24 @@ class SpeechRecognizer:
             return active_segment_peak_energy
 
         try:
-            stream = self.p.open(
-                format=self._audio_format,
-                channels=1,
-                rate=self.rate,
-                input=True,
-                frames_per_buffer=self.chunk,
-            )
+            open_arguments: dict[str, Any] = {
+                "format": self._audio_format,
+                "channels": 1,
+                "rate": self.rate,
+                "input": True,
+                "frames_per_buffer": self.chunk,
+            }
+            input_device_index = self._resolve_input_device_index()
+            if input_device_index is not None:
+                open_arguments["input_device_index"] = input_device_index
+            stream = self.p.open(**open_arguments)
             stream.start_stream()
             recognizer = self._recognizer_factory(self.model, self.rate)
             self._enable_word_metadata(recognizer)
-            logger.info("Listening for speech")
+            logger.info(
+                "Listening for speech (input_device_index=%s)",
+                input_device_index if input_device_index is not None else "default",
+            )
 
             while not (stop_event is not None and stop_event.is_set()):
                 last_frame_started_at = self._clock()
