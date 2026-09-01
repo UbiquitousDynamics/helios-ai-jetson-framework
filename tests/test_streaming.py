@@ -195,6 +195,32 @@ def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     assert sleeps == [0.25]
 
 
+def test_transmitted_request_is_not_retried_on_the_same_provider() -> None:
+    uncertain = ProviderError(
+        ErrorCategory.FIRST_TOKEN_TIMEOUT,
+        "provider may still be processing the request",
+        provider="first",
+        model="model",
+        retryable_same_provider=True,
+        transmitted=True,
+    )
+    first = FakeProvider("first", [uncertain])
+    fallback = FakeProvider("fallback", [[TextDelta("Recovered."), completion("fallback")]])
+
+    result = coordinator(first, fallback, retry_wait=0).run(
+        request(),
+        (
+            ExecutionTarget(target("first"), retry_attempts=3),
+            ExecutionTarget(target("fallback")),
+        ),
+    )
+
+    assert result.target.name == "fallback"
+    assert result.attempts == 2
+    assert len(first.calls) == 1
+    assert len(fallback.calls) == 1
+
+
 def test_exhausted_route_reports_total_attempt_count() -> None:
     failures = [
         ProviderError(

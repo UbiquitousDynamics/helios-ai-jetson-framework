@@ -249,6 +249,9 @@ class APIClient:
         self._remote_prepare_lock = threading.Lock()
         self._remote_prepare_thread: threading.Thread | None = None
         self._remote_prepared = False
+        self._local_prepare_lock = threading.Lock()
+        self._local_prepare_threads: dict[str, threading.Thread] = {}
+        self._local_prepared_modes: set[str] = set()
         if connectivity is not None and network_monitor is not None:
             raise ValueError("pass either connectivity or network_monitor, not both")
         self._network_monitor = network_monitor
@@ -908,12 +911,10 @@ class APIClient:
                 )
         return planned, decision, network_snapshot, selected_connectivity
 
-    def warm_up(self, mode: str = "talk") -> None:
-        """Explicitly load the local Ollama model; remote warm-up is forbidden."""
-
+    def _local_ollama_target(self, mode: str) -> ExecutionTarget | None:
         if mode not in self.models:
             raise ValueError(f"Unknown model mode: {mode!r}")
-        local_target = next(
+        return next(
             (
                 execution
                 for execution in self._execution_targets[mode]
@@ -923,12 +924,76 @@ class APIClient:
             ),
             None,
         )
+
+    def warm_up(self, mode: str = "talk") -> None:
+        """Explicitly load the local Ollama model; remote warm-up is forbidden."""
+
+        local_target = self._local_ollama_target(mode)
         if local_target is None:
             raise APIClientError("Remote or disabled Ollama targets cannot be warmed up")
         self._call_with_retry(
             lambda: self._ollama.warm_up(local_target.route.model),
             operation_name=f"warm up the {mode} model",
         )
+
+    def prepare_local_async(self, mode: str = "talk") -> threading.Thread | None:
+        """Load the local talk model in the background before the first command.
+
+        Warm-up is intentionally local-only and never sends a transcript. It
+        uses one attempt: an unavailable daemon should not queue repeated empty
+        requests while the assistant is starting, and normal request routing
+        retains its typed fallback behavior.
+        """
+
+        local_target = self._local_ollama_target(mode)
+        if local_target is None:
+            return None
+        with self._local_prepare_lock:
+            if self._closed or mode in self._local_prepared_modes:
+                return self._local_prepare_threads.get(mode)
+            thread = self._local_prepare_threads.get(mode)
+            if thread is not None and thread.is_alive():
+                return thread
+
+            model = local_target.route.model
+
+            def prepare() -> None:
+                started_at = time.monotonic()
+                try:
+                    self._ollama.warm_up(
+                        model,
+                        admission_timeout_seconds=self._timeouts_by_mode[mode].total_seconds,
+                    )
+                except ProviderError as error:
+                    logger.warning(
+                        "Local Ollama preparation failed "
+                        "(mode=%s, category=%s); normal routing remains active",
+                        mode,
+                        error.category.value,
+                    )
+                    return
+                except Exception:
+                    logger.warning(
+                        "Local Ollama preparation failed (mode=%s); normal routing remains active",
+                        mode,
+                    )
+                    return
+                with self._local_prepare_lock:
+                    self._local_prepared_modes.add(mode)
+                logger.info(
+                    "Local Ollama prepared without a user prompt (mode=%s, startup_ms=%s)",
+                    mode,
+                    round((time.monotonic() - started_at) * 1_000),
+                )
+
+            thread = threading.Thread(
+                target=prepare,
+                name=f"helios-local-prepare-{mode}",
+                daemon=True,
+            )
+            self._local_prepare_threads[mode] = thread
+            thread.start()
+            return thread
 
     def prepare_remote_async(self) -> threading.Thread | None:
         """Start the non-inference Codex startup/authentication path in background."""

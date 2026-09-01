@@ -103,6 +103,32 @@ def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
     assert audio.terminated
 
 
+def test_configured_microphone_name_is_resolved_without_default_fallback() -> None:
+    class DeviceAudio(FakeAudio):
+        def get_device_count(self) -> int:
+            return 2
+
+        def get_device_info_by_index(self, index: int) -> dict[str, object]:
+            return (
+                {"name": "Tegra capture", "maxInputChannels": 1}
+                if index == 0
+                else {"name": "USB PnP Audio Device", "maxInputChannels": 2}
+            )
+
+    audio = DeviceAudio()
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+        input_device="usb pnp",
+    )
+
+    result = recognizer.listen_once(timeout=1)
+
+    assert result is not None
+    assert audio.open_kwargs["input_device_index"] == 1
+
+
 def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
     stop_event = threading.Event()
 

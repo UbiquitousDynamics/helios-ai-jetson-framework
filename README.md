@@ -464,12 +464,15 @@ sequenceDiagram
     participant P as PiperTTS
     participant V as SpeechRecognizer
     participant A as APIClient
+    participant O as Local Ollama
     participant R as Remote provider
 
     Main->>Main: configure_logging()
     Main->>VA: Construct adapters
     Note over VA,A: Constructors do not contact Ollama or load Vosk/Piper weights
     Main->>VA: run()
+    VA->>A: prepare_local_async()
+    A-->>O: Warm the local talk model in background
     VA->>A: prepare_remote_async()
     A-->>R: Optionally prepare Codex in background
     VA->>V: prepare_async()
@@ -485,11 +488,14 @@ The constructor establishes the dependency graph without performing network
 requests or opening audio devices. The first welcome message loads Piper, and
 the runtime begins loading Vosk and initializing PyAudio in a background thread
 at the same time. The input stream is opened only when listening begins. The
-Ollama SDK client remains lazy until a conversational request or an explicit
-`warm_up()` call. If the current network gate admits a configured Codex route,
-app-server startup and ChatGPT account validation also begin in a background
-thread while the welcome message is spoken. Preparation sends no prompt and
-starts no inference turn.
+Ollama SDK client remains lazy until an explicit warm-up or an inference turn.
+At runtime, Helios starts one local, empty-prompt warm-up in a background
+thread before the greeting, so the first real command does not compete with a
+cold model load. The adapter admits only one Ollama request at a time until its
+worker has actually exited. If the current network gate admits a configured
+Codex route, app-server startup and ChatGPT account validation also begin in a
+background thread while the welcome message is spoken. Preparation sends no
+user transcript and starts no conversation turn.
 
 The embedding model and corpus are not loaded during normal startup. When the
 user enters RAG mode, Helios prepares the model and any existing validated
@@ -829,15 +835,16 @@ The active recognizer:
 
 - lazily loads the selected Vosk model;
 - lazily creates the PyAudio interface;
-- opens the default input as 16 kHz, 16-bit mono PCM;
-- reads 4,000 frames per iteration;
+- opens a configured input, or the platform default, as 16 kHz, 16-bit mono PCM;
+- reads 1,600 frames per iteration (100 ms at 16 kHz);
 - emits `RecognitionResult(text, is_final)` values;
 - returns from `listen_once()` on the first final phrase;
 - can retain the historical text-only `listen()` generator interface;
 - stops and closes every stream in a `finally` block;
-- terminates an owned PyAudio instance during `close()`.
-
-Explicit input-device selection is not implemented.
+- terminates an owned PyAudio instance during `close()`;
+- resolves `HELIOS_AUDIO_INPUT_DEVICE` by index or by one unambiguous
+  capture-capable device name, and fails instead of silently falling back when
+  the requested microphone is absent.
 
 ### `APIClient`
 
@@ -851,7 +858,10 @@ The compatibility boundary:
   Emilia system instruction only when a hybrid routing file is active;
 - supports Ollama, OpenAI-compatible Chat Completions SSE, and Codex app-server
   providers;
-- retries or switches targets only before speech is committed;
+- retries or switches targets only before speech is committed; a request that
+  may already have been transmitted is never retried on the same provider;
+- warms the local talk model once in the background at assistant startup,
+  without sending a user transcript;
 - supports strict remote privacy authorization, health cooldowns, an expiring
   price catalog, durable budgets, and content-free metrics;
 - never performs remote warm-up;
@@ -911,13 +921,20 @@ legacy caller contract.
 `SoundPlayer` resolves `aplay` only when a cue is requested. Cue playback runs
 on one reusable assistant worker and has a configurable timeout.
 
+`SoundDeviceBackend` uses a conservative `high` output latency by default to
+avoid underruns on ALSA/PulseAudio bridges. Set `HELIOS_AUDIO_OUTPUT_DEVICE` to
+an index or a sounddevice name to pin the speaker, and set
+`HELIOS_AUDIO_OUTPUT_LATENCY=low` only after measuring reliable playback.
+
 ## Prerequisites
 
 ### Hardware
 
 - NVIDIA Jetson or another machine capable of running the selected backends;
-- microphone available as the default PyAudio input;
-- speaker or audio device available to `sounddevice`;
+- microphone available to PyAudio, optionally selected through
+  `HELIOS_AUDIO_INPUT_DEVICE`;
+- speaker or audio device available to `sounddevice`, optionally selected
+  through `HELIOS_AUDIO_OUTPUT_DEVICE`;
 - ALSA output and `aplay` for notification cues on Linux;
 - enough storage and memory for Vosk, Piper, SentenceTransformer, and Ollama
   models.
@@ -1013,6 +1030,11 @@ python3 scripts/run_jetson.py --doctor --runtime-only
 python3 scripts/run_jetson.py
 ```
 
+For systemd, `ExecStart` must invoke `scripts/run_jetson.py`, not `main.py`
+directly; otherwise the Jetson OpenMP preload is bypassed. See
+[`examples/helios.service.example`](examples/helios.service.example) and adapt
+its user, project path, and audio-device selectors before installation.
+
 The launcher deliberately starts `venv/bin/python3` or `.venv/bin/python3`
 instead of relying on whichever `python3` is currently on `PATH`. On AArch64 it
 prefers the OpenMP runtime bundled with scikit-learn, preserves any existing
@@ -1080,6 +1102,9 @@ export HELIOS_BARGE_IN_ENABLED=false
 export HELIOS_BACKCHANNEL_DELAY_SECONDS=0.7
 export HELIOS_LOG_LEVEL=INFO
 export HELIOS_LOG_FILE=app.log
+export HELIOS_AUDIO_INPUT_DEVICE="USB PnP Audio Device"
+export HELIOS_AUDIO_OUTPUT_DEVICE="Tegra Analog"
+export HELIOS_AUDIO_OUTPUT_LATENCY=high
 ```
 
 PowerShell:
@@ -1091,6 +1116,9 @@ $env:HELIOS_BARGE_IN_ENABLED = "false"
 $env:HELIOS_BACKCHANNEL_DELAY_SECONDS = "0.7"
 $env:HELIOS_LOG_LEVEL = "INFO"
 $env:HELIOS_LOG_FILE = "app.log"
+$env:HELIOS_AUDIO_INPUT_DEVICE = "USB PnP Audio Device"
+$env:HELIOS_AUDIO_OUTPUT_DEVICE = "Tegra Analog"
+$env:HELIOS_AUDIO_OUTPUT_LATENCY = "high"
 ```
 
 Supported language values are `it` and `en`. Unsupported values raise
@@ -1114,10 +1142,11 @@ export HELIOS_LLM_CONFIG=examples/llm-routing.offline.toml
 export HELIOS_LLM_REMOTE_ENABLED=false
 ```
 
-The default is `examples/llm-routing.codex-subscription.toml` with remote
-routing enabled. The repository also includes offline, free-tier-first,
-paid-first, and local-first escalation examples. The committed catalog is
-intentionally stale and must be replaced with reviewed current provider data.
+With no `HELIOS_LLM_CONFIG`, a clean checkout is local-only. The repository
+also includes offline, free-tier-first, paid-first, local-first escalation, and
+Codex-subscription examples; selecting one is an explicit deployment choice.
+The committed catalog is intentionally stale and must be replaced with reviewed
+current provider data.
 See
 [`docs/HYBRID_LLM_OPERATIONS.md`](docs/HYBRID_LLM_OPERATIONS.md) for the full
 configuration, credential, privacy, budget, live-test, benchmark, rollout, and
@@ -1147,6 +1176,14 @@ All implemented LLM environment overrides are:
 | `HELIOS_LLM_ZERO_COST_ONLY` | Reject nonzero cost reservations when true |
 | `HELIOS_LLM_METRICS_ENABLED` | Enable content-free metrics |
 | `HELIOS_LLM_LOG_CONTENT` | Reserved; content logging remains disabled |
+
+Audio environment overrides are independent of routing:
+
+| Variable | Purpose |
+|---|---|
+| `HELIOS_AUDIO_INPUT_DEVICE` | PyAudio input index or one unambiguous capture-device name; blank uses the platform default |
+| `HELIOS_AUDIO_OUTPUT_DEVICE` | sounddevice output index or name; blank uses the platform default |
+| `HELIOS_AUDIO_OUTPUT_LATENCY` | `high` (default, robust) or `low` (only after device-specific validation) |
 
 The broader KPI recorder and dashboard use a separate `HELIOS_KPI_*`
 configuration. Collection and automatic dashboard startup both default to
@@ -1384,11 +1421,12 @@ Expected behavior:
 
 1. logging is configured;
 2. lightweight service adapters are constructed;
-3. an eligible Codex route may prepare in the background without sending text;
-4. Vosk/PyAudio prepare in the background without opening the input stream;
-5. Piper loads and speaks the localized welcome message concurrently;
-6. the assistant waits in `COMMAND` state;
-7. Ollama stays lazy until inference; RAG stays lazy until RAG-mode entry.
+3. the local Ollama talk model warms in the background without a user prompt;
+4. an eligible Codex route may prepare in the background without sending text;
+5. Vosk/PyAudio prepare in the background without opening the input stream;
+6. Piper loads and speaks the localized welcome message concurrently;
+7. the assistant waits in `COMMAND` state;
+8. RAG stays lazy until RAG-mode entry.
 
 Typical content-free INFO records for a hybrid request look like:
 

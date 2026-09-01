@@ -72,7 +72,12 @@ class SpeechTiming:
 
 
 class SoundDeviceBackend:
-    """Persistent blocking sounddevice stream used by the production runtime."""
+    """Persistent blocking sounddevice stream used by the production runtime.
+
+    ``device`` is deliberately optional: a desktop can keep using its default
+    output, while an installed assistant can pin playback to the intended ALSA
+    or PulseAudio device instead of inheriting a conflicting user default.
+    """
 
     _PLAYBACK_CHUNK_MS = 100
 
@@ -82,8 +87,27 @@ class SoundDeviceBackend:
         4: "int32",
     }
 
-    def __init__(self, *, sounddevice_module: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        device: int | str | None = None,
+        latency: str = "high",
+        sounddevice_module: Any | None = None,
+    ) -> None:
+        if isinstance(device, bool) or (device is not None and not isinstance(device, (int, str))):
+            raise ValueError("device must be an integer index, a name, or None")
+        if isinstance(device, int) and device < 0:
+            raise ValueError("device index must be non-negative")
+        if isinstance(device, str):
+            device = device.strip()
+            if not device:
+                raise ValueError("device name cannot be empty")
+        normalized_latency = latency.strip().lower()
+        if normalized_latency not in {"low", "high"}:
+            raise ValueError("latency must be 'low' or 'high'")
         self._sounddevice = sounddevice_module
+        self._device = device
+        self._latency = normalized_latency
         self._stream: Any | None = None
         self._stream_format: tuple[int, int, str] | None = None
         self._lock = threading.RLock()
@@ -114,11 +138,18 @@ class SoundDeviceBackend:
         if self._stream is not None and self._stream_format == stream_format:
             return self._stream
         self._close_stream()
-        self._stream = self._module().RawOutputStream(
-            samplerate=sample_rate,
-            channels=channels,
-            dtype=dtype,
-        )
+        arguments: dict[str, Any] = {
+            "samplerate": sample_rate,
+            "channels": channels,
+            "dtype": dtype,
+            # Jetson's ALSA/Pulse bridge has occasionally under-run with the
+            # backend's implicit low-latency buffer. The conservative default
+            # trades a little response latency for stable spoken output.
+            "latency": self._latency,
+        }
+        if self._device is not None:
+            arguments["device"] = self._device
+        self._stream = self._module().RawOutputStream(**arguments)
         self._stream_format = stream_format
         return self._stream
 

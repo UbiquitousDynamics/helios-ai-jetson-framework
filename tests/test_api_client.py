@@ -53,6 +53,26 @@ def test_constructor_is_lazy_and_normalizes_legacy_endpoint() -> None:
     assert fake.calls == []
 
 
+def test_local_prepare_is_background_and_idempotent() -> None:
+    fake = FakeClient()
+    client = APIClient(client=fake, tts=FakeTTS(), retry_wait=0)
+
+    first = client.prepare_local_async()
+    second = client.prepare_local_async()
+
+    assert first is not None
+    assert second is first
+    first.join(timeout=1)
+    assert not first.is_alive()
+    assert fake.calls == [
+        {
+            "model": client.models["talk"],
+            "messages": [{"role": "user", "content": ""}],
+            "stream": False,
+        }
+    ]
+
+
 def test_talk_uses_one_stream_parser_and_flushes_done_reason() -> None:
     tts = FakeTTS()
     fake = FakeClient(

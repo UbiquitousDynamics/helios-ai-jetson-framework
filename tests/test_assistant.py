@@ -40,6 +40,7 @@ class FakeAPI:
         self.closed = False
         self.cancelled = False
         self.prepare_calls = 0
+        self.local_prepare_calls = 0
 
     def talk(self, message: str, context: str | None = None) -> str:
         assert context is None
@@ -65,6 +66,9 @@ class FakeAPI:
 
     def prepare_remote_async(self) -> None:
         self.prepare_calls += 1
+
+    def prepare_local_async(self) -> None:
+        self.local_prepare_calls += 1
 
 
 class FakeRecognizer:
@@ -346,6 +350,7 @@ def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
     assistant.run(max_iterations=0)
 
     assert api.prepare_calls == 1
+    assert api.local_prepare_calls == 1
     assert recognizer.prepare_calls == 1
     assert tts.spoken == [
         assistant.profile.welcome_message.format(

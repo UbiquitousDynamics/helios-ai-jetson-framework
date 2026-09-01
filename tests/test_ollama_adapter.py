@@ -176,6 +176,81 @@ def test_cancellation_leaves_generator_cleanup_to_stream_worker(caplog) -> None:
     assert not any("stream_close_failed" in record.message for record in caplog.records)
 
 
+def test_unacknowledged_worker_blocks_a_second_stream_until_it_exits() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class StubbornChunks:
+        def __iter__(self) -> StubbornChunks:
+            return self
+
+        def __next__(self) -> object:
+            entered.set()
+            release.wait(timeout=2)
+            raise StopIteration
+
+        def close(self) -> None:
+            # Simulate a transport whose generator close cannot interrupt a
+            # blocked network read. The adapter must keep its admission slot.
+            return None
+
+    class StubbornClient(FakeClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            return StubbornChunks()
+
+    first = StubbornClient()
+    second = FakeClient([{"message": {"content": "Recovered"}, "done": True}])
+    clients = iter([first, second])
+    adapter = OllamaAdapter(
+        "127.0.0.1:11434",
+        client_factory=lambda _host: next(clients),
+        cancellation_ack_timeout_seconds=0.05,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume_first() -> None:
+        try:
+            list(adapter.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume_first)
+    consumer.start()
+    assert entered.wait(timeout=1)
+    cancellation.cancel()
+    consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+
+    second_started = threading.Event()
+    second_done = threading.Event()
+    second_events: list[object] = []
+
+    def consume_second() -> None:
+        second_started.set()
+        try:
+            second_events.extend(adapter.stream(request()))
+        finally:
+            second_done.set()
+
+    successor = threading.Thread(target=consume_second)
+    successor.start()
+    assert second_started.wait(timeout=1)
+    assert not second_done.wait(timeout=0.05)
+
+    release.set()
+    successor.join(timeout=1)
+
+    assert not successor.is_alive()
+    assert isinstance(second_events[0], TextDelta)
+    assert isinstance(second_events[1], Completed)
+
+
 def test_constructor_is_lazy_and_normalizes_legacy_endpoint() -> None:
     created_hosts: list[str] = []
     raw_client = FakeClient()

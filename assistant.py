@@ -23,7 +23,7 @@ from api.metrics import record_safely
 from api.streaming import CancellationController
 from audio.backchannel import BackchannelSession
 from audio.sound_player import SoundPlaybackError, SoundPlayer
-from audio.tts import PiperTTS, TTSError
+from audio.tts import PiperTTS, SoundDeviceBackend, TTSError
 from recognizer.barge_in_detector import BargeInDetector
 from recognizer.echo_suppression_policy import ConservativeEchoSuppressionPolicy
 from recognizer.speech_recognizer import (
@@ -211,7 +211,17 @@ class VoiceAssistant:
                 tts = api_client.configured_tts
             else:
                 tts = getattr(api_client, "tts", None)
-        self.tts = tts if tts is not None else PiperTTS(self.profile.tts_model)
+        self.tts = (
+            tts
+            if tts is not None
+            else PiperTTS(
+                self.profile.tts_model,
+                audio_backend=SoundDeviceBackend(
+                    device=settings.audio_output_device,
+                    latency=settings.audio_output_latency,
+                ),
+            )
+        )
         self.sound_player = sound_player if sound_player is not None else SoundPlayer()
         if api_client is None:
             self.api_client = APIClient(
@@ -232,7 +242,10 @@ class VoiceAssistant:
         self.speech_recognizer = (
             speech_recognizer
             if speech_recognizer is not None
-            else SpeechRecognizer(self.profile.vosk_model)
+            else SpeechRecognizer(
+                self.profile.vosk_model,
+                input_device=settings.audio_input_device,
+            )
         )
         if barge_in_detector is not None:
             self._barge_in_detector = barge_in_detector
@@ -2054,6 +2067,9 @@ class VoiceAssistant:
             AssistantRuntimeError,
         )
         try:
+            prepare_local = getattr(self.api_client, "prepare_local_async", None)
+            if callable(prepare_local):
+                prepare_local()
             prepare_remote = getattr(self.api_client, "prepare_remote_async", None)
             if callable(prepare_remote):
                 prepare_remote()
