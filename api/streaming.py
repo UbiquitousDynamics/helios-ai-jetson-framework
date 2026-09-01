@@ -551,6 +551,56 @@ class StreamingResponseCoordinator:
             else None
         )
 
+        def record_timing(timing: Any) -> None:
+            try:
+                synthesis_ms = float(getattr(timing, "synthesis_ms"))
+                playback_ms = float(getattr(timing, "playback_ms"))
+                duration_ms = float(getattr(timing, "audio_duration_ms"))
+                actual_started_at = float(getattr(timing, "audio_started_at"))
+                if not all(
+                    value >= 0
+                    for value in (synthesis_ms, playback_ms, duration_ms, actual_started_at)
+                ):
+                    return
+            except (AttributeError, TypeError, ValueError):
+                return
+            state.tts_synthesis_seconds += synthesis_ms / 1_000
+            state.audio_playback_seconds += playback_ms / 1_000
+            state.audio_duration_seconds += duration_ms / 1_000
+            if state.actual_first_audio_at is None:
+                state.actual_first_audio_at = actual_started_at
+
+        def flush_speech() -> None:
+            """Wait for asynchronously dispatched audio and record its timing.
+
+            ``speak`` may be a :class:`~audio.speech_pipeline.SpeechPipeline`,
+            which returns before audio is played. ``state.first_audio_at``
+            therefore measures dispatch (it feeds ``speech_dispatch_ms``) while
+            ``state.actual_first_audio_at`` comes from the timing objects
+            collected here.
+            """
+
+            flush = getattr(speak, "flush", None)
+            if not callable(flush):
+                return
+            try:
+                timings = flush()
+            except Exception as error:
+                raise _SpeechFailure(error) from None
+            for timing in timings or ():
+                record_timing(timing)
+
+        def cancel_pending_speech() -> None:
+            """Drop audio queued for a response that is no longer wanted."""
+
+            cancel = getattr(speak, "cancel", None)
+            if not callable(cancel):
+                return
+            try:
+                cancel()
+            except Exception:
+                logger.debug("Unable to cancel pending speech", exc_info=True)
+
         def speak_fragment(sentence: str) -> None:
             assert speak is not None
             self._raise_if_cancelled(
@@ -582,23 +632,7 @@ class StreamingResponseCoordinator:
             )
             if timing is None:
                 return
-            try:
-                synthesis_ms = float(getattr(timing, "synthesis_ms"))
-                playback_ms = float(getattr(timing, "playback_ms"))
-                duration_ms = float(getattr(timing, "audio_duration_ms"))
-                actual_started_at = float(getattr(timing, "audio_started_at"))
-                if not all(
-                    value >= 0
-                    for value in (synthesis_ms, playback_ms, duration_ms, actual_started_at)
-                ):
-                    return
-            except (AttributeError, TypeError, ValueError):
-                return
-            state.tts_synthesis_seconds += synthesis_ms / 1_000
-            state.audio_playback_seconds += playback_ms / 1_000
-            state.audio_duration_seconds += duration_ms / 1_000
-            if state.actual_first_audio_at is None:
-                state.actual_first_audio_at = actual_started_at
+            record_timing(timing)
 
         iterator: Any = None
         try:
@@ -657,10 +691,14 @@ class StreamingResponseCoordinator:
                         transmitted=True,
                     )
         except _SpeechFailure:
+            cancel_pending_speech()
             raise
         except ProviderError:
+            # Cancellation also arrives here, as ProviderError(CANCELLED).
+            cancel_pending_speech()
             raise
         except Exception:
+            cancel_pending_speech()
             raise ProviderError(
                 ErrorCategory.UNKNOWN,
                 "Language-model stream failed unexpectedly",
@@ -669,6 +707,11 @@ class StreamingResponseCoordinator:
                 retryable_same_provider=False,
                 transmitted=None,
             ) from None
+        except BaseException:
+            # KeyboardInterrupt and friends: queued fragments belong to a
+            # response nobody is waiting for and must not keep playing.
+            cancel_pending_speech()
+            raise
         finally:
             close = getattr(iterator, "close", None)
             if callable(close):
@@ -745,6 +788,9 @@ class StreamingResponseCoordinator:
         if speech_chunker is not None:
             for sentence in speech_chunker.finish():
                 speak_fragment(sentence)
+        # The response is not finished until its audio has actually been played,
+        # otherwise the caller returns to listening while the assistant speaks.
+        flush_speech()
         return StreamingResult(
             text=text,
             metadata=completed,

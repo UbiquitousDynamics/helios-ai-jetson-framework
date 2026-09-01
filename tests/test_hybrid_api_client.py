@@ -282,9 +282,7 @@ def test_codex_to_local_route_change_preserves_canonical_history(tmp_path: Path)
 
 
 def test_local_to_codex_route_change_preserves_canonical_history(tmp_path: Path) -> None:
-    remote = FakeRemoteProvider(
-        [[TextDelta("Venus."), completed("remote", "remote-model")]]
-    )
+    remote = FakeRemoteProvider([[TextDelta("Venus."), completed("remote", "remote-model")]])
     client, _local, _tts = make_client(tmp_path, remote)
     client.connectivity = Connectivity.OFFLINE
 
@@ -341,9 +339,7 @@ def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
 
 
 def test_local_only_turn_cannot_egress_as_later_remote_history(tmp_path: Path) -> None:
-    remote = FakeRemoteProvider(
-        [[TextDelta("Remote."), completed("remote", "remote-model")]]
-    )
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, _tts = make_client(tmp_path, remote)
 
     assert client.talk("private fact", privacy="local_only") == "Local."
@@ -480,11 +476,11 @@ def test_remote_redacted_requires_an_explicit_redaction_attestation(
     )
     llm = replace(
         hybrid_settings(tmp_path),
-            privacy=config.LLMPrivacySettings(
-                default="remote_redacted",
-                allow_remote_transcripts=True,
-                allow_remote_context=True,
-            ),
+        privacy=config.LLMPrivacySettings(
+            default="remote_redacted",
+            allow_remote_transcripts=True,
+            allow_remote_context=True,
+        ),
     )
     local = FakeOllamaClient()
     client = APIClient(

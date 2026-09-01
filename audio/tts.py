@@ -47,6 +47,21 @@ class AudioPlaybackError(TTSError):
 
 
 @dataclass(frozen=True, slots=True)
+class SynthesizedFragment:
+    """Audio rendered ahead of playback, plus the cost of rendering it.
+
+    Splitting synthesis from playback lets a caller render the next fragment
+    while the current one is still audible. ``synthesis_ms`` is carried here so
+    the eventual :class:`SpeechTiming` stays comparable with the synchronous
+    path.
+    """
+
+    text: str
+    wave_bytes: bytes
+    synthesis_ms: float
+
+
+@dataclass(frozen=True, slots=True)
 class SpeechTiming:
     """Content-free timing returned by the production TTS implementation."""
 
@@ -594,6 +609,58 @@ class PiperTTS:
         except Exception as exc:
             raise AudioPlaybackError("Unable to play synthesized audio") from exc
 
+    def synthesize_fragment(self, text: str) -> SynthesizedFragment | None:
+        """Render one fragment to audio without playing it.
+
+        Stage one of the two-stage speech path. This intentionally does not take
+        ``_speech_lock``: holding a single lock across synthesis and playback
+        (as :meth:`speak_with_timing` must, to keep its synchronous contract)
+        forced the next fragment to wait for the current one to finish playing,
+        which is audible as a gap between sentences.
+        """
+
+        if text and text.strip() and not any(character.isalnum() for character in text):
+            logger.debug("Skipping punctuation-only speech fragment")
+            return None
+        self._ensure_open()
+        started_at = self._clock()
+        wave_bytes = self.synthesize_wave(text).getvalue()
+        return SynthesizedFragment(
+            text=text,
+            wave_bytes=wave_bytes,
+            synthesis_ms=(self._clock() - started_at) * 1_000,
+        )
+
+    def play_fragment(self, fragment: SynthesizedFragment) -> SpeechTiming:
+        """Play audio produced by :meth:`synthesize_fragment`.
+
+        Stage two of the two-stage speech path. ``_speech_lock`` is held only
+        for playback, which is what actually has to be serialized to keep
+        fragments in order.
+        """
+
+        with self._speech_lock:
+            self._ensure_open()
+            speech_interrupt = threading.Event()
+            with self._state_lock:
+                self._active_speech_interrupt = speech_interrupt
+            try:
+                playback_ms, audio_duration_ms, audio_started_at = self._play_wave(
+                    io.BytesIO(fragment.wave_bytes),
+                    interrupt_event=speech_interrupt,
+                    playback_text=fragment.text,
+                )
+                return SpeechTiming(
+                    synthesis_ms=fragment.synthesis_ms,
+                    playback_ms=playback_ms,
+                    audio_duration_ms=audio_duration_ms,
+                    audio_started_at=audio_started_at,
+                )
+            finally:
+                with self._state_lock:
+                    if self._active_speech_interrupt is speech_interrupt:
+                        self._active_speech_interrupt = None
+
     def speak_with_timing(self, text: str) -> SpeechTiming | None:
         """Speak text and return content-free synthesis/playback timing."""
 
@@ -630,14 +697,6 @@ class PiperTTS:
         """Speak text while retaining the historical ``None`` return value."""
 
         self.speak_with_timing(text)
-
-    def play_audio(self, filename: str | Path) -> None:
-        """Play a WAV file while retaining the legacy public method."""
-
-        path = Path(filename)
-        if not path.is_file():
-            raise AudioPlaybackError(f"Audio file not found: {path}")
-        self._play_wave(str(path))
 
     def close(self) -> None:
         with self._close_lock:

@@ -290,9 +290,7 @@ class OllamaAdapter:
         self._client_lock = threading.Lock()
         self._client_epoch = 0
         self._client_unusable = False
-        self._cancellation_ack_timeout_seconds = float(
-            cancellation_ack_timeout_seconds
-        )
+        self._cancellation_ack_timeout_seconds = float(cancellation_ack_timeout_seconds)
         self._closed = False
 
     @property

@@ -30,6 +30,8 @@ from api.providers.contracts import (
     TextDelta,
 )
 from api.routing import ProviderRegistry, ProviderTarget
+from audio.speech_pipeline import SpeechPipeline
+from audio.tts import SpeechTiming
 from api.streaming import (
     CancellationController,
     ExecutionTarget,
@@ -777,3 +779,129 @@ def test_exhausted_rate_limit_snapshot_cools_down_the_target() -> None:
     snapshot = health.snapshot(target("first", remote=True).health_key)
     assert not snapshot.available
     assert snapshot.retry_after_seconds is not None
+
+
+class _TwoStageSpeaker:
+    """Minimal stand-in for the two-stage PiperTTS API."""
+
+    def __init__(self, playback_seconds: float = 0.02) -> None:
+        self.playback_seconds = playback_seconds
+        self.played: list[str] = []
+
+    def synthesize_fragment(self, text: str) -> str:
+        return text
+
+    def play_fragment(self, fragment: str) -> SpeechTiming:
+        import time
+
+        started_at = time.monotonic()
+        time.sleep(self.playback_seconds)
+        self.played.append(fragment)
+        return SpeechTiming(
+            synthesis_ms=1.0,
+            playback_ms=self.playback_seconds * 1_000,
+            audio_duration_ms=self.playback_seconds * 1_000,
+            audio_started_at=started_at,
+        )
+
+
+def test_overlapped_speech_is_fully_played_before_the_result_returns() -> None:
+    """The coordinator must not report completion while audio is still queued."""
+
+    provider = FakeProvider(
+        "only",
+        [
+            [
+                TextDelta("Prima frase. "),
+                TextDelta("Seconda frase. "),
+                TextDelta("Terza frase."),
+                completion("only"),
+            ]
+        ],
+    )
+    speaker = _TwoStageSpeaker()
+    pipeline = SpeechPipeline(
+        synthesize=speaker.synthesize_fragment,
+        play=speaker.play_fragment,
+    )
+    runner = coordinator(provider, retry_wait=0)
+
+    try:
+        result = runner.run(
+            request(),
+            (ExecutionTarget(target("only")),),
+            speak=pipeline,
+        )
+    finally:
+        pipeline.close()
+
+    assert result.text == "Prima frase. Seconda frase. Terza frase."
+    # Every dispatched fragment finished playing before run() returned.
+    assert len(speaker.played) == 3
+    # Timing collected at flush still feeds the KPI fields.
+    assert result.actual_first_audio_seconds is not None
+    assert result.audio_duration_seconds > 0
+
+
+def test_overlapped_speech_reports_dispatch_before_actual_audio() -> None:
+    """speech_dispatch_ms measures handoff; actual audio is measured separately."""
+
+    provider = FakeProvider(
+        "only",
+        [[TextDelta("Una frase completa."), completion("only")]],
+    )
+    speaker = _TwoStageSpeaker(playback_seconds=0.05)
+    pipeline = SpeechPipeline(
+        synthesize=speaker.synthesize_fragment,
+        play=speaker.play_fragment,
+    )
+    runner = coordinator(provider, retry_wait=0)
+
+    try:
+        result = runner.run(
+            request(),
+            (ExecutionTarget(target("only")),),
+            speak=pipeline,
+        )
+    finally:
+        pipeline.close()
+
+    assert result.first_audio_seconds is not None
+    assert result.actual_first_audio_seconds is not None
+    # Dispatch happens no later than the audio it dispatches.
+    assert result.first_audio_seconds <= result.actual_first_audio_seconds + 1e-6
+
+
+def test_speech_failure_in_the_pipeline_surfaces_to_the_coordinator() -> None:
+    """A flush failure must behave like an inline speech failure.
+
+    The coordinator re-raises the original speech error rather than retrying,
+    because audio has already been committed to the user.
+    """
+
+    provider = FakeProvider(
+        "only",
+        [[TextDelta("Frase che non si sente."), completion("only")]],
+    )
+
+    def failing_play(_fragment: str) -> SpeechTiming:
+        raise RuntimeError("uscita audio assente")
+
+    pipeline = SpeechPipeline(
+        synthesize=lambda text: text,
+        play=failing_play,
+    )
+    runner = coordinator(provider, retry_wait=0)
+
+    try:
+        with pytest.raises(RuntimeError, match="uscita audio assente"):
+            runner.run(
+                request(),
+                (ExecutionTarget(target("only")),),
+                speak=pipeline,
+            )
+    finally:
+        pipeline.close()
+
+    # No fallback attempt was made after speech had been committed.
+    assert len(provider.calls) == 1
