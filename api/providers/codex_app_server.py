@@ -472,11 +472,7 @@ class CodexAppServerAdapter:
                 transmitted=False,
             ) from None
         with self._runtime_lock:
-            valid = (
-                not self._closed
-                and not self._runtime_unusable
-                and self._runtime is runtime
-            )
+            valid = not self._closed and not self._runtime_unusable and self._runtime is runtime
         if not valid:
             raise self._error(
                 ErrorCategory.PROVIDER_UNAVAILABLE,
@@ -710,8 +706,7 @@ class CodexAppServerAdapter:
                 else "thread_start"
             )
             logger.info(
-                "conversation_session=%s turn=%s provider=%s action=%s "
-                "thread=%s reason=%s",
+                "conversation_session=%s turn=%s provider=%s action=%s thread=%s reason=%s",
                 _safe_identifier(request.conversation_id),
                 request.conversation_turn,
                 self.identity.name,
@@ -775,8 +770,7 @@ class CodexAppServerAdapter:
             if key != "__default_conversation__":
                 self._clear_mirrored_thread(key, state.invalid_reason)
             logger.info(
-                "conversation_session=%s turn=%s provider=%s "
-                "event=thread_invalidated reason=%s",
+                "conversation_session=%s turn=%s provider=%s event=thread_invalidated reason=%s",
                 _safe_identifier(request.conversation_id),
                 request.conversation_turn,
                 self.identity.name,
@@ -843,10 +837,7 @@ class CodexAppServerAdapter:
             state = self._context_states.get(key)
             if state is None:
                 return
-            if (
-                conversation_turn is not None
-                and state.synced_turn < conversation_turn
-            ):
+            if conversation_turn is not None and state.synced_turn < conversation_turn:
                 return
             state.thread_id = None
             state.turn_count = 0
@@ -856,8 +847,7 @@ class CodexAppServerAdapter:
             self._context_states.move_to_end(key)
         self._clear_mirrored_thread(key, reason)
         logger.info(
-            "conversation_session=%s turn=%s provider=%s "
-            "event=thread_invalidated reason=%s",
+            "conversation_session=%s turn=%s provider=%s event=thread_invalidated reason=%s",
             _safe_identifier(key),
             conversation_turn,
             self.identity.name,
