@@ -78,9 +78,7 @@ class ChatMessage:
         if not isinstance(self.remote_eligible, bool):
             raise TypeError("remote_eligible must be a boolean")
         try:
-            normalized_origins = frozenset(
-                ContentOrigin(origin) for origin in self.source_origins
-            )
+            normalized_origins = frozenset(ContentOrigin(origin) for origin in self.source_origins)
         except (TypeError, ValueError):
             raise ValueError("source_origins contains an invalid provenance") from None
         object.__setattr__(self, "source_origins", normalized_origins)

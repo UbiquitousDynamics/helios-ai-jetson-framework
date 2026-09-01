@@ -103,9 +103,10 @@ def _content_safe_jsonl_sink(
         cutoff = now - timedelta(days=retention_days)
         temporary = path.with_name(path.name + ".retention.tmp")
         try:
-            with path.open("rb") as source, temporary.open(
-                "w", encoding="utf-8", newline="\n"
-            ) as destination:
+            with (
+                path.open("rb") as source,
+                temporary.open("w", encoding="utf-8", newline="\n") as destination,
+            ):
                 record = source.readline()
                 while record:
                     next_record = source.readline()
@@ -1317,8 +1318,7 @@ class APIClient:
             }
             selected_route = executions[0].route
             logger.info(
-                "conversation_session=%s turn=%s event=llm_route_selected "
-                "provider=%s route=%s",
+                "conversation_session=%s turn=%s event=llm_route_selected provider=%s route=%s",
                 safe_conversation_identifier(conversation_id),
                 conversation_turn,
                 selected_route.provider,
@@ -1632,8 +1632,7 @@ class APIClient:
                 forget(conversation_id, reason=reason)
             except Exception:
                 logger.warning(
-                    "Unable to forget provider conversation "
-                    "(provider=%s, conversation_session=%s)",
+                    "Unable to forget provider conversation (provider=%s, conversation_session=%s)",
                     provider.identity.name,
                     safe_conversation_identifier(conversation_id),
                     exc_info=True,
