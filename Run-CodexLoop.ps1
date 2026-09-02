@@ -121,10 +121,42 @@ function Invoke-Codex {
     <#
         Single place where Codex is launched, so the executable path cannot
         drift between the probe and the loop.
+
+        ErrorActionPreference is relaxed for the duration of the call. With
+        "Stop" in effect, `2>&1` turns every stderr line from a native command
+        into a terminating ErrorRecord -- and Codex writes progress and
+        warnings to stderr as a matter of course, so the script would abort on
+        output that is not an error at all. The exit code is what decides
+        success here, not the presence of stderr.
     #>
     param([string[]] $CodexArgs)
 
-    & $script:CodexExe @CodexArgs 2>&1
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $script:CodexExe @CodexArgs 2>&1
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+function Invoke-Gate {
+    <#
+        Runs the test command with the same stderr relaxation, and returns its
+        exit code. pytest and ruff both write to stderr on occasion.
+    #>
+    param([string] $Command)
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        Invoke-Expression $Command 2>&1 | Out-Null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
 }
 
 function Restore-StartBranch {
@@ -222,8 +254,8 @@ if (-not $SkipWriteProbe) {
 
 if ($TestCommand) {
     Write-Log "Establishing test baseline: $TestCommand"
-    Invoke-Expression $TestCommand | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    $gateExit = Invoke-Gate -Command $TestCommand
+    if ($gateExit -ne 0) {
         Write-Log "Baseline tests already fail. Fix that before starting a loop." "ERROR"
         Restore-StartBranch -Original $startBranch -Created $branch
         exit 3
@@ -307,8 +339,8 @@ something pass.
     # Independent verification. Never trust the agent's own report that tests pass.
     if ($TestCommand) {
         Write-Log "Verifying: $TestCommand"
-        Invoke-Expression $TestCommand | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        $gateExit = Invoke-Gate -Command $TestCommand
+        if ($gateExit -ne 0) {
             Write-Log "Tests FAIL after iteration $iteration. Stopping." "ERROR"
             Write-Log "Inspect with: git -C `"$RepoPath`" log --oneline $startBranch..$branch" "ERROR"
             break
