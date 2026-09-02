@@ -262,8 +262,21 @@ Follow AGENTS.md. Do not batch unrelated changes. Do not modify tests to make
 something pass.
 "@
 
-    $output = Invoke-Codex @("exec", "--json", "--sandbox", $Sandbox, $prompt)
-    $exit   = $LASTEXITCODE
+    # --output-last-message isolates the agent's final message. Matching the
+    # markers against the full JSONL stream would be wrong: that stream echoes
+    # the prompt, and the prompt names all three markers, so PLAN_COMPLETE
+    # would match on the first iteration every time.
+    $lastMessageFile = Join-Path $logDir "last-message-$stamp-$iteration.txt"
+
+    $output = Invoke-Codex @(
+        "exec",
+        "--json",
+        "--sandbox", $Sandbox,
+        "-C", $RepoPath,
+        "-o", $lastMessageFile,
+        $prompt
+    )
+    $exit = $LASTEXITCODE
     Add-Content -Path $logFile -Value $output -Encoding utf8
 
     if ($exit -ne 0) {
@@ -271,7 +284,11 @@ something pass.
         break
     }
 
-    $text = $output -join "`n"
+    if (-not (Test-Path $lastMessageFile)) {
+        Write-Log "No final message written; cannot tell what happened. Stopping." "WARN"
+        break
+    }
+    $text = (Get-Content $lastMessageFile -Raw)
 
     if ($text -match "PLAN_COMPLETE") {
         Write-Log "Plan reports complete."
