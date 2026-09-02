@@ -44,6 +44,13 @@ The login command prints a verification URL and one-time code. Open the URL on
 any browser, enter the code, and complete the ChatGPT sign-in. No API key is
 needed. The official dependency includes an ARM64 Codex runtime for Jetson.
 
+Helios stores this session in `~/.helios-codex/auth.json` by default. That
+directory contains only the authentication profile, not your regular Codex
+configuration, MCP servers, or tools. It is intentionally persistent because
+Codex refresh tokens rotate: copying them to a temporary runtime would make
+the next runtime unable to refresh. Set `HELIOS_CODEX_AUTH_HOME` only when a
+different private, persistent location is required.
+
 Check the resulting authentication method and the model catalog:
 
 ```bash

@@ -93,12 +93,13 @@ class RecordingCodexRuntime:
         pass
 
 
-def codex_provider_settings() -> config.LLMProviderSettings:
+def codex_provider_settings(*, reuse_remote_thread: bool = True) -> config.LLMProviderSettings:
     return config.LLMProviderSettings(
         name="openai-codex",
         adapter="codex_app_server",
         endpoint="stdio://codex",
         locality="remote",
+        reuse_remote_thread=reuse_remote_thread,
     )
 
 
@@ -106,6 +107,7 @@ def codex_routing_settings(
     tmp_path: Path,
     *,
     allow_remote_context: bool = True,
+    reuse_remote_thread: bool = True,
     idle_timeout: float = 37.5,
     max_turns: int = 9,
 ) -> config.LLMSettings:
@@ -123,7 +125,7 @@ def codex_routing_settings(
         budget=config.LLMBudgetSettings(enabled=False),
         observability=config.LLMObservabilitySettings(metrics_enabled=False),
         talk=config.LLMModeSettings(candidates=("codex-talk", "local-talk")),
-        providers=(codex_provider_settings(),),
+        providers=(codex_provider_settings(reuse_remote_thread=reuse_remote_thread),),
         targets=(
             config.LLMTargetSettings(
                 name="codex-talk",
@@ -192,7 +194,7 @@ def test_invalid_context_lifecycle_environment_fails_remote_routing_closed(
 
 def test_codex_provider_factory_forwards_context_lifecycle_knobs() -> None:
     factory = configured_provider_factory(
-        codex_provider_settings(),
+        codex_provider_settings(reuse_remote_thread=False),
         allow_remote_context=True,
         context_idle_timeout_seconds=81.25,
         context_max_turns=13,
@@ -203,6 +205,7 @@ def test_codex_provider_factory_forwards_context_lifecycle_knobs() -> None:
     try:
         assert isinstance(provider, CodexAppServerAdapter)
         assert provider._allow_remote_context is True
+        assert provider._reuse_remote_thread is False
         assert provider._context_idle_timeout_seconds == 81.25
         assert provider._context_max_turns == 13
         assert provider._runtime is None
@@ -219,6 +222,7 @@ def test_api_client_forwards_privacy_and_lifecycle_settings_to_lazy_codex_adapte
         llm_settings=codex_routing_settings(
             tmp_path,
             allow_remote_context=True,
+            reuse_remote_thread=False,
             idle_timeout=53.5,
             max_turns=11,
         ),
@@ -229,6 +233,7 @@ def test_api_client_forwards_privacy_and_lifecycle_settings_to_lazy_codex_adapte
 
         assert isinstance(provider, CodexAppServerAdapter)
         assert provider._allow_remote_context is True
+        assert provider._reuse_remote_thread is False
         assert provider._context_idle_timeout_seconds == 53.5
         assert provider._context_max_turns == 11
         assert provider._runtime is None

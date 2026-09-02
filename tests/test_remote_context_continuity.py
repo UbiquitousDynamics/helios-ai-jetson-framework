@@ -179,6 +179,37 @@ def test_opt_in_context_resumes_the_same_ephemeral_thread() -> None:
     assert "[user]\nDue" in runtime.calls[1]["prompt"]
 
 
+def test_context_history_can_use_fresh_threads_when_resume_is_disabled() -> None:
+    runtime = FakeRuntime()
+    provider = CodexAppServerAdapter(
+        "openai-codex",
+        runtime=runtime,
+        allow_remote_context=True,
+        reuse_remote_thread=False,
+    )
+    first_user = ChatMessage(Role.USER, "Name three planets", ContentOrigin.RAW_TRANSCRIPT)
+    historical_user = ChatMessage(
+        Role.USER,
+        "Name three planets",
+        ContentOrigin.CONVERSATION_HISTORY,
+    )
+    first_answer = ChatMessage(
+        Role.ASSISTANT,
+        "Mercury, Venus, Earth",
+        ContentOrigin.CONVERSATION_HISTORY,
+    )
+    second_user = ChatMessage(Role.USER, "Only the second", ContentOrigin.RAW_TRANSCRIPT)
+
+    response_text(provider, contextual_request(1, (first_user,)))
+    response_text(provider, contextual_request(2, (historical_user, first_answer, second_user)))
+
+    assert [call["operation"] for call in runtime.calls] == ["start", "start"]
+    assert all("thread_id" not in call for call in runtime.calls)
+    assert "Name three planets" in runtime.calls[1]["prompt"]
+    assert "Mercury, Venus, Earth" in runtime.calls[1]["prompt"]
+    assert "Only the second" in runtime.calls[1]["prompt"]
+
+
 def test_context_state_registry_is_lru_bounded_across_logical_sessions() -> None:
     runtime = FakeRuntime()
     provider = CodexAppServerAdapter(
@@ -635,6 +666,7 @@ def test_model_switch_on_resumed_thread_is_forwarded_without_warning_output() ->
     ("overrides", "error", "message"),
     [
         ({"allow_remote_context": "true"}, TypeError, "allow_remote_context"),
+        ({"reuse_remote_thread": "true"}, TypeError, "reuse_remote_thread"),
         ({"context_idle_timeout_seconds": 0}, ValueError, "idle_timeout"),
         ({"context_idle_timeout_seconds": float("inf")}, ValueError, "idle_timeout"),
         ({"context_max_turns": 0}, ValueError, "max_turns"),
@@ -720,6 +752,7 @@ def test_official_runtime_uses_start_then_resume_with_per_turn_model(
     start = next(value for operation, value in calls if operation == "thread_start")
     resume = next(value for operation, value in calls if operation == "thread_resume")
     turns = [value for operation, value in calls if operation == "turn"]
+    runtime_config = next(value for operation, value in calls if operation == "config")
     assert start["ephemeral"] is True
     assert start["model"] == "gpt-5.6-luna"
     assert "model" not in turns[0]
@@ -727,3 +760,4 @@ def test_official_runtime_uses_start_then_resume_with_per_turn_model(
     assert resume["model"] == "gpt-5.6-sol"
     assert turns[1]["model"] == "gpt-5.6-sol"
     assert turns[1]["service_tier"] == "priority"
+    assert runtime_config["env"]["CODEX_HOME"] == str(tmp_path / ".helios-codex")

@@ -57,12 +57,16 @@ _HYBRID_SYSTEM_INSTRUCTIONS = {
         "Sei Emilia, il veicolo solare dotato di intelligenza artificiale. "
         "Rispondi sempre in italiano, direttamente e con precisione. "
         "Non usare Markdown nella conversazione vocale. "
+        "Questa installazione non ha strumenti per controllare dispositivi fisici: "
+        "non dichiarare mai di aver acceso, spento o modificato qualcosa nel mondo reale. "
         "Quando puoi fare una scelta ragionevole, falla invece di chiedere chiarimenti."
     ),
     "en": (
         "You are Emilia, the solar vehicle with artificial intelligence. "
         "Always answer in English, directly and precisely. "
         "Do not use Markdown in voice conversation. "
+        "This installation has no tools to control physical devices: never claim to have "
+        "turned on, turned off, or changed anything in the real world. "
         "When you can make a reasonable choice, make it instead of asking for clarification."
     ),
 }
@@ -1427,6 +1431,9 @@ class APIClient:
                 before_first_speech=before_first_speech if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
                 speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
+                speech_chunk_max_delay_seconds=(
+                    self._mode_settings(mode).speech_chunk_max_delay_seconds
+                ),
                 maximum_first_audio_seconds=(
                     self.llm_settings.health.maximum_talk_first_audio_ms / 1_000
                     if mode == "talk" and speak
@@ -1492,6 +1499,16 @@ class APIClient:
                 first_audio_ms=request_relative(result.first_audio_seconds),
                 speech_dispatch_ms=request_relative(result.first_audio_seconds),
                 actual_first_audio_ms=request_relative(result.actual_first_audio_seconds),
+                streaming_lead_ms=(
+                    max(
+                        0.0,
+                        request_latency_ms
+                        - request_relative(result.actual_first_audio_seconds),
+                    )
+                    if result.actual_first_audio_seconds is not None
+                    and request_relative(result.actual_first_audio_seconds) is not None
+                    else None
+                ),
                 tts_synthesis_ms=result.tts_synthesis_seconds * 1_000 or None,
                 audio_playback_ms=result.audio_playback_seconds * 1_000 or None,
                 audio_duration_ms=result.audio_duration_seconds * 1_000 or None,

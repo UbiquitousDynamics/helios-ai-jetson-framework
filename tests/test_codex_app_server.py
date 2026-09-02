@@ -11,7 +11,12 @@ import pytest
 import config
 from api.api_client import APIClient
 from api.providers.codex_app_server import CodexAppServerAdapter
-from api.providers.codex_session import codex_child_environment, copy_chatgpt_auth
+from api.providers.codex_session import (
+    codex_child_environment,
+    copy_chatgpt_auth,
+    ensure_persistent_chatgpt_auth,
+    persistent_codex_auth_home,
+)
 from api.providers.contracts import (
     ChatMessage,
     ChatRequest,
@@ -141,6 +146,22 @@ def test_isolated_codex_home_copies_auth_but_not_user_configuration(
     assert not (isolated / "config.toml").exists()
     child_env = codex_child_environment(isolated)
     assert child_env["CODEX_HOME"] == str(isolated)
+
+
+def test_persistent_auth_home_bootstraps_once_without_user_configuration(tmp_path: Path) -> None:
+    source = tmp_path / ".codex"
+    source.mkdir()
+    (source / "auth.json").write_text('{"refresh_token":"first"}', encoding="utf-8")
+    (source / "config.toml").write_text("[mcp_servers.unsafe]", encoding="utf-8")
+
+    auth_home = persistent_codex_auth_home(source)
+    ensure_persistent_chatgpt_auth(source, auth_home)
+    (source / "auth.json").write_text('{"refresh_token":"second"}', encoding="utf-8")
+    ensure_persistent_chatgpt_auth(source, auth_home)
+
+    assert auth_home == tmp_path / ".helios-codex"
+    assert (auth_home / "auth.json").read_text(encoding="utf-8") == ('{"refresh_token":"first"}')
+    assert not (auth_home / "config.toml").exists()
 
 
 @pytest.mark.parametrize("account_kind", [None, "apiKey"])

@@ -185,6 +185,50 @@ def test_empty_wake_and_think_commands_are_ignored() -> None:
     assert api.think_messages == []
 
 
+def test_wake_only_utterance_activates_and_acknowledges_the_conversation() -> None:
+    assistant, tts, api, _sounds, _recognizer = make_assistant(
+        [
+            RecognitionResult("Emilia", is_final=True),
+            RecognitionResult("dimmi qualcosa", is_final=True),
+        ]
+    )
+
+    assert assistant.run_once() is True
+    assert assistant.conversation_state.name == "LISTENING"
+    assert tts.spoken == ["Certo."]
+    assert api.messages == []
+
+    assert assistant.run_once() is True
+    assert api.messages == ["dimmi qualcosa"]
+    assistant.close()
+
+
+def test_first_wake_command_is_acknowledged_before_model_processing() -> None:
+    class PreloadedTTS(FakeTTS):
+        def speak_preloaded(self, phrase: str, *, cancellation: object | None = None) -> bool:
+            del cancellation
+            self.spoken.append(phrase)
+            return True
+
+    tts = PreloadedTTS()
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(project_root=config.PROJECT_ROOT, language="it"),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=FakeRecognizer(
+            [RecognitionResult("Emilia, dimmi qualcosa", is_final=True)]
+        ),
+        sound_executor=ImmediateExecutor(),
+    )
+
+    assert assistant.run_once() is True
+    assert tts.spoken == ["Certo."]
+    assert api.messages == ["dimmi qualcosa"]
+    assistant.close()
+
+
 def test_partial_recognition_is_not_executed() -> None:
     assistant, _tts, api, _sounds, _recognizer = make_assistant(
         [RecognitionResult("emilia dimmi qualcosa", is_final=False)]
@@ -344,7 +388,7 @@ def test_stop_cancels_the_active_model_stream() -> None:
     assert api.cancelled
 
 
-def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
+def test_run_prepares_models_before_startup_greeting() -> None:
     assistant, tts, api, _sounds, recognizer = make_assistant([])
 
     assistant.run(max_iterations=0)
@@ -359,21 +403,29 @@ def test_run_prepares_remote_while_startup_greeting_is_spoken() -> None:
     ]
 
 
-def test_run_finishes_backchannel_preload_before_first_listen() -> None:
+def test_run_waits_for_startup_tts_preload_before_first_listen() -> None:
     events: list[str] = []
+    listening = threading.Event()
 
     class PreloadingTTS(FakeTTS):
         def speak(self, text: str) -> None:
-            del text
+            assert text == assistant.profile.welcome_message.format(
+                wake_word=assistant.profile.wake_word,
+            )
             events.append("welcome")
 
         def preload_phrases(self, phrases: tuple[str, ...]) -> None:
-            assert phrases == ("Certo.", "Un momento.", "Vediamo.")
-            events.append("preload")
+            assert phrases[0] == assistant.profile.welcome_message.format(
+                wake_word=assistant.profile.wake_word,
+            )
+            assert phrases[1:4] == ("Certo.", "Un momento.", "Vediamo.")
+            events.append("preload_started")
+            events.append("preload_finished")
 
     class OrderingRecognizer(FakeRecognizer):
         def listen_once(self, timeout: float) -> RecognitionResult | None:
             events.append("listen")
+            listening.set()
             return super().listen_once(timeout)
 
     assistant = VoiceAssistant(
@@ -392,10 +444,11 @@ def test_run_finishes_backchannel_preload_before_first_listen() -> None:
 
     assistant.run(max_iterations=1)
 
-    assert events == ["welcome", "preload", "listen"]
+    assert events.index("preload_finished") < events.index("welcome")
+    assert events.index("welcome") < events.index("listen")
 
 
-def test_run_preloads_backchannels_on_main_thread_with_shutdown_token() -> None:
+def test_run_preloads_startup_speech_on_main_thread_with_shutdown_token() -> None:
     calling_thread = threading.get_ident()
     observations: list[tuple[int, bool]] = []
 
@@ -427,7 +480,9 @@ def test_run_preloads_backchannels_on_main_thread_with_shutdown_token() -> None:
 
     assistant.run(max_iterations=0)
 
-    assert observations == [(calling_thread, False)]
+    assert len(observations) == 1
+    assert observations[0][0] == calling_thread
+    assert observations[0][1] is False
 
 
 def test_close_cancels_in_flight_response_before_joining_owned_executor() -> None:
@@ -1210,6 +1265,170 @@ def test_high_energy_explicit_short_final_interrupts_playback(command: str) -> N
     response: Future[str] = Future()
 
     assert assistant._listen_for_barge_in(response) == command
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_high_confidence_wake_word_interrupts_playback() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata continua."
+
+    class WakeRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "Emilia",
+                is_final=True,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+                confidence=0.9,
+                speech_duration_seconds=0.25,
+                segment_peak_energy=0.2,
+            )
+
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=SpeakingTTS(),
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=WakeRecognizer([]),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.2,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "Emilia"
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_stale_segment_at_playback_start_reopens_capture_for_user_speech() -> None:
+    class StartingTTS(FakeTTS):
+        is_speaking = False
+        active_playback_started_at = None
+        active_playback_text = "Una risposta non correlata continua."
+
+    class RestartingRecognizer(FakeRecognizer):
+        def __init__(self, tts: StartingTTS) -> None:
+            super().__init__([])
+            self.tts = tts
+            self.calls = 0
+
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            self.calls += 1
+            if self.calls == 1:
+                self.tts.is_speaking = True
+                self.tts.active_playback_started_at = 10.0
+                yield RecognitionResult(
+                    "vecchia ipotesi ambientale",
+                    is_final=False,
+                    frame_energy=0.3,
+                    segment_id=1,
+                    segment_started_at=9.5,
+                    energy_reemit=True,
+                )
+                pytest.fail("the stale capture session should have been closed")
+            else:
+                common = {
+                    "frame_energy": 0.2,
+                    "segment_id": 1,
+                    "segment_started_at": 10.2,
+                    "confidence": 0.9,
+                    "speech_duration_seconds": 0.5,
+                    "segment_peak_energy": 0.2,
+                }
+                yield RecognitionResult(
+                    "Emilia nuova domanda",
+                    is_final=False,
+                    **common,
+                )
+                yield RecognitionResult(
+                    "Emilia nuova domanda adesso",
+                    is_final=True,
+                    **common,
+                )
+
+    tts = StartingTTS()
+    recognizer = RestartingRecognizer(tts)
+    api = FakeAPI()
+    observed = iter((10.1, 10.3, 10.6))
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=recognizer,
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: next(observed),
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "Emilia nuova domanda adesso"
+    assert recognizer.calls == 2
+    assert api.cancelled is True
+    response.cancel()
+    assistant.close()
+
+
+def test_strong_final_can_interrupt_after_vosk_revises_the_partial() -> None:
+    class SpeakingTTS(FakeTTS):
+        is_speaking = True
+        active_playback_started_at = 10.0
+        active_playback_text = "Una risposta non correlata continua."
+
+    class RevisedRecognizer(FakeRecognizer):
+        def listen_events(self, timeout: float | None, *, stop_event: object):
+            assert timeout is None
+            yield RecognitionResult(
+                "ipotesi ambientale precedente",
+                is_final=False,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+            )
+            yield RecognitionResult(
+                "accendi la luce del soggiorno",
+                is_final=True,
+                frame_energy=0.2,
+                segment_id=1,
+                segment_started_at=10.1,
+                confidence=0.9,
+                speech_duration_seconds=0.8,
+                segment_peak_energy=0.2,
+            )
+
+    tts = SpeakingTTS()
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(
+            project_root=config.PROJECT_ROOT,
+            barge_in_enabled=True,
+        ),
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        api_client=api,
+        speech_recognizer=RevisedRecognizer([]),
+        barge_in_detector=BargeInDetector(minimum_active_seconds=0.0),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: 10.2,
+    )
+    response: Future[str] = Future()
+
+    assert assistant._listen_for_barge_in(response) == "accendi la luce del soggiorno"
     assert api.cancelled is True
     response.cancel()
     assistant.close()

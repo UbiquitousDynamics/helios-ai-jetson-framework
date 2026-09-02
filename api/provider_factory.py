@@ -46,6 +46,7 @@ def configured_provider_factory(
                 provider=settings.name,
                 endpoint=settings.endpoint,
                 allow_remote_context=allow_remote_context,
+                reuse_remote_thread=settings.reuse_remote_thread,
                 context_idle_timeout_seconds=context_idle_timeout_seconds,
                 context_max_turns=context_max_turns,
                 conversation_session=conversation_session,
