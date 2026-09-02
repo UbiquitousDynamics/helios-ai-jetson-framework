@@ -87,6 +87,7 @@ def test_catalog_and_mode_caps_are_applied_while_preserving_priority() -> None:
                 context_window=999,
                 max_output_tokens=128,
                 max_output_words=50,
+                max_history_turns=2,
                 min_complexity_score=3,
                 retry_attempts=2,
                 options=(("reasoning_effort", "low"),),
@@ -110,6 +111,7 @@ def test_catalog_and_mode_caps_are_applied_while_preserving_priority() -> None:
     assert remote.route.max_output_tokens == 32
     assert remote.max_output_tokens == 32
     assert remote.max_output_words == 50
+    assert remote.max_history_turns == 2
     assert remote.retry_attempts == 2
     assert remote.options == {"reasoning_effort": "low"}
     assert remote.price is catalog.get("remote/example")

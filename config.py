@@ -364,6 +364,7 @@ class LLMModeSettings:
     complexity_threshold: int = 2
     first_speech_min_chars: int = 0
     speech_chunk_max_chars: int = 0
+    speech_chunk_max_delay_seconds: float = 0.0
     first_visible_token_seconds: float | None = None
 
     def __post_init__(self) -> None:
@@ -375,6 +376,15 @@ class LLMModeSettings:
             raise ConfigurationError("first_speech_min_chars cannot be negative")
         if self.speech_chunk_max_chars < 0:
             raise ConfigurationError("speech_chunk_max_chars cannot be negative")
+        if (
+            isinstance(self.speech_chunk_max_delay_seconds, bool)
+            or not isinstance(self.speech_chunk_max_delay_seconds, (int, float))
+            or not math.isfinite(float(self.speech_chunk_max_delay_seconds))
+            or self.speech_chunk_max_delay_seconds < 0
+        ):
+            raise ConfigurationError(
+                "speech_chunk_max_delay_seconds must be finite and non-negative"
+            )
         if self.first_visible_token_seconds is not None and (
             isinstance(self.first_visible_token_seconds, bool)
             or not isinstance(self.first_visible_token_seconds, (int, float))
@@ -395,6 +405,11 @@ class LLMProviderSettings:
     api_key_env: str | None = None
     enabled: bool = True
     internal_retries: int = 0
+    # Only the Codex app-server consumes this setting. Keeping the transport
+    # choice separate from ``privacy.allow_remote_context`` means a user can
+    # authorize canonical Helios history without depending on a provider-side
+    # conversation checkpoint.
+    reuse_remote_thread: bool = True
 
     def __post_init__(self) -> None:
         if not self.name or not self.adapter or not self.endpoint:
@@ -425,6 +440,8 @@ class LLMProviderSettings:
             raise ConfigurationError("remote providers require an API-key environment name")
         if self.internal_retries != 0:
             raise ConfigurationError("provider-internal retries must be disabled")
+        if not isinstance(self.reuse_remote_thread, bool):
+            raise ConfigurationError("reuse_remote_thread must be a boolean")
 
         parsed = urlsplit(self.endpoint)
         if not parsed.hostname:
@@ -464,6 +481,7 @@ class LLMTargetSettings:
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
     tier: str | None = None
+    max_history_turns: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.provider:
@@ -484,6 +502,12 @@ class LLMTargetSettings:
             or self.max_output_words < 1
         ):
             raise ConfigurationError("target max_output_words must be a positive integer")
+        if self.max_history_turns is not None and (
+            isinstance(self.max_history_turns, bool)
+            or not isinstance(self.max_history_turns, int)
+            or self.max_history_turns < 1
+        ):
+            raise ConfigurationError("target max_history_turns must be a positive integer")
         if self.min_complexity_score is not None and (
             isinstance(self.min_complexity_score, bool)
             or not isinstance(self.min_complexity_score, int)
@@ -1046,7 +1070,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "privacy.allow_remote_transcripts",
         ),
         allow_remote_context=_toml_bool(
-            privacy_table.get("allow_remote_context", True),
+            privacy_table.get("allow_remote_context", False),
             "privacy.allow_remote_context",
         ),
         allow_remote_rag_context=_toml_bool(
@@ -1289,6 +1313,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "complexity_threshold",
                 "first_speech_min_chars",
                 "speech_chunk_max_chars",
+                "speech_chunk_max_delay_seconds",
                 "first_visible_token_seconds",
             },
             f"modes.{name}",
@@ -1310,6 +1335,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             speech_chunk_max_chars=_toml_int(
                 mode.get("speech_chunk_max_chars", 0),
                 f"modes.{name}.speech_chunk_max_chars",
+            ),
+            speech_chunk_max_delay_seconds=(
+                _toml_float(
+                    mode["speech_chunk_max_delay_seconds"],
+                    f"modes.{name}.speech_chunk_max_delay_seconds",
+                )
+                if "speech_chunk_max_delay_seconds" in mode
+                else 0.0
             ),
             first_visible_token_seconds=(
                 _toml_float(
@@ -1336,6 +1369,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "api_key_env",
                 "enabled",
                 "internal_retries",
+                "reuse_remote_thread",
             },
             f"providers.{name}",
         )
@@ -1370,6 +1404,10 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                     provider.get("internal_retries", 0),
                     f"providers.{name}.internal_retries",
                 ),
+                reuse_remote_thread=_toml_bool(
+                    provider.get("reuse_remote_thread", True),
+                    f"providers.{name}.reuse_remote_thread",
+                ),
             )
         )
 
@@ -1391,6 +1429,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "context_window",
                 "max_output_tokens",
                 "max_output_words",
+                "max_history_turns",
                 "min_complexity_score",
                 "retry_attempts",
                 "options",
@@ -1464,6 +1503,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                         f"targets.{name}.max_output_words",
                     )
                     if "max_output_words" in target
+                    else None
+                ),
+                max_history_turns=(
+                    _toml_int(
+                        target["max_history_turns"],
+                        f"targets.{name}.max_history_turns",
+                    )
+                    if "max_history_turns" in target
                     else None
                 ),
                 min_complexity_score=(

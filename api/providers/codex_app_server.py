@@ -42,7 +42,9 @@ from api.providers.codex_session import (
     CODEX_DISABLED_FEATURES,
     codex_child_environment,
     copy_chatgpt_auth,
+    ensure_persistent_chatgpt_auth,
     field_value,
+    persistent_codex_auth_home,
 )
 
 if TYPE_CHECKING:
@@ -55,6 +57,7 @@ _ALLOWED_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh
 _DISABLED_CODEX_FEATURES = CODEX_DISABLED_FEATURES
 _codex_child_env = codex_child_environment
 _copy_chatgpt_auth = copy_chatgpt_auth
+_ensure_persistent_chatgpt_auth = ensure_persistent_chatgpt_auth
 _field = field_value
 _BASE_INSTRUCTIONS = """\
 You are the remote language-model backend for the Helios voice assistant.
@@ -118,9 +121,9 @@ class _OfficialCodexRuntime:
         root = Path(self._workspace.name)
         self._working_directory = root / "workspace"
         self._working_directory.mkdir(mode=0o700)
-        self._codex_home = root / "codex-home"
         source_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
-        copy_chatgpt_auth(source_home, self._codex_home)
+        self._codex_home = persistent_codex_auth_home(source_home)
+        ensure_persistent_chatgpt_auth(source_home, self._codex_home)
         config = CodexConfig(
             cwd=str(self._working_directory),
             env=codex_child_environment(self._codex_home),
@@ -301,6 +304,7 @@ class CodexAppServerAdapter:
         runtime_factory: Callable[[], _Runtime] | None = None,
         clock: Callable[[], float] = time.monotonic,
         allow_remote_context: bool = False,
+        reuse_remote_thread: bool = True,
         context_idle_timeout_seconds: float = 900.0,
         context_max_turns: int = 20,
         context_state_limit: int = 64,
@@ -315,6 +319,8 @@ class CodexAppServerAdapter:
             raise ValueError("pass either runtime or runtime_factory, not both")
         if not isinstance(allow_remote_context, bool):
             raise TypeError("allow_remote_context must be a boolean")
+        if not isinstance(reuse_remote_thread, bool):
+            raise TypeError("reuse_remote_thread must be a boolean")
         if (
             isinstance(context_idle_timeout_seconds, bool)
             or not isinstance(context_idle_timeout_seconds, (int, float))
@@ -359,6 +365,7 @@ class CodexAppServerAdapter:
         self._verified_runtime: _Runtime | None = None
         self._clock = clock
         self._allow_remote_context = allow_remote_context
+        self._reuse_remote_thread = reuse_remote_thread
         self._context_idle_timeout_seconds = float(context_idle_timeout_seconds)
         self._context_max_turns = context_max_turns
         self._context_state_limit = context_state_limit
@@ -368,10 +375,11 @@ class CodexAppServerAdapter:
         self._context_states: OrderedDict[str, _ContextState] = OrderedDict()
         self._closed = False
         logger.info(
-            "provider=%s event=remote_context_configured enabled=%s "
-            "idle_timeout_seconds=%s max_turns=%s",
+            "provider=%s event=remote_context_configured history_enabled=%s "
+            "reuse_remote_thread=%s idle_timeout_seconds=%s max_turns=%s",
             provider,
             allow_remote_context,
+            reuse_remote_thread,
             self._context_idle_timeout_seconds,
             self._context_max_turns,
         )
@@ -379,6 +387,12 @@ class CodexAppServerAdapter:
             logger.warning(
                 "provider=%s event=remote_context_disabled "
                 "reason=privacy_policy_each_request_uses_a_fresh_thread",
+                provider,
+            )
+        elif not reuse_remote_thread:
+            logger.info(
+                "provider=%s event=remote_thread_reuse_disabled "
+                "reason=canonical_history_is_sent_in_fresh_threads",
                 provider,
             )
 
@@ -784,7 +798,7 @@ class CodexAppServerAdapter:
         cancellation: CancellationToken | None = None,
     ) -> Iterator[StreamEvent]:
         self._preflight(request)
-        if not self._allow_remote_context:
+        if not self._allow_remote_context or not self._reuse_remote_thread:
             yield from self._stream_attempt(request, cancellation=cancellation)
             return
 
@@ -1055,10 +1069,33 @@ class CodexAppServerAdapter:
                 )
             if kind == "error":
                 mark_failure("worker_error")
-                stop_worker("worker_error")
                 if isinstance(value, ProviderError):
+                    logger.warning(
+                        "conversation_session=%s turn=%s provider=%s "
+                        "event=stream_worker_error category=%s retryable=%s "
+                        "exception_type=%s",
+                        _safe_identifier(request.conversation_id),
+                        request.conversation_turn,
+                        self.identity.name,
+                        value.category.value,
+                        value.retryable_same_provider,
+                        type(value).__name__,
+                    )
+                    stop_worker("worker_error")
                     raise value
                 category, retryable = _classify_exception(value)
+                logger.warning(
+                    "conversation_session=%s turn=%s provider=%s "
+                    "event=stream_worker_error category=%s retryable=%s "
+                    "exception_type=%s",
+                    _safe_identifier(request.conversation_id),
+                    request.conversation_turn,
+                    self.identity.name,
+                    category.value,
+                    retryable,
+                    f"{type(value).__module__}.{type(value).__name__}",
+                )
+                stop_worker("worker_error")
                 raise self._error(
                     category,
                     model=request.model,
@@ -1132,7 +1169,6 @@ class CodexAppServerAdapter:
                 status = status.value
             if status != "completed":
                 mark_failure(str(status or "turn_failed"))
-                stop_worker(str(status or "turn_failed"))
                 error = field_value(turn_payload, "error")
                 category, retryable = _classify_exception(
                     RuntimeError(str(field_value(error, "message", status)))
@@ -1140,6 +1176,20 @@ class CodexAppServerAdapter:
                 if status == "interrupted":
                     category = ErrorCategory.CANCELLED
                     retryable = False
+                error_code = field_value(error, "code")
+                logger.warning(
+                    "conversation_session=%s turn=%s provider=%s "
+                    "event=turn_completion_failed status=%s category=%s "
+                    "retryable=%s error_code=%s",
+                    _safe_identifier(request.conversation_id),
+                    request.conversation_turn,
+                    self.identity.name,
+                    status,
+                    category.value,
+                    retryable,
+                    error_code if isinstance(error_code, str) else "none",
+                )
+                stop_worker(str(status or "turn_failed"))
                 raise self._error(
                     category,
                     model=request.model,

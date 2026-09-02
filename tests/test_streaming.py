@@ -170,6 +170,36 @@ def test_unspoken_partial_output_is_discarded_before_fallback() -> None:
     assert spoken == ["Ready."]
 
 
+def test_target_history_limit_keeps_only_the_newest_complete_turn() -> None:
+    provider = FakeProvider("first", [[TextDelta("Ready."), completion("first")]])
+    original = replace(
+        request(),
+        messages=(
+            ChatMessage(Role.SYSTEM, "Instruction", ContentOrigin.STATIC_INSTRUCTION),
+            ChatMessage(Role.USER, "old user", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.ASSISTANT, "old answer", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.USER, "recent user", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.ASSISTANT, "recent answer", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.USER, "current user", ContentOrigin.RAW_TRANSCRIPT),
+        ),
+        conversation_turn=3,
+    )
+
+    result = coordinator(provider).run(
+        original,
+        (ExecutionTarget(target("first"), max_history_turns=1),),
+    )
+
+    assert result.text == "Ready."
+    assert [message.content for message in provider.calls[0].messages] == [
+        "Instruction",
+        "recent user",
+        "recent answer",
+        "current user",
+    ]
+    assert len(original.messages) == 6
+
+
 def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     transient = ProviderError(
         ErrorCategory.CONNECTIVITY,

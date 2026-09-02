@@ -324,7 +324,11 @@ def test_sounddevice_backend_stops_between_chunks_and_recovers() -> None:
     assert complete_frame_count == 4_000
     assert [len(chunk) for chunk in module.stream.writes] == [
         7_040,
+        3_200,
+        3_200,
+        1_600,
         7_040,
+        3_200,
         3_200,
         1_600,
     ]
@@ -367,6 +371,7 @@ def test_sounddevice_backend_duck_resumes_without_replaying_pcm() -> None:
     assert [len(chunk) for chunk in module.stream.writes] == [
         7_040,
         7_040,
+        3_200,
         1_600,
     ]
     assert module.stream.started == 2

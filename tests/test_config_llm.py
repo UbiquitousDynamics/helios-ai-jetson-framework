@@ -51,6 +51,7 @@ languages = ["it", "en"]
 [targets.local-talk]
 provider = "ollama"
 model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
+max_history_turns = 1
 
 [targets.local-think]
 provider = "ollama"
@@ -72,6 +73,19 @@ def test_load_llm_settings_resolves_paths_and_keeps_key_names_only(
     assert settings.budget.catalog_path == tmp_path / "model-catalog.json"
     assert settings.budget.ledger_path == tmp_path / "usage.jsonl"
     assert settings.targets[1].model_for_language("en") == "emilia-en-gemma3:1b"
+    assert settings.targets[1].max_history_turns == 1
+
+
+def test_remote_context_requires_an_explicit_privacy_opt_in(tmp_path: Path) -> None:
+    routing_path = tmp_path / "routing.toml"
+    routing_path.write_text(
+        'schema_version = 1\n[privacy]\ndefault = "remote_allowed"\n',
+        encoding="utf-8",
+    )
+
+    settings = config.load_llm_settings(routing_path)
+
+    assert settings.privacy.allow_remote_context is False
 
 
 def test_environment_can_disable_but_not_create_remote_routing(tmp_path: Path) -> None:
@@ -279,12 +293,29 @@ def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> N
     assert settings.health.maximum_talk_first_audio_ms == 30_000
 
 
+def test_codex_subscription_uses_low_latency_speech_chunks_and_bounded_remote_history() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.talk.speech_chunk_max_chars == 64
+    assert settings.talk.speech_chunk_max_delay_seconds == pytest.approx(0.75)
+    remote_targets = {
+        target.name: target
+        for target in settings.targets
+        if target.name.startswith("codex-talk-")
+    }
+    assert {target.max_history_turns for target in remote_targets.values()} == {6}
+
+
 def test_codex_subscription_enables_remote_context_for_natural_conversation() -> None:
     settings = config.load_llm_settings(
         PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
     )
 
     assert settings.privacy.allow_remote_context is True
+    providers = {provider.name: provider for provider in settings.providers}
+    assert providers["openai-codex"].reuse_remote_thread is False
 
 
 def test_codex_subscription_has_target_specific_talk_limits() -> None:
@@ -298,6 +329,8 @@ def test_codex_subscription_has_target_specific_talk_limits() -> None:
         assert targets[name].max_output_tokens == 128
     assert targets["local-talk"].max_output_words == 20
     assert targets["local-talk"].max_output_tokens == 40
+    assert targets["local-talk"].max_history_turns == 1
+    assert targets["local-think"].max_history_turns == 1
     assert targets["codex-think-sol"].max_output_words is None
 
 
@@ -315,8 +348,9 @@ def test_codex_subscription_has_adaptive_remote_tiers_and_fast_speech() -> None:
         for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol")
     ] == [0, 3, 5]
     assert settings.talk.first_speech_min_chars == 0
-    assert settings.talk.speech_chunk_max_chars == 80
-    assert settings.talk.first_visible_token_seconds == 15.0
+    assert settings.talk.speech_chunk_max_chars == 64
+    assert settings.talk.speech_chunk_max_delay_seconds == pytest.approx(0.75)
+    assert settings.talk.first_visible_token_seconds == 30.0
 
 
 def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> None:
@@ -329,7 +363,7 @@ def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> No
     assert settings.network.probe_url == "https://chatgpt.com/"
     assert settings.network.probe_interval_seconds == 3.0
     assert settings.network.result_max_age_seconds == 6.0
-    assert settings.network.probe_timeout_seconds == 1.2
+    assert settings.network.probe_timeout_seconds == 3.0
     assert settings.network.probe_bytes == 32_768
     assert settings.network.goodput_probe_interval_seconds == 60.0
 
@@ -353,6 +387,10 @@ def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> No
         (
             'schema_version = 1\n[targets.local]\nprovider = "ollama"\n'
             'model = "test"\nmax_output_words = true\n'
+        ),
+        (
+            'schema_version = 1\n[targets.local]\nprovider = "ollama"\n'
+            'model = "test"\nmax_history_turns = true\n'
         ),
         (
             'schema_version = 1\n[targets.remote]\nprovider = "ollama"\n'
@@ -416,6 +454,15 @@ def test_codex_provider_requires_stdio_and_forbids_api_key_configuration() -> No
     )
 
     assert provider.api_key_env is None
+
+    with pytest.raises(config.ConfigurationError, match="reuse_remote_thread"):
+        config.LLMProviderSettings(
+            name="openai-codex",
+            adapter="codex_app_server",
+            endpoint="stdio://codex",
+            locality="remote",
+            reuse_remote_thread="false",  # type: ignore[arg-type]
+        )
 
     with pytest.raises(config.ConfigurationError, match="local ChatGPT sign-in"):
         config.LLMProviderSettings(
