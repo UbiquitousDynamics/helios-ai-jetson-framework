@@ -233,6 +233,23 @@ def test_interrupt_while_idle_does_not_cancel_future_playback() -> None:
     assert tts.last_playback_was_interrupted is False
 
 
+def test_external_cancellation_before_playback_registration_does_not_play_audio():
+    backend = NonInterruptibleRecordingBackend()
+    tts = PiperTTS("unused.onnx", voice=LongVoice(), audio_backend=backend)
+    stop = threading.Event()
+    try:
+        fragment = tts.synthesize_fragment("hello")
+        stop.set()
+        tts.play_fragment(fragment, cancellation_event=stop)
+        assert backend.play_calls == 0
+        tts.speak_with_timing("hello", cancellation_event=stop)
+        assert backend.play_calls == 0
+        tts.play_fragment(fragment, cancellation_event=threading.Event())
+        assert backend.play_calls == 1
+    finally:
+        tts.close()
+
+
 def test_interrupt_during_synthesis_prevents_the_buffer_from_playing() -> None:
     voice = RecordingBlockingVoice()
     backend = NonInterruptibleRecordingBackend()

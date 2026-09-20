@@ -6,6 +6,8 @@ from array import array
 import pytest
 
 from recognizer.speech_recognizer import RecognitionResult, SpeechRecognizer
+from api.realtime_conversation import RealtimeConversationController
+from recognizer.turn_endpoint_detector import EndpointAction, TurnEndpointConfig
 
 
 class FakeStream:
@@ -77,6 +79,142 @@ class PendingRecognizer:
         return '{"text": "nuova nuova domanda completa"}'
 
 
+@pytest.mark.parametrize("mode", ["quiet", "maximum", "empty", "late", "silence"])
+def test_controller_endpoint_flushes_native_once_and_never_promotes_partial(mode):
+    now = [0.0]
+    flushes = []
+
+    class ClockedStream(FakeStream):
+        def read(self, frames, **_kwargs):
+            now[0] += 0.2
+            loud = mode == "maximum" or (mode != "silence" and now[0] < 0.3)
+            return array("h", [6000 if loud else 0] * frames).tobytes()
+
+    class Native(PendingRecognizer):
+        def PartialResult(self):
+            return '{"partial":""}' if mode == "silence" else super().PartialResult()
+
+        def FinalResult(self):
+            flushes.append(now[0])
+            if mode == "late":
+                now[0] += 1.1
+            return '{"text":""}' if mode == "empty" else super().FinalResult()
+
+    policy = TurnEndpointConfig(inactivity_seconds=1.4, maximum_utterance_seconds=1.4)
+    control = RealtimeConversationController(endpointing=policy, activity_energy=0.08, clock=lambda: now[0])
+    audio = FakeAudio()
+    audio.stream = ClockedStream()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native, clock=lambda: now[0])
+    actions = []
+    with control.capture() as lease:
+        def frame(result, energy):
+            action = lease.on_frame(result, energy)
+            actions.append(action)
+            return action
+
+        recognized = recognizer.listen_once(timeout=10, stop_event=lease, on_frame=frame, on_provisional=control.observe)
+    assert audio.stream.stopped and audio.stream.closed
+    assert control.transcripts.provisional() is None
+    if mode == "silence":
+        assert recognized is None and flushes == []
+        assert actions[-1] is EndpointAction.EXPIRE
+    else:
+        assert len(flushes) == 1
+        assert actions.count(EndpointAction.REQUEST_FINAL_RESULT) == 1
+        assert recognized.is_final is (mode in {"quiet", "maximum"})
+        if recognized.is_final:
+            assert recognized.text == "nuova nuova domanda completa"
+        else:
+            assert actions[-1] is EndpointAction.DISCARD
+
+
+def test_decoder_reset_preserves_microphone_and_monotonic_segment_identity():
+    resets = []
+
+    class Native(PendingRecognizer):
+        def Reset(self):
+            resets.append(True)
+
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native)
+    stop, reset = threading.Event(), threading.Event()
+    reset_callbacks = []
+    events = recognizer.listen_events(stop_event=stop, keep_open=True, reset_event=reset,
+                                      on_segment_reset=lambda: reset_callbacks.append(True))
+    first = next(events)
+    reset.set()
+    second = next(events)
+    assert first.capture_id == second.capture_id == 1
+    assert (first.segment_id, second.segment_id) == (1, 2)
+    assert first.revision == second.revision == 1
+    assert audio.stream.started and not audio.stream.closed
+    assert len(resets) == len(reset_callbacks) == 1
+    stop.set()
+    final, = list(events)
+    assert final.is_final and final.segment_id == 2 and final.revision == 2
+    assert audio.stream.closed and audio.stream.stopped
+
+
+def test_repeated_endpoint_flushes_keep_native_stream_open():
+    stop = threading.Event()
+    finals = []
+    resets = []
+
+    class Native(PendingRecognizer):
+        pending = False
+
+        def AcceptWaveform(self, _data):
+            self.pending = True
+            return False
+
+        def FinalResult(self):
+            if not self.pending:
+                return '{"text":""}'
+            self.pending = False
+            return super().FinalResult()
+
+        def Reset(self):
+            resets.append(True)
+
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native)
+
+    def frame(result, _energy):
+        if result.is_final:
+            return EndpointAction.FINALIZE if result.text else EndpointAction.DISCARD
+        return EndpointAction.REQUEST_FINAL_RESULT
+
+    events = recognizer.listen_events(stop_event=stop, on_frame=frame, keep_open=True)
+    for event in events:
+        assert not audio.stream.closed
+        if event.is_final:
+            finals.append(event)
+            if len(finals) == 2:
+                stop.set()
+    assert [event.segment_id for event in finals] == [1, 2]
+    assert {event.capture_id for event in finals} == {1}
+    assert len(resets) == 2
+    assert audio.stream.stopped and audio.stream.closed
+
+
+def test_failed_native_reset_closes_owned_capture():
+    from recognizer.speech_recognizer import SpeechRecognitionError
+
+    class Native(PendingRecognizer):
+        def Reset(self):
+            raise RuntimeError("synthetic native reset failure")
+
+    reset = threading.Event()
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native)
+    events = recognizer.listen_events(reset_event=reset, keep_open=True)
+    next(events)
+    reset.set()
+    with pytest.raises(SpeechRecognitionError):
+        next(events)
+    assert audio.stream.stopped and audio.stream.closed
+
+
 def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
     audio = FakeAudio()
     recognizer = SpeechRecognizer(
@@ -89,7 +227,7 @@ def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
     result = recognizer.listen_once(timeout=1)
 
     assert result is not None
-    assert result.text == "ciao equipaggio"
+    assert result.text == "ciao ciao equipaggio"
     assert result.is_final is True
     assert result.segment_id == 1
     assert result.segment_started_at is not None
@@ -101,6 +239,44 @@ def test_listen_once_returns_first_final_and_always_closes_stream() -> None:
     recognizer.close()
     recognizer.close()
     assert audio.terminated
+
+
+def test_provisional_observer_failure_closes_capture_without_flushing() -> None:
+    audio = FakeAudio()
+    PendingRecognizer.instances.clear()
+    recognizer = SpeechRecognizer(
+        model=object(), audio_interface=audio, recognizer_factory=PendingRecognizer,
+    )
+
+    def fail_observer(result: RecognitionResult) -> None:
+        assert not result.is_final
+        raise RuntimeError("synthetic observer failure")
+
+    with pytest.raises(RuntimeError, match="synthetic observer failure"):
+        recognizer.listen_once(timeout=1, on_provisional=fail_observer)
+    assert audio.stream.stopped and audio.stream.closed
+    assert PendingRecognizer.instances[0].final_result_calls == 0
+
+
+def test_live_final_preserves_repeated_words_and_their_metadata() -> None:
+    class RepeatedWordsRecognizer(FinalRecognizer):
+        def Result(self) -> str:
+            return (
+                '{"text":"very very useful","result":['
+                '{"word":"very","conf":0.6,"start":0.0,"end":0.2},'
+                '{"word":"very","conf":0.9,"start":0.2,"end":0.4},'
+                '{"word":"useful","conf":0.9,"start":0.4,"end":0.8}]}'
+            )
+
+    recognizer = SpeechRecognizer(
+        model=object(), audio_interface=FakeAudio(),
+        recognizer_factory=RepeatedWordsRecognizer,
+    )
+    result = recognizer.listen_once(timeout=1)
+    assert result.text == "very very useful"
+    assert result.word_confidences == pytest.approx((0.6, 0.9, 0.9))
+    assert result.word_timings == ((0.0, 0.2), (0.2, 0.4), (0.4, 0.8))
+    assert result.confidence == pytest.approx(0.8)
 
 
 def test_configured_microphone_name_is_resolved_without_default_fallback() -> None:
@@ -155,8 +331,8 @@ def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
     results = list(recognizer.listen_events(stop_event=stop_event))
 
     assert [(result.text, result.is_final) for result in results] == [
-        ("nuova domanda", False),
-        ("nuova domanda completa", True),
+        ("nuova nuova domanda", False),
+        ("nuova nuova domanda completa", True),
     ]
     assert [result.segment_id for result in results] == [1, 1]
     assert results[0].segment_started_at == results[1].segment_started_at
@@ -193,7 +369,7 @@ def test_stop_event_never_promotes_last_partial_when_vosk_flush_is_empty() -> No
 
     results = list(recognizer.listen_events(stop_event=stop_event))
 
-    assert [(result.text, result.is_final) for result in results] == [("nuova domanda", False)]
+    assert [(result.text, result.is_final) for result in results] == [("nuova nuova domanda", False)]
     assert results[0].segment_id == 1
     assert results[0].segment_started_at is not None
 
@@ -213,7 +389,7 @@ def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
 
     results = list(recognizer.listen_events(timeout=0.5))
 
-    assert [(result.text, result.is_final) for result in results] == [("nuova domanda", False)]
+    assert [(result.text, result.is_final) for result in results] == [("nuova nuova domanda", False)]
     assert results[0].segment_id == 1
     assert results[0].segment_started_at == 0.0
 
@@ -253,8 +429,8 @@ def test_identical_partial_is_reemitted_when_pcm_energy_rises_materially() -> No
     results = list(recognizer.listen_events(stop_event=stop_event))
 
     assert [result.text for result in results] == [
-        "nuova domanda",
-        "nuova domanda",
+        "nuova nuova domanda",
+        "nuova nuova domanda",
     ]
     assert results[0].is_final is False
     assert results[1].is_final is False
@@ -319,8 +495,23 @@ def test_segment_provenance_resets_after_vosk_final_boundaries() -> None:
         ("seconda completa", True),
     ]
     assert [result.segment_id for result in results] == [1, 1, 2, 2]
+    assert [result.capture_id for result in results] == [1, 1, 1, 1]
+    assert [result.revision for result in results] == [1, 2, 1, 2]
     assert [result.segment_started_at for result in results] == [1.0, 1.0, 3.0, 3.0]
     assert all(result.energy_reemit is False for result in results)
+
+
+def test_capture_identity_survives_segment_restart_and_early_close() -> None:
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(
+        model=object(), audio_interface=audio, recognizer_factory=FinalRecognizer
+    )
+    for capture in range(1, 4):
+        audio.stream = FakeStream()
+        result = recognizer.listen_once(timeout=1)
+        assert (result.capture_id, result.segment_id, result.revision) == (capture, 1, 1)
+        assert audio.stream.closed and audio.stream.stopped
+    recognizer.close()
 
 
 def test_vosk_word_metadata_is_enabled_and_exposed_content_free() -> None:
@@ -473,7 +664,7 @@ def test_legacy_listen_generator_yields_text() -> None:
     )
 
     events = recognizer.listen(timeout=1)
-    assert next(events) == "ciao equipaggio"
+    assert next(events) == "ciao ciao equipaggio"
     events.close()
     assert audio.stream.closed
 

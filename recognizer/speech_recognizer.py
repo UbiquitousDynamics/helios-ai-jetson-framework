@@ -15,6 +15,8 @@ from typing import Any
 import config
 from recognizer.barge_in_detector import pcm16_rms
 
+from recognizer.turn_endpoint_detector import EndpointAction
+
 logger = logging.getLogger(__name__)
 
 _PARTIAL_ENERGY_REEMIT_DELTA = 0.02
@@ -42,6 +44,8 @@ class RecognitionResult:
     segment_peak_energy: float | None = None
     word_confidences: tuple[float | None, ...] = ()
     word_timings: tuple[tuple[float, float] | None, ...] = ()
+    capture_id: int | None = None
+    revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,7 @@ class SpeechRecognizer:
         self._runtime_lock = threading.RLock()
         self._prepare_lock = threading.Lock()
         self._prepare_thread: threading.Thread | None = None
+        self._capture_number = 0
 
     @staticmethod
     def remove_consecutive_duplicates(text: str) -> str:
@@ -116,7 +121,7 @@ class SpeechRecognizer:
 
     @staticmethod
     def _deduplicate_parsed(parsed: _ParsedRecognition) -> _ParsedRecognition:
-        """Deduplicate text and word metadata with identical index transforms."""
+        """Legacy explicit helper; the live recognizer preserves all wording."""
 
         words = parsed.text.split()
         if not words:
@@ -366,6 +371,10 @@ class SpeechRecognizer:
         timeout: float | None = None,
         *,
         stop_event: threading.Event | None = None,
+        on_frame: Callable[[RecognitionResult | None, float | None], EndpointAction] | None = None,
+        keep_open: bool = False,
+        reset_event: threading.Event | None = None,
+        on_segment_reset: Callable[[], None] | None = None,
     ) -> Iterator[RecognitionResult]:
         """Yield distinct partial and final recognition events.
 
@@ -378,6 +387,8 @@ class SpeechRecognizer:
         consumer stops after the first final result.
         """
 
+        if not isinstance(keep_open, bool):
+            raise TypeError("keep_open must be a boolean")
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be greater than zero")
         if stop_event is not None and stop_event.is_set():
@@ -386,6 +397,9 @@ class SpeechRecognizer:
         assert self.p is not None
         assert self._recognizer_factory is not None
 
+        with self._runtime_lock:
+            self._capture_number += 1
+            capture_id = self._capture_number
         stream: Any | None = None
         last_partial = ""
         last_partial_energy: float | None = None
@@ -395,6 +409,12 @@ class SpeechRecognizer:
         active_segment_id: int | None = None
         active_segment_started_at: float | None = None
         active_segment_peak_energy: float | None = None
+        active_revision = 0
+
+        def next_revision() -> int:
+            nonlocal active_revision
+            active_revision += 1
+            return active_revision
 
         def ensure_active_segment(started_at: float) -> tuple[int, float]:
             nonlocal next_segment_id, active_segment_id, active_segment_started_at
@@ -408,12 +428,13 @@ class SpeechRecognizer:
         def reset_active_segment() -> None:
             nonlocal last_partial, last_partial_energy
             nonlocal active_segment_id, active_segment_started_at
-            nonlocal active_segment_peak_energy
+            nonlocal active_segment_peak_energy, active_revision
             last_partial = ""
             last_partial_energy = None
             active_segment_id = None
             active_segment_started_at = None
             active_segment_peak_energy = None
+            active_revision = 0
 
         def observe_segment_energy(energy: float | None) -> float | None:
             nonlocal active_segment_peak_energy
@@ -423,6 +444,38 @@ class SpeechRecognizer:
                     active_segment_peak_energy or energy,
                 )
             return active_segment_peak_energy
+
+        def flush_pending() -> RecognitionResult | None:
+            final_result = getattr(recognizer, "FinalResult", None)
+            if not callable(final_result):
+                return None
+            parsed = self._parse_recognition(final_result(), "text")
+            final_event = None
+            if parsed.text.strip():
+                segment_id, segment_started_at = ensure_active_segment(last_frame_started_at)
+                final_event = RecognitionResult(
+                    parsed.text.strip(), is_final=True, frame_energy=last_frame_energy,
+                    segment_id=segment_id, segment_started_at=segment_started_at,
+                    confidence=parsed.confidence, speech_duration_seconds=parsed.speech_duration_seconds,
+                    segment_peak_energy=observe_segment_energy(last_frame_energy),
+                    word_confidences=parsed.word_confidences, word_timings=parsed.word_timings,
+                    capture_id=capture_id, revision=next_revision(),
+                )
+            action = on_frame(final_event or RecognitionResult("", is_final=True), last_frame_energy) if on_frame else None
+            reset_active_segment()
+            return final_event if action not in {EndpointAction.DISCARD, EndpointAction.EXPIRE} else None
+
+        def reset_decoder() -> None:
+            nonlocal recognizer
+            reset = getattr(recognizer, "Reset", None)
+            if callable(reset):
+                reset()
+            else:
+                recognizer = self._recognizer_factory(self.model, self.rate)
+                self._enable_word_metadata(recognizer)
+            reset_active_segment()
+            if on_segment_reset:
+                on_segment_reset()
 
         try:
             open_arguments: dict[str, Any] = {
@@ -445,6 +498,9 @@ class SpeechRecognizer:
             )
 
             while not (stop_event is not None and stop_event.is_set()):
+                if reset_event is not None and reset_event.is_set():
+                    reset_event.clear()
+                    reset_decoder()
                 last_frame_started_at = self._clock()
                 if timeout is not None and last_frame_started_at - start_time >= timeout:
                     break
@@ -471,16 +527,16 @@ class SpeechRecognizer:
                 # commonly end on silence; using only that last frame would
                 # discard real short commands.
                 observe_segment_energy(last_frame_energy)
+                frame_result: RecognitionResult | None = None
                 if recognizer.AcceptWaveform(data):
                     parsed_result = self._parse_recognition(recognizer.Result(), "text")
-                    parsed_result = self._deduplicate_parsed(parsed_result)
                     clean_text = parsed_result.text.strip()
                     if clean_text:
                         segment_id, segment_started_at = ensure_active_segment(
                             last_frame_started_at
                         )
                         segment_peak_energy = observe_segment_energy(last_frame_energy)
-                        yield RecognitionResult(
+                        frame_result = RecognitionResult(
                             clean_text,
                             is_final=True,
                             frame_energy=last_frame_energy,
@@ -491,6 +547,8 @@ class SpeechRecognizer:
                             segment_peak_energy=segment_peak_energy,
                             word_confidences=parsed_result.word_confidences,
                             word_timings=parsed_result.word_timings,
+                            capture_id=capture_id,
+                            revision=next_revision(),
                         )
                     reset_active_segment()
                 else:
@@ -498,7 +556,6 @@ class SpeechRecognizer:
                         recognizer.PartialResult(),
                         "partial",
                     )
-                    parsed_partial = self._deduplicate_parsed(parsed_partial)
                     clean_partial = parsed_partial.text.strip()
                     energy_advanced = (
                         clean_partial == last_partial
@@ -513,7 +570,7 @@ class SpeechRecognizer:
                         segment_peak_energy = observe_segment_energy(last_frame_energy)
                         last_partial = clean_partial
                         last_partial_energy = last_frame_energy
-                        yield RecognitionResult(
+                        frame_result = RecognitionResult(
                             clean_partial,
                             is_final=False,
                             frame_energy=last_frame_energy,
@@ -525,29 +582,28 @@ class SpeechRecognizer:
                             segment_peak_energy=segment_peak_energy,
                             word_confidences=parsed_partial.word_confidences,
                             word_timings=parsed_partial.word_timings,
+                            capture_id=capture_id,
+                            revision=next_revision(),
                         )
 
-            final_result = getattr(recognizer, "FinalResult", None)
-            if callable(final_result):
-                parsed_result = self._parse_recognition(final_result(), "text")
-                parsed_result = self._deduplicate_parsed(parsed_result)
-                clean_text = parsed_result.text.strip()
-                if clean_text:
-                    segment_id, segment_started_at = ensure_active_segment(last_frame_started_at)
-                    segment_peak_energy = observe_segment_energy(last_frame_energy)
-                    yield RecognitionResult(
-                        clean_text,
-                        is_final=True,
-                        frame_energy=last_frame_energy,
-                        segment_id=segment_id,
-                        segment_started_at=segment_started_at,
-                        confidence=parsed_result.confidence,
-                        speech_duration_seconds=(parsed_result.speech_duration_seconds),
-                        segment_peak_energy=segment_peak_energy,
-                        word_confidences=parsed_result.word_confidences,
-                        word_timings=parsed_result.word_timings,
-                    )
-                reset_active_segment()
+                action = on_frame(frame_result, last_frame_energy) if on_frame else None
+                if frame_result is not None and action not in {EndpointAction.DISCARD, EndpointAction.EXPIRE}:
+                    yield frame_result
+                if action is EndpointAction.REQUEST_FINAL_RESULT:
+                    if not keep_open:
+                        break
+                    final_event = flush_pending()
+                    if final_event is not None:
+                        yield final_event
+                    reset_decoder()
+                elif action in {EndpointAction.DISCARD, EndpointAction.EXPIRE}:
+                    if not keep_open:
+                        return
+                    reset_decoder()
+
+            final_event = flush_pending()
+            if final_event is not None:
+                yield final_event
         except SpeechRecognitionError:
             raise
         except Exception as exc:
@@ -563,16 +619,34 @@ class SpeechRecognizer:
                 except Exception:
                     logger.warning("Unable to close microphone stream", exc_info=True)
 
-    def listen_once(self, timeout: float | None = None) -> RecognitionResult | None:
-        """Return on the first final result, or the latest partial at timeout."""
+    def listen_once(
+        self,
+        timeout: float | None = None,
+        *,
+        on_provisional: Callable[[RecognitionResult], object] | None = None,
+        stop_event: threading.Event | None = None,
+        on_frame: Callable[[RecognitionResult | None, float | None], EndpointAction] | None = None,
+    ) -> RecognitionResult | None:
+        """Return the first final, observing optional local revisions before it.
+
+        The observer receives partials only, on the capture owner's thread.
+        Timeout still returns a partial when Vosk has no authoritative final.
+        """
 
         latest: RecognitionResult | None = None
-        events = self.listen_events(timeout=timeout)
+        kwargs: dict[str, Any] = {"timeout": timeout}
+        if stop_event is not None:
+            kwargs["stop_event"] = stop_event
+        if on_frame is not None:
+            kwargs["on_frame"] = on_frame
+        events = self.listen_events(**kwargs)
         try:
             for result in events:
                 latest = result
                 if result.is_final:
                     return result
+                if on_provisional is not None:
+                    on_provisional(result)
         finally:
             events.close()
         return latest

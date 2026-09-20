@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import json
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -9,16 +10,21 @@ import pytest
 import assistant as assistant_module
 import config
 from api.api_client import APIClient
+from api.conversation_control import ConversationFloor, ConversationFloorState
 from api.metrics import SafeMetricsRecorder
+from api.transcripts import AuthoritativeUtterance, TranscriptPromoter
 from assistant import (
+    AssistantRuntimeError,
     AssistantShutdownTimeout,
     AssistantState,
     VoiceAssistant,
+    VoiceConversationState,
     _BargeInCaptureStop,
 )
 from audio.tts import PiperTTS
+from audio.speech_pipeline import SpeechPipelineShutdownTimeout
 from recognizer.barge_in_detector import BargeInDetector
-from recognizer.speech_recognizer import RecognitionResult
+from recognizer.speech_recognizer import RecognitionResult, SpeechRecognitionError, SpeechRecognizer
 
 
 class FakeTTS:
@@ -86,6 +92,121 @@ class FakeRecognizer:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_native_speech_shutdown_timeout_uses_bounded_terminal_shutdown_path():
+    class API(FakeAPI):
+        def close(self):
+            raise SpeechPipelineShutdownTimeout("synthetic stuck native stage")
+
+    assistant, tts, _api, _sounds, recognizer = make_assistant([])
+    assistant.api_client = API()
+    with pytest.raises(AssistantShutdownTimeout):
+        assistant.close()
+    assert assistant._close_complete.is_set()
+    assert not tts.closed and not recognizer.closed
+
+
+def test_modern_barge_capture_resets_stale_decoder_without_reopening_stream():
+    response = Future()
+
+    class TTS(FakeTTS):
+        is_speaking = False
+        active_playback_started_at = None
+        active_playback_text = "unrelated response"
+
+    tts = TTS()
+
+    class Recognizer(FakeRecognizer):
+        captures = 0
+
+        def listen_events(self, timeout, *, stop_event, keep_open, reset_event, on_frame, on_segment_reset):
+            self.captures += 1
+            assert keep_open
+            tts.is_speaking = True
+            tts.active_playback_started_at = 10.0
+            yield RecognitionResult("stale ambient words", False, frame_energy=0.2,
+                                    capture_id=1, segment_id=1, revision=1, segment_started_at=9.0)
+            assert reset_event.is_set()
+            reset_event.clear()
+            on_segment_reset()
+            yield RecognitionResult("Emilia nuova domanda adesso", True, frame_energy=0.2,
+                                    capture_id=1, segment_id=2, revision=1, segment_started_at=10.1,
+                                    confidence=0.9, speech_duration_seconds=0.5, segment_peak_energy=0.2)
+
+    recognizer = Recognizer([])
+    assistant = VoiceAssistant(settings=config.Settings(), api_client=FakeAPI(), tts=tts,
+                               speech_recognizer=recognizer, sound_player=FakeSoundPlayer(),
+                               sound_executor=ImmediateExecutor(), clock=lambda: 10.3)
+    try:
+        assert assistant._listen_for_barge_in(response) == "Emilia nuova domanda adesso"
+        assert recognizer.captures == 1
+    finally:
+        response.cancel()
+        assistant.close()
+
+
+def test_primary_capture_is_exclusive_and_close_waits_before_recognizer_teardown():
+    entered = threading.Event()
+    released = threading.Event()
+
+    class CooperativeRecognizer(FakeRecognizer):
+        def listen_once(self, timeout, *, stop_event):
+            entered.set()
+            for _ in range(200):
+                if stop_event.is_set():
+                    released.set()
+                    return RecognitionResult("Emilia late final", True)
+                threading.Event().wait(0.005)
+            pytest.fail("primary capture did not receive stop")
+
+        def close(self):
+            assert released.is_set(), "recognizer closed before capture release"
+            super().close()
+
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+    assistant.speech_recognizer = CooperativeRecognizer([])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(assistant.run_once)
+        try:
+            assert entered.wait(timeout=1)
+            with pytest.raises(AssistantRuntimeError, match="already has an owner"):
+                assistant.run_once()
+            assistant.close()
+            assert future.result(timeout=2) is False
+            assert not assistant.realtime.snapshot().capture_active
+            assert assistant.realtime.snapshot().stopped
+            assert api.messages == []
+        finally:
+            assistant.stop()
+            assistant.close()
+
+
+def test_response_submission_failure_releases_floor_and_allows_next_iteration():
+    class FailingOnceExecutor(ImmediateExecutor):
+        failed = False
+
+        def submit(self, function, *args):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("synthetic submission failure")
+            return super().submit(function, *args)
+
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([
+        RecognitionResult("Emilia first", True), RecognitionResult("Emilia second", True),
+    ])
+    original_executor = assistant._conversation_executor
+    assistant._conversation_executor = FailingOnceExecutor()
+    assistant._owns_conversation_executor = False
+    try:
+        with pytest.raises(RuntimeError, match="synthetic submission failure"):
+            assistant.run_once()
+        assert assistant.realtime.snapshot().response_id is None
+        assert assistant.run_once()
+        assert api.messages == ["second"]
+    finally:
+        assistant.close()
+        original_executor.shutdown(wait=True)
 
 
 class FakeSoundPlayer:
@@ -238,6 +359,243 @@ def test_partial_recognition_is_not_executed() -> None:
     assert api.messages == []
 
 
+def test_identified_revisions_dispatch_once_and_reject_stale_captures() -> None:
+    def event(text, final, capture, segment, revision):
+        return RecognitionResult(
+            text, final, capture_id=capture, segment_id=segment, revision=revision
+        )
+
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([
+        event("Emilia synthetic partial", False, 1, 1, 1),
+        event("Emilia synthetic revised", False, 1, 1, 2),
+        event("Emilia synthetic final", True, 1, 1, 3),
+        event("Emilia duplicate", True, 1, 1, 4),
+        event("Emilia second segment", False, 1, 3, 1),
+        event("Emilia stale segment", True, 1, 2, 2),
+        event("Emilia new capture", True, 2, 1, 1),
+        event("Emilia stale capture", True, 1, 4, 1),
+    ])
+    try:
+        assert [assistant.run_once() for _ in range(8)] == [
+            False, False, True, False, False, False, True, False
+        ]
+        assert api.messages == ["synthetic final", "new capture"]
+    finally:
+        assistant.close()
+
+
+def test_rag_receives_only_one_authoritative_revision() -> None:
+    rag = FakeRag()
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([
+        RecognitionResult("provisional", False, capture_id=1, segment_id=1, revision=1),
+        RecognitionResult("final query", True, capture_id=1, segment_id=1, revision=2),
+        RecognitionResult("duplicate", True, capture_id=1, segment_id=1, revision=3),
+    ], rag=rag)
+    assistant.state = AssistantState.RAG
+    try:
+        assert assistant.run_once() is False
+        assert assistant.run_once() is True
+        assert assistant.run_once() is False
+        assert rag.queries == [("final query", assistant.settings.top_k)]
+        assert api.messages == []
+    finally:
+        assistant.close()
+
+
+def test_legacy_text_iterator_exhaustion_cannot_promote_partial() -> None:
+    class LegacyRecognizer:
+        def listen(self, timeout):
+            yield "Emilia incomplete"
+            yield "Emilia revised incomplete"
+
+        def close(self):
+            pass
+
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+    assistant.speech_recognizer = LegacyRecognizer()
+    try:
+        assert assistant.run_once() is False
+        assert api.messages == []
+    finally:
+        assistant.close()
+
+
+def test_primary_adapter_preserves_all_recognition_metadata() -> None:
+    result = RecognitionResult(
+        "final", True, frame_energy=0.5, segment_id=2, segment_started_at=1.0,
+        energy_reemit=True, confidence=0.9, speech_duration_seconds=0.8,
+        segment_peak_energy=0.7, word_confidences=(0.9,), word_timings=((0.0, 0.8),),
+        capture_id=3, revision=4,
+    )
+    assistant, *_ = make_assistant([result])
+    try:
+        assert assistant._recognize_once_unobserved() == result
+    finally:
+        assistant.close()
+
+
+@pytest.mark.parametrize("language,partials,final", [
+    ("en", ["Emilia Tuesday", "Emilia Tuesday actually"], "Emilia Tuesday... actually, Wednesday."),
+    ("it", ["Emilia martedì", "Emilia martedì anzi"], "Emilia martedì... anzi, mercoledì."),
+    ("en", ["Emilia very", "Emilia very very"], "Emilia very very carefully"),
+    ("it", ["Emilia non", "Emilia non non"], "Emilia non non cambiare"),
+    ("en", ["Emilia old words", "Emilia all revised"], "Emilia entirely new final wording"),
+])
+def test_native_revisions_deliver_one_exact_final_prompt(language, partials, final):
+    class Stream:
+        closed = False
+        stopped = False
+
+        def start_stream(self):
+            pass
+
+        def read(self, frames, **_kwargs):
+            return bytes(frames * 2)
+
+        def stop_stream(self):
+            self.stopped = True
+
+        def close(self):
+            self.closed = True
+
+    class Audio:
+        stream = Stream()
+
+        def open(self, **_kwargs):
+            return self.stream
+
+    class Native:
+        def __init__(self, *_args):
+            self.index = -1
+
+        def AcceptWaveform(self, _data):
+            self.index += 1
+            return self.index == len(partials)
+
+        def PartialResult(self):
+            return json.dumps({"partial":partials[self.index]})
+
+        def Result(self):
+            return json.dumps({"text":final})
+
+    audio = Audio()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native)
+    api = FakeAPI()
+    assistant = VoiceAssistant(
+        settings=config.Settings(language=language, barge_in_enabled=False),
+        speech_recognizer=recognizer, api_client=api, tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(), sound_executor=ImmediateExecutor(),
+    )
+    observed = []
+    original = assistant._observe_transcript
+
+    def observe(result):
+        value = original(result)
+        if not result.is_final:
+            assert api.messages == []
+            assert assistant._transcript_revisions.provisional().text == result.text
+            observed.append(result.text)
+        return value
+
+    assistant._observe_transcript = observe
+    try:
+        assert assistant.run_once() is True
+        assert observed == partials
+        assert api.messages == [final.removeprefix("Emilia ")]
+        assert audio.stream.closed and audio.stream.stopped
+        assert not assistant._transcript_revisions.snapshot().pending
+    finally:
+        assistant.close()
+
+
+def test_primary_provisional_observer_failure_releases_pending_text():
+    class BrokenRecognizer(FakeRecognizer):
+        def listen_once(self, timeout, *, on_provisional):
+            on_provisional(RecognitionResult("private pending", False))
+            raise SpeechRecognitionError("synthetic capture failure")
+
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+    assistant.speech_recognizer = BrokenRecognizer([])
+    try:
+        with pytest.raises(SpeechRecognitionError, match="synthetic capture failure"):
+            assistant.run_once()
+        assert assistant._transcript_revisions.provisional() is None
+        assert api.messages == []
+    finally:
+        assistant.close()
+
+
+@pytest.mark.parametrize("malformed", ["yes", 1, None])
+def test_recognition_without_explicit_boolean_finality_cannot_dispatch(malformed) -> None:
+    result = RecognitionResult("Emilia synthetic request", is_final=malformed)
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([result])
+    try:
+        assert assistant.run_once() is False
+        assert api.messages == []
+    finally:
+        assistant.close()
+
+
+def test_legacy_listen_once_string_contract_remains_final() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant(["Emilia synthetic request"])
+    try:
+        assert assistant.run_once() is True
+        assert api.messages == ["synthetic request"]
+    finally:
+        assistant.close()
+
+
+def test_public_command_accepts_promoted_utterance() -> None:
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+    final = TranscriptPromoter().observe("Emilia synthetic request", is_final=True)
+    assert isinstance(final, AuthoritativeUtterance)
+    try:
+        assert assistant.process_command(final) == "model response"
+        assert api.messages == ["synthetic request"]
+    finally:
+        assistant.close()
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_barge_in_promotion_rejects_duplicate_and_stale_final_before_cancel(stale) -> None:
+    class Detecting:
+        def reset(self):
+            pass
+
+        def process_recognition(self, *_args, **_kwargs):
+            return True
+
+    final = RecognitionResult(
+        "synthetic finalized follow up", True, frame_energy=0.5,
+        capture_id=1, segment_id=1, revision=2,
+    )
+
+    class EventRecognizer(FakeRecognizer):
+        def listen_events(self, timeout, *, stop_event):
+            yield final
+
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([])
+    assistant._barge_in_detector = Detecting()
+    assistant.speech_recognizer = EventRecognizer([final])
+    response: Future[str] = Future()
+    try:
+        if stale:
+            assistant._observe_transcript(RecognitionResult(
+                "new partial", False, capture_id=1, segment_id=2, revision=1
+            ))
+        else:
+            assert assistant._listen_for_barge_in(response) == final.text
+            assert api.cancelled
+            api.cancelled = False
+        assert assistant._listen_for_barge_in(response) is None
+        assert api.cancelled is False
+        assert assistant.run_once() is False
+        assert api.messages == []
+    finally:
+        response.cancel()
+        assistant.close()
+
+
 def test_active_voice_conversation_accepts_follow_up_without_wake_word() -> None:
     tts = FakeTTS()
     api = FakeAPI()
@@ -377,6 +735,56 @@ def test_close_releases_services_once() -> None:
     assert tts.closed
     assert api.closed
     assert recognizer.closed
+
+
+@pytest.mark.parametrize(
+    "legacy,expected",
+    [
+        (VoiceConversationState.IDLE, ConversationFloorState.IDLE),
+        (VoiceConversationState.LISTENING, ConversationFloorState.ARMED),
+        (VoiceConversationState.USER_TURN_FINALIZED, ConversationFloorState.FINALIZING),
+        (VoiceConversationState.GENERATING, ConversationFloorState.THINKING),
+        (VoiceConversationState.SPEAKING, ConversationFloorState.ASSISTANT_SPEAKING),
+        (VoiceConversationState.BARGE_IN_DETECTED, ConversationFloorState.INTERRUPTED),
+        (VoiceConversationState.CANCELLING, ConversationFloorState.INTERRUPTED),
+        (VoiceConversationState.CAPTURING_FOLLOW_UP, ConversationFloorState.USER_SPEAKING),
+        (VoiceConversationState.FOLLOW_UP_FINALIZED, ConversationFloorState.FINALIZING),
+    ],
+)
+def test_legacy_state_has_a_read_only_floor_adapter(legacy, expected) -> None:
+    assert legacy.to_floor_state() is expected
+    assert list(VoiceConversationState)[legacy.value - 1] is legacy
+
+
+def test_floor_controller_drives_existing_voice_dispatch(monkeypatch) -> None:
+    events = []
+    original = ConversationFloor.apply
+
+    def control_dispatch(floor, event):
+        events.append(event.kind.value)
+        return original(floor, event)
+
+    monkeypatch.setattr(ConversationFloor, "apply", control_dispatch)
+    assistant, _tts, api, _sounds, _recognizer = make_assistant([
+        RecognitionResult("Emilia", is_final=True),
+        RecognitionResult("synthetic provisional", is_final=False),
+        RecognitionResult("synthetic follow up", is_final=True),
+    ])
+    try:
+        assert assistant.conversation_state.to_floor_state() is ConversationFloorState.IDLE
+        assert assistant.run_once()
+        assert assistant.conversation_state.to_floor_state() is ConversationFloorState.ARMED
+        assert not assistant.run_once()
+        assert api.messages == []
+        assert assistant.run_once()
+        assert api.messages == ["synthetic follow up"]
+        assert assistant.conversation_state is VoiceConversationState.LISTENING
+        assert "provisional_speech" in events
+        assert "final_speech" in events
+        assert events.count("generation_started") == 1
+        assert events.count("response_finished") == 1
+    finally:
+        assistant.close()
 
 
 def test_stop_cancels_the_active_model_stream() -> None:

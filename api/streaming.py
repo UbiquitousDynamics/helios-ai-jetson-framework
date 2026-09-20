@@ -201,6 +201,7 @@ class StreamingResponseCoordinator:
         *,
         speak: Callable[[str], Any] | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_generation_completed: Callable[[], Any] | None = None,
         first_speech_min_chars: int = 0,
         speech_chunk_max_chars: int = 0,
         speech_chunk_max_delay_seconds: float = 0.0,
@@ -233,6 +234,8 @@ class StreamingResponseCoordinator:
             or speech_chunk_max_delay_seconds < 0
         ):
             raise ValueError("speech_chunk_max_delay_seconds must be finite and non-negative")
+        if on_generation_completed is not None and not callable(on_generation_completed):
+            raise TypeError("on_generation_completed must be callable")
         if before_first_speech is not None and not callable(before_first_speech):
             raise TypeError("before_first_speech must be callable")
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
@@ -307,6 +310,7 @@ class StreamingResponseCoordinator:
                         request=routed_request,
                         speak=speak,
                         before_first_speech=before_first_speech,
+                        on_generation_completed=on_generation_completed,
                         first_speech_min_chars=first_speech_min_chars,
                         speech_chunk_max_chars=speech_chunk_max_chars,
                         speech_chunk_max_delay_seconds=speech_chunk_max_delay_seconds,
@@ -552,6 +556,7 @@ class StreamingResponseCoordinator:
         request: ChatRequest,
         speak: Callable[[str], Any] | None,
         before_first_speech: Callable[[], Any] | None,
+        on_generation_completed: Callable[[], Any] | None,
         first_speech_min_chars: int,
         speech_chunk_max_chars: int,
         speech_chunk_max_delay_seconds: float,
@@ -804,6 +809,8 @@ class StreamingResponseCoordinator:
                 retryable_same_provider=True,
                 transmitted=True,
             )
+        if on_generation_completed is not None:
+            on_generation_completed()
         if speech_chunker is not None:
             for sentence in speech_chunker.finish():
                 speak_fragment(sentence)

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from api.providers.contracts import ChatMessage, ContentOrigin, PrivacyLevel, Role
+from api.transcripts import authoritative_text
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ class ConversationSession:
         privacy: PrivacyLevel | str = PrivacyLevel.LOCAL_ONLY,
         redacted: bool = False,
     ) -> ConversationTurn:
-        normalized = message.strip()
+        normalized = authoritative_text(message).strip()
         if not normalized:
             raise ValueError("message cannot be empty")
         selected_privacy = PrivacyLevel(privacy)
@@ -274,7 +275,7 @@ class ConversationSession:
         remote_eligible: bool | None = None,
         source_origins: frozenset[ContentOrigin] = frozenset(),
     ) -> None:
-        normalized = response.strip()
+        normalized = authoritative_text(response).strip()
         if not normalized:
             raise ValueError("completed assistant response cannot be empty")
         with self._lock:

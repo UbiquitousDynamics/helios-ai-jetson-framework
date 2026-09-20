@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, Union
 
+from api.transcripts import authoritative_text
+
 
 class Role(str, Enum):
     SYSTEM = "system"
@@ -73,6 +75,7 @@ class ChatMessage:
     source_origins: frozenset[ContentOrigin] = frozenset()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "content", authoritative_text(self.content))
         if not self.content:
             raise ValueError("message content cannot be empty")
         if not isinstance(self.remote_eligible, bool):
