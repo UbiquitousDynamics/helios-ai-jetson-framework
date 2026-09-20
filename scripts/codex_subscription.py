@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -19,13 +18,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from api.providers.codex_session import (  # noqa: E402
     CODEX_DISABLED_FEATURES,
     codex_child_environment,
-    copy_chatgpt_auth,
+    ensure_persistent_chatgpt_auth,
     field_value,
+    persistent_codex_auth_home,
 )
 
 
 @contextmanager
-def _client(*, persist_auth: bool = False) -> Iterator[Any]:
+def _client() -> Iterator[Any]:
     try:
         from openai_codex import Codex, CodexConfig
     except ImportError:
@@ -34,30 +34,21 @@ def _client(*, persist_auth: bool = False) -> Iterator[Any]:
         ) from None
 
     source_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    auth_home = persistent_codex_auth_home(source_home)
+    ensure_persistent_chatgpt_auth(source_home, auth_home)
     with tempfile.TemporaryDirectory(prefix="helios-codex-admin-") as temporary:
         root = Path(temporary)
         workspace = root / "workspace"
         workspace.mkdir(mode=0o700)
-        isolated_home = root / "codex-home"
-        copy_chatgpt_auth(source_home, isolated_home)
         config = CodexConfig(
             cwd=str(workspace),
-            env=codex_child_environment(isolated_home),
+            env=codex_child_environment(auth_home),
             config_overrides=CODEX_DISABLED_FEATURES,
             client_name="helios_admin",
             client_title="Helios Codex Account Setup",
         )
         with Codex(config) as client:
             yield client
-        if persist_auth:
-            isolated_auth = isolated_home / "auth.json"
-            if not isolated_auth.is_file() or isolated_auth.is_symlink():
-                raise RuntimeError("Codex sign-in did not produce an auth profile")
-            source_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-            staged = source_home / "auth.json.helios.tmp"
-            shutil.copyfile(isolated_auth, staged)
-            staged.chmod(0o600)
-            os.replace(staged, source_home / "auth.json")
 
 
 def _account_root(response: Any) -> Any:
@@ -84,7 +75,7 @@ def status() -> int:
 
 
 def login() -> int:
-    with _client(persist_auth=True) as client:
+    with _client() as client:
         handle = client.login_chatgpt_device_code()
         print(f"Open: {handle.verification_url}")
         print(f"Code: {handle.user_code}")

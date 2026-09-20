@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from api.api_client import APIClient, APIClientError
 from api.metrics import SafeMetricsRecorder
+from api.transcripts import TranscriptPromoter
+from api.conversation_control import ConversationFloorState
+from api.realtime_conversation import RealtimeConversationController, ResponseEvent
+from recognizer.turn_endpoint_detector import TurnEndpointConfig
+from audio.speech_pipeline import SpeechPipelineShutdownTimeout
 
 
 class FakeTTS:
@@ -30,6 +37,103 @@ class FakeClient:
         return iter(self.responses)
 
 
+def test_pipeline_shutdown_timeout_closes_provider_but_does_not_wait_on_owned_tts():
+    closed = []
+
+    class TTS(FakeTTS):
+        def close(self):
+            pytest.fail("a stuck native stage still owns the TTS locks")
+
+    class Pipeline:
+        def cancel(self):
+            pass
+
+        def close(self):
+            raise SpeechPipelineShutdownTimeout("synthetic stuck native stage")
+
+    client = APIClient(client=FakeClient(), tts=TTS(), retry_wait=0)
+    client._owns_tts = True
+    client._speech_pipeline = Pipeline()
+    client._ollama.close = lambda: closed.append("provider")
+    with pytest.raises(SpeechPipelineShutdownTimeout):
+        client.close()
+    assert closed == ["provider"]
+
+
+def test_failure_during_eof_audio_drain_is_not_replayed_and_next_turn_recovers():
+    class TTS:
+        calls = 0
+
+        def __init__(self):
+            self.played = []
+
+        def synthesize_fragment(self, text):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("synthetic synthesis failure")
+            return text
+
+        def play_fragment(self, fragment):
+            self.played.append(fragment)
+
+    tts = TTS()
+    fake = FakeClient([chunk("Answer.", done=True)])
+    client = APIClient(client=fake, tts=tts, retry_wait=0)
+    try:
+        with pytest.raises(RuntimeError):
+            client.talk("first synthetic request")
+        assert len(fake.calls) == 1
+        assert client.talk("second synthetic request") == "Answer."
+        assert len(fake.calls) == 2
+        assert tts.played == ["Answer."]
+    finally:
+        client.close()
+
+
+def test_correlated_generation_eof_does_not_release_floor_until_audio_finishes():
+    playing = threading.Event()
+    release = threading.Event()
+
+    class StagedTTS:
+        def synthesize_fragment(self, text):
+            return text
+
+        def play_fragment(self, fragment):
+            playing.set()
+            assert release.wait(timeout=3)
+            return None
+
+    control = RealtimeConversationController(endpointing=TurnEndpointConfig(), activity_energy=0.08)
+    token = control.begin_response()
+    events = []
+
+    def observe(event):
+        events.append(event)
+        control.response_event(token, event)
+
+    client = APIClient(client=FakeClient([chunk("Answer.", done=True)]), tts=StagedTTS(), retry_wait=0)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(client.talk, "synthetic question", on_lifecycle=observe)
+            try:
+                assert playing.wait(timeout=2)
+                snapshot = control.snapshot()
+                assert snapshot.generation_complete
+                assert snapshot.floor.state is ConversationFloorState.ASSISTANT_SPEAKING
+                assert not future.done()
+            finally:
+                release.set()
+            assert future.result(timeout=2) == "Answer."
+        assert events.count(ResponseEvent.GENERATION_COMPLETED) == 1
+        assert events.count(ResponseEvent.SYNTHESIS_STARTED) == 1
+        assert events.count(ResponseEvent.PLAYBACK_COMPLETED) == 1
+        control.finish_response(token)
+        assert control.snapshot().floor.state is ConversationFloorState.ARMED
+    finally:
+        release.set()
+        client.close()
+
+
 def chunk(text: str, *, done: bool = False, done_reason: str | None = None) -> object:
     return SimpleNamespace(
         message=SimpleNamespace(content=text),
@@ -51,6 +155,26 @@ def test_constructor_is_lazy_and_normalizes_legacy_endpoint() -> None:
     assert client.host == "http://example.test:11434"
     assert created_hosts == []
     assert fake.calls == []
+
+
+def test_local_prepare_is_background_and_idempotent() -> None:
+    fake = FakeClient()
+    client = APIClient(client=fake, tts=FakeTTS(), retry_wait=0)
+
+    first = client.prepare_local_async()
+    second = client.prepare_local_async()
+
+    assert first is not None
+    assert second is first
+    first.join(timeout=1)
+    assert not first.is_alive()
+    assert fake.calls == [
+        {
+            "model": client.models["talk"],
+            "messages": [{"role": "user", "content": ""}],
+            "stream": False,
+        }
+    ]
 
 
 def test_talk_uses_one_stream_parser_and_flushes_done_reason() -> None:
@@ -77,6 +201,22 @@ def test_talk_uses_one_stream_parser_and_flushes_done_reason() -> None:
             "stream": True,
         }
     ]
+
+
+def test_promoted_utterance_reaches_provider_and_canonical_history() -> None:
+    tts = FakeTTS()
+    fake = FakeClient([chunk("Answer.", done=True)])
+    client = APIClient(client=fake, tts=tts, retry_wait=0)
+    final = TranscriptPromoter().observe("synthetic final request", is_final=True)
+    try:
+        assert client.talk(final) == "Answer."
+        assert fake.calls[0]["messages"][-1]["content"] == "synthetic final request"
+        next_turn = client.conversation.begin_turn("next request")
+        history = client.conversation.history_before(next_turn)
+        assert [message.content for message in history] == ["synthetic final request", "Answer."]
+        client.conversation.fail_turn(next_turn, interrupted=True)
+    finally:
+        client.close()
 
 
 def test_think_does_not_speak_unless_requested() -> None:

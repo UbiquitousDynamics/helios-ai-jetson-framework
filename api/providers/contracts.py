@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, Union
 
+from api.transcripts import authoritative_text
+
 
 class Role(str, Enum):
     SYSTEM = "system"
@@ -73,6 +75,7 @@ class ChatMessage:
     source_origins: frozenset[ContentOrigin] = frozenset()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "content", authoritative_text(self.content))
         if not self.content:
             raise ValueError("message content cannot be empty")
         if not isinstance(self.remote_eligible, bool):
@@ -87,9 +90,9 @@ class ChatMessage:
 @dataclass(frozen=True, slots=True)
 class Timeouts:
     connect_seconds: float = 2.0
-    first_token_seconds: float = 4.0
-    read_seconds: float = 12.0
-    total_seconds: float = 30.0
+    first_token_seconds: float = 20.0
+    read_seconds: float = 15.0
+    total_seconds: float = 45.0
 
     def __post_init__(self) -> None:
         values = (

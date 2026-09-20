@@ -8,6 +8,8 @@ from api.speech_chunker import SpeechChunker
     [
         {"first_speech_min_chars": -1},
         {"speech_chunk_max_chars": -1},
+        {"speech_chunk_max_delay_seconds": -1},
+        {"speech_chunk_max_delay_seconds": float("inf")},
     ],
 )
 def test_negative_limits_are_rejected(kwargs: dict[str, int]) -> None:
@@ -42,6 +44,20 @@ def test_soft_limit_uses_whitespace_and_never_splits_a_word() -> None:
     long_word = SpeechChunker(speech_chunk_max_chars=4)
     assert list(long_word.push("abcdefgh")) == []
     assert list(long_word.finish()) == ["abcdefgh"]
+
+
+def test_delay_flushes_whole_words_without_waiting_for_completion() -> None:
+    now = [0.0]
+    chunker = SpeechChunker(
+        speech_chunk_max_chars=80,
+        speech_chunk_max_delay_seconds=0.5,
+        clock=lambda: now[0],
+    )
+
+    assert list(chunker.push("alpha beta")) == []
+    now[0] = 0.6
+    assert list(chunker.push(" gamma")) == ["alpha beta"]
+    assert list(chunker.finish()) == ["gamma"]
 
 
 def test_finish_removes_speech_markup_and_ignores_punctuation_only_text() -> None:

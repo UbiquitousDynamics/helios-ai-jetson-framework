@@ -291,6 +291,11 @@ class OllamaAdapter:
         self._client_epoch = 0
         self._client_unusable = False
         self._cancellation_ack_timeout_seconds = float(cancellation_ack_timeout_seconds)
+        # The official synchronous client cannot reliably abort a blocked HTTP
+        # read from a second thread. Keep one request admitted until its worker
+        # has really exited, rather than starting retries that compete with a
+        # timed-out model load on a memory-constrained device.
+        self._request_slot = threading.Lock()
         self._closed = False
 
     @property
@@ -398,6 +403,40 @@ class OllamaAdapter:
             return None
         return self._start_control_operation(close, "client_retire")
 
+    def _acquire_request_slot(
+        self,
+        *,
+        timeout_seconds: float,
+        model: str,
+        operation: str,
+        cancellation: CancellationToken | None = None,
+    ) -> None:
+        if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
+            raise ValueError("request slot timeout must be positive and finite")
+        started_at = time.monotonic()
+        deadline = started_at + timeout_seconds
+        while True:
+            self._check_cancellation(cancellation, model)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if self._request_slot.acquire(timeout=min(0.05, remaining)):
+                return
+        logger.warning(
+            "provider=%s event=request_admission_timeout operation=%s wait_ms=%s",
+            _PROVIDER_NAME,
+            operation,
+            round((time.monotonic() - started_at) * 1_000),
+        )
+        raise ProviderError(
+            ErrorCategory.PROVIDER_UNAVAILABLE,
+            "A previous Ollama request is still shutting down",
+            provider=_PROVIDER_NAME,
+            model=model,
+            retryable_same_provider=False,
+            transmitted=False,
+        )
+
     def stream(
         self,
         request: ChatRequest,
@@ -443,10 +482,26 @@ class OllamaAdapter:
         request: ChatRequest,
         cancellation: CancellationToken | None,
     ) -> Iterator[StreamEvent]:
+        self._acquire_request_slot(
+            timeout_seconds=request.timeouts.total_seconds,
+            model=request.model,
+            operation="stream",
+            cancellation=cancellation,
+        )
         mailbox: queue.Queue[tuple[str, Any]] = queue.Queue()
         holder: dict[str, Any] = {}
         stop_requested = threading.Event()
         worker_done = threading.Event()
+        slot_release_lock = threading.Lock()
+        slot_released = False
+
+        def release_slot() -> None:
+            nonlocal slot_released
+            with slot_release_lock:
+                if slot_released:
+                    return
+                self._request_slot.release()
+                slot_released = True
 
         def worker() -> None:
             try:
@@ -482,12 +537,17 @@ class OllamaAdapter:
                 mailbox.put(("error", exc))
             finally:
                 worker_done.set()
+                release_slot()
 
-        threading.Thread(
-            target=worker,
-            name="helios-ollama-stream",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=worker,
+                name="helios-ollama-stream",
+                daemon=True,
+            ).start()
+        except Exception:
+            release_slot()
+            raise
 
         cancelled_worker = False
         began = time.monotonic()
@@ -511,7 +571,7 @@ class OllamaAdapter:
             if not worker_done.wait(self._cancellation_ack_timeout_seconds):
                 logger.warning(
                     "conversation_session=%s turn=%s provider=%s "
-                    "event=cancellation_ack_timeout reason=%s",
+                    "event=stream_worker_stop_unacknowledged stop_reason=%s",
                     safe_conversation_identifier(request.conversation_id),
                     request.conversation_turn,
                     _PROVIDER_NAME,
@@ -520,7 +580,7 @@ class OllamaAdapter:
             else:
                 logger.info(
                     "conversation_session=%s turn=%s provider=%s "
-                    "event=cancellation_acknowledged reason=%s",
+                    "event=stream_worker_stopped stop_reason=%s",
                     safe_conversation_identifier(request.conversation_id),
                     request.conversation_turn,
                     _PROVIDER_NAME,
@@ -706,17 +766,31 @@ class OllamaAdapter:
                 transmitted=None,
             ) from None
 
-    def warm_up(self, model: str) -> None:
+    def warm_up(self, model: str, *, admission_timeout_seconds: float = 45.0) -> None:
         if not model or not model.strip():
             raise ValueError("model cannot be empty")
+        self._acquire_request_slot(
+            timeout_seconds=admission_timeout_seconds,
+            model=model,
+            operation="warm_up",
+        )
+        started_at = time.monotonic()
         try:
             self.client.chat(
                 model=model,
                 messages=[{"role": "user", "content": ""}],
                 stream=False,
             )
+            logger.info(
+                "provider=%s event=warm_up_completed model=%s duration_ms=%s",
+                _PROVIDER_NAME,
+                model,
+                round((time.monotonic() - started_at) * 1_000),
+            )
         except Exception as exc:
             raise _provider_error(exc, model=model, transmitted=None) from None
+        finally:
+            self._request_slot.release()
 
     def close(self) -> None:
         with self._client_lock:

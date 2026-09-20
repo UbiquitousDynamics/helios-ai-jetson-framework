@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from recognizer.turn_endpoint_detector import TurnEndpointConfig
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 # Suggested hybrid profile, referenced by documentation and tooling. It is NOT
 # loaded implicitly: remote routing requires HELIOS_LLM_CONFIG to name a file.
@@ -166,9 +168,12 @@ class KPISettings:
 @dataclass(frozen=True)
 class LLMTimeoutSettings:
     connect_seconds: float = 2.0
-    first_token_seconds: float = 4.0
-    read_seconds: float = 12.0
-    total_seconds: float = 30.0
+    # Loading a local model after boot can take more than ten seconds on a
+    # memory-constrained Jetson.  Four seconds caused a request to be retried
+    # while Ollama was still loading the first one.
+    first_token_seconds: float = 20.0
+    read_seconds: float = 15.0
+    total_seconds: float = 45.0
 
     def __post_init__(self) -> None:
         values = (
@@ -361,6 +366,7 @@ class LLMModeSettings:
     complexity_threshold: int = 2
     first_speech_min_chars: int = 0
     speech_chunk_max_chars: int = 0
+    speech_chunk_max_delay_seconds: float = 0.0
     first_visible_token_seconds: float | None = None
 
     def __post_init__(self) -> None:
@@ -372,6 +378,15 @@ class LLMModeSettings:
             raise ConfigurationError("first_speech_min_chars cannot be negative")
         if self.speech_chunk_max_chars < 0:
             raise ConfigurationError("speech_chunk_max_chars cannot be negative")
+        if (
+            isinstance(self.speech_chunk_max_delay_seconds, bool)
+            or not isinstance(self.speech_chunk_max_delay_seconds, (int, float))
+            or not math.isfinite(float(self.speech_chunk_max_delay_seconds))
+            or self.speech_chunk_max_delay_seconds < 0
+        ):
+            raise ConfigurationError(
+                "speech_chunk_max_delay_seconds must be finite and non-negative"
+            )
         if self.first_visible_token_seconds is not None and (
             isinstance(self.first_visible_token_seconds, bool)
             or not isinstance(self.first_visible_token_seconds, (int, float))
@@ -392,6 +407,11 @@ class LLMProviderSettings:
     api_key_env: str | None = None
     enabled: bool = True
     internal_retries: int = 0
+    # Only the Codex app-server consumes this setting. Keeping the transport
+    # choice separate from ``privacy.allow_remote_context`` means a user can
+    # authorize canonical Helios history without depending on a provider-side
+    # conversation checkpoint.
+    reuse_remote_thread: bool = True
 
     def __post_init__(self) -> None:
         if not self.name or not self.adapter or not self.endpoint:
@@ -422,6 +442,8 @@ class LLMProviderSettings:
             raise ConfigurationError("remote providers require an API-key environment name")
         if self.internal_retries != 0:
             raise ConfigurationError("provider-internal retries must be disabled")
+        if not isinstance(self.reuse_remote_thread, bool):
+            raise ConfigurationError("reuse_remote_thread must be a boolean")
 
         parsed = urlsplit(self.endpoint)
         if not parsed.hostname:
@@ -461,6 +483,7 @@ class LLMTargetSettings:
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
     tier: str | None = None
+    max_history_turns: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.provider:
@@ -481,6 +504,12 @@ class LLMTargetSettings:
             or self.max_output_words < 1
         ):
             raise ConfigurationError("target max_output_words must be a positive integer")
+        if self.max_history_turns is not None and (
+            isinstance(self.max_history_turns, bool)
+            or not isinstance(self.max_history_turns, int)
+            or self.max_history_turns < 1
+        ):
+            raise ConfigurationError("target max_history_turns must be a positive integer")
         if self.min_complexity_score is not None and (
             isinstance(self.min_complexity_score, bool)
             or not isinstance(self.min_complexity_score, int)
@@ -768,6 +797,29 @@ def _float_from_env(value: str, name: str) -> float:
     return parsed
 
 
+def _audio_device_from_env(value: str | None, name: str) -> int | str | None:
+    """Parse an optional PyAudio/sounddevice device selector.
+
+    A numeric selector remains stable for fixed installations; a non-empty
+    name is resolved by the recognizer or passed to sounddevice unchanged.
+    Empty values deliberately mean "use the platform default".
+    """
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if re.fullmatch(r"[+-]?\d+", normalized):
+        parsed = _int_from_env(normalized, name)
+        if parsed < 0:
+            raise ConfigurationError(f"{name} must be a non-negative device index")
+        return parsed
+    if len(normalized) > 256:
+        raise ConfigurationError(f"{name} is not a valid device selector")
+    return normalized
+
+
 def _kpi_from_env(
     env: Mapping[str, str],
     *,
@@ -1020,7 +1072,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "privacy.allow_remote_transcripts",
         ),
         allow_remote_context=_toml_bool(
-            privacy_table.get("allow_remote_context", True),
+            privacy_table.get("allow_remote_context", False),
             "privacy.allow_remote_context",
         ),
         allow_remote_rag_context=_toml_bool(
@@ -1050,15 +1102,15 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "timeouts.connect_seconds",
         ),
         first_token_seconds=_toml_float(
-            timeout_table.get("first_token_seconds", 4.0),
+            timeout_table.get("first_token_seconds", 20.0),
             "timeouts.first_token_seconds",
         ),
         read_seconds=_toml_float(
-            timeout_table.get("read_seconds", 12.0),
+            timeout_table.get("read_seconds", 15.0),
             "timeouts.read_seconds",
         ),
         total_seconds=_toml_float(
-            timeout_table.get("total_seconds", 30.0),
+            timeout_table.get("total_seconds", 45.0),
             "timeouts.total_seconds",
         ),
     )
@@ -1263,6 +1315,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "complexity_threshold",
                 "first_speech_min_chars",
                 "speech_chunk_max_chars",
+                "speech_chunk_max_delay_seconds",
                 "first_visible_token_seconds",
             },
             f"modes.{name}",
@@ -1284,6 +1337,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             speech_chunk_max_chars=_toml_int(
                 mode.get("speech_chunk_max_chars", 0),
                 f"modes.{name}.speech_chunk_max_chars",
+            ),
+            speech_chunk_max_delay_seconds=(
+                _toml_float(
+                    mode["speech_chunk_max_delay_seconds"],
+                    f"modes.{name}.speech_chunk_max_delay_seconds",
+                )
+                if "speech_chunk_max_delay_seconds" in mode
+                else 0.0
             ),
             first_visible_token_seconds=(
                 _toml_float(
@@ -1310,6 +1371,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "api_key_env",
                 "enabled",
                 "internal_retries",
+                "reuse_remote_thread",
             },
             f"providers.{name}",
         )
@@ -1344,6 +1406,10 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                     provider.get("internal_retries", 0),
                     f"providers.{name}.internal_retries",
                 ),
+                reuse_remote_thread=_toml_bool(
+                    provider.get("reuse_remote_thread", True),
+                    f"providers.{name}.reuse_remote_thread",
+                ),
             )
         )
 
@@ -1365,6 +1431,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "context_window",
                 "max_output_tokens",
                 "max_output_words",
+                "max_history_turns",
                 "min_complexity_score",
                 "retry_attempts",
                 "options",
@@ -1438,6 +1505,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                         f"targets.{name}.max_output_words",
                     )
                     if "max_output_words" in target
+                    else None
+                ),
+                max_history_turns=(
+                    _toml_int(
+                        target["max_history_turns"],
+                        f"targets.{name}.max_history_turns",
+                    )
+                    if "max_history_turns" in target
                     else None
                 ),
                 min_complexity_score=(
@@ -1620,14 +1695,20 @@ class Settings:
     log_level: int = logging.INFO
     log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     log_file_name: str | None = "app.log"
+    audio_input_device: int | str | None = None
+    audio_output_device: int | str | None = None
+    audio_output_latency: str = "high"
     ollama_host: str = "http://localhost:11434"
     think_model: str = "qwen3:0.6b"
     top_k: int = 4
     llm: LLMSettings = field(default_factory=LLMSettings)
     kpi: KPISettings = field(default_factory=KPISettings)
+    endpointing: TurnEndpointConfig = field(default_factory=TurnEndpointConfig)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).expanduser().resolve()
+        if not isinstance(self.endpointing, TurnEndpointConfig):
+            raise ConfigurationError("endpointing must be a TurnEndpointConfig")
         language = self.language.strip().lower()
         if language not in _profile_paths(root):
             supported = ", ".join(sorted(_profile_paths(root)))
@@ -1658,8 +1739,29 @@ class Settings:
         if self.top_k < 1:
             raise ConfigurationError("top_k must be at least one")
 
+        for name, value in (
+            ("audio_input_device", self.audio_input_device),
+            ("audio_output_device", self.audio_output_device),
+        ):
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ConfigurationError(f"{name} must be a device index or name")
+            if isinstance(value, int):
+                if value < 0:
+                    raise ConfigurationError(f"{name} must be a non-negative device index")
+                continue
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 256:
+                raise ConfigurationError(f"{name} must be a device index or name")
+            object.__setattr__(self, name, value.strip())
+
+        latency = self.audio_output_latency.strip().lower()
+        if latency not in {"low", "high"}:
+            raise ConfigurationError("audio_output_latency must be 'low' or 'high'")
+
         object.__setattr__(self, "project_root", root)
         object.__setattr__(self, "language", language)
+        object.__setattr__(self, "audio_output_latency", latency)
         object.__setattr__(self, "ollama_host", normalize_ollama_host(self.ollama_host))
         kpi_path = self.kpi.storage_path.expanduser()
         if not kpi_path.is_absolute():
@@ -1728,6 +1830,22 @@ class Settings:
             logger.error("Invalid KPI configuration; KPI collection and dashboard are disabled")
             kpi = KPISettings(storage_path=(root / "logs/helios-kpi.sqlite3").resolve())
 
+        endpoint_defaults = TurnEndpointConfig()
+        try:
+            endpointing = TurnEndpointConfig(**{
+                name: _float_from_env(
+                    env.get(f"HELIOS_ENDPOINT_{name.upper()}", str(getattr(endpoint_defaults, name))),
+                    f"HELIOS_ENDPOINT_{name.upper()}",
+                )
+                for name in (
+                    "short_pause_seconds", "finalization_seconds", "inactivity_seconds",
+                    "maximum_utterance_seconds", "revision_stability_seconds",
+                    "final_result_timeout_seconds", "minimum_confidence", "minimum_speech_seconds",
+                )
+            })
+        except ValueError:
+            raise ConfigurationError("invalid turn endpoint configuration") from None
+
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
@@ -1753,9 +1871,19 @@ class Settings:
             ),
             log_level=_log_level_from_env(env.get("HELIOS_LOG_LEVEL", "INFO")),
             log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
+            audio_input_device=_audio_device_from_env(
+                env.get("HELIOS_AUDIO_INPUT_DEVICE"),
+                "HELIOS_AUDIO_INPUT_DEVICE",
+            ),
+            audio_output_device=_audio_device_from_env(
+                env.get("HELIOS_AUDIO_OUTPUT_DEVICE"),
+                "HELIOS_AUDIO_OUTPUT_DEVICE",
+            ),
+            audio_output_latency=env.get("HELIOS_AUDIO_OUTPUT_LATENCY", "high"),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
             kpi=kpi,
+            endpointing=endpointing,
         )
 
     @property

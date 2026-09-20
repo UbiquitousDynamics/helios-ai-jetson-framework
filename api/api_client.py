@@ -48,7 +48,9 @@ from api.streaming import (
     StreamingResponseCoordinator,
 )
 from api.target_compiler import TargetCompiler
-from audio.speech_pipeline import SpeechPipeline
+from api.transcripts import authoritative_text
+from audio.speech_pipeline import SpeechPipeline, SpeechPipelineShutdownTimeout
+from api.realtime_conversation import ResponseEvent, SpeechStopSignal, observed_speech_call
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +59,16 @@ _HYBRID_SYSTEM_INSTRUCTIONS = {
         "Sei Emilia, il veicolo solare dotato di intelligenza artificiale. "
         "Rispondi sempre in italiano, direttamente e con precisione. "
         "Non usare Markdown nella conversazione vocale. "
+        "Questa installazione non ha strumenti per controllare dispositivi fisici: "
+        "non dichiarare mai di aver acceso, spento o modificato qualcosa nel mondo reale. "
         "Quando puoi fare una scelta ragionevole, falla invece di chiedere chiarimenti."
     ),
     "en": (
         "You are Emilia, the solar vehicle with artificial intelligence. "
         "Always answer in English, directly and precisely. "
         "Do not use Markdown in voice conversation. "
+        "This installation has no tools to control physical devices: never claim to have "
+        "turned on, turned off, or changed anything in the real world. "
         "When you can make a reasonable choice, make it instead of asking for clarification."
     ),
 }
@@ -249,6 +255,9 @@ class APIClient:
         self._remote_prepare_lock = threading.Lock()
         self._remote_prepare_thread: threading.Thread | None = None
         self._remote_prepared = False
+        self._local_prepare_lock = threading.Lock()
+        self._local_prepare_threads: dict[str, threading.Thread] = {}
+        self._local_prepared_modes: set[str] = set()
         if connectivity is not None and network_monitor is not None:
             raise ValueError("pass either connectivity or network_monitor, not both")
         self._network_monitor = network_monitor
@@ -663,7 +672,7 @@ class APIClient:
         except KeyError:
             raise ValueError(f"Unknown model mode: {mode!r}") from None
 
-    def _speech_callable(self) -> Callable[[str], Any]:
+    def _speech_callable(self, observer: Callable[[ResponseEvent], None] | None = None, cancellation: CancellationToken | None = None) -> Callable[[str], Any]:
         """Prefer overlapped speech, then timing-aware, then legacy TTS.
 
         When the backend exposes the two-stage API, wrap it in a SpeechPipeline
@@ -674,16 +683,20 @@ class APIClient:
 
         with self._speech_pipeline_lock:
             if self._speech_pipeline is not None:
-                return self._speech_pipeline
+                return self._speech_pipeline.with_observer(observer) if observer else self._speech_pipeline
             synthesize = getattr(self.tts, "synthesize_fragment", None)
             play = getattr(self.tts, "play_fragment", None)
             if self._overlapped_speech_enabled and callable(synthesize) and callable(play):
-                self._speech_pipeline = SpeechPipeline(synthesize=synthesize, play=play)
+                self._speech_pipeline = SpeechPipeline(
+                    synthesize=synthesize, play=play, interrupt=getattr(self.tts, "interrupt", None),
+                )
                 logger.info("Overlapped speech pipeline enabled")
-                return self._speech_pipeline
+                return self._speech_pipeline.with_observer(observer) if observer else self._speech_pipeline
 
         speak_with_timing = getattr(self.tts, "speak_with_timing", None)
-        return speak_with_timing if callable(speak_with_timing) else self.tts.speak
+        speak = speak_with_timing if callable(speak_with_timing) else self.tts.speak
+        stop = SpeechStopSignal(lambda: cancellation.cancelled) if cancellation is not None else None
+        return (lambda text: observed_speech_call(speak, text, observer, cancellation_event=stop)) if observer or stop else speak
 
     def _compile_timeouts(self, mode_settings: config.LLMModeSettings) -> Timeouts:
         values = self.llm_settings.timeouts
@@ -908,12 +921,10 @@ class APIClient:
                 )
         return planned, decision, network_snapshot, selected_connectivity
 
-    def warm_up(self, mode: str = "talk") -> None:
-        """Explicitly load the local Ollama model; remote warm-up is forbidden."""
-
+    def _local_ollama_target(self, mode: str) -> ExecutionTarget | None:
         if mode not in self.models:
             raise ValueError(f"Unknown model mode: {mode!r}")
-        local_target = next(
+        return next(
             (
                 execution
                 for execution in self._execution_targets[mode]
@@ -923,12 +934,76 @@ class APIClient:
             ),
             None,
         )
+
+    def warm_up(self, mode: str = "talk") -> None:
+        """Explicitly load the local Ollama model; remote warm-up is forbidden."""
+
+        local_target = self._local_ollama_target(mode)
         if local_target is None:
             raise APIClientError("Remote or disabled Ollama targets cannot be warmed up")
         self._call_with_retry(
             lambda: self._ollama.warm_up(local_target.route.model),
             operation_name=f"warm up the {mode} model",
         )
+
+    def prepare_local_async(self, mode: str = "talk") -> threading.Thread | None:
+        """Load the local talk model in the background before the first command.
+
+        Warm-up is intentionally local-only and never sends a transcript. It
+        uses one attempt: an unavailable daemon should not queue repeated empty
+        requests while the assistant is starting, and normal request routing
+        retains its typed fallback behavior.
+        """
+
+        local_target = self._local_ollama_target(mode)
+        if local_target is None:
+            return None
+        with self._local_prepare_lock:
+            if self._closed or mode in self._local_prepared_modes:
+                return self._local_prepare_threads.get(mode)
+            thread = self._local_prepare_threads.get(mode)
+            if thread is not None and thread.is_alive():
+                return thread
+
+            model = local_target.route.model
+
+            def prepare() -> None:
+                started_at = time.monotonic()
+                try:
+                    self._ollama.warm_up(
+                        model,
+                        admission_timeout_seconds=self._timeouts_by_mode[mode].total_seconds,
+                    )
+                except ProviderError as error:
+                    logger.warning(
+                        "Local Ollama preparation failed "
+                        "(mode=%s, category=%s); normal routing remains active",
+                        mode,
+                        error.category.value,
+                    )
+                    return
+                except Exception:
+                    logger.warning(
+                        "Local Ollama preparation failed (mode=%s); normal routing remains active",
+                        mode,
+                    )
+                    return
+                with self._local_prepare_lock:
+                    self._local_prepared_modes.add(mode)
+                logger.info(
+                    "Local Ollama prepared without a user prompt (mode=%s, startup_ms=%s)",
+                    mode,
+                    round((time.monotonic() - started_at) * 1_000),
+                )
+
+            thread = threading.Thread(
+                target=prepare,
+                name=f"helios-local-prepare-{mode}",
+                daemon=True,
+            )
+            self._local_prepare_threads[mode] = thread
+            thread.start()
+            return thread
 
     def prepare_remote_async(self) -> threading.Thread | None:
         """Start the non-inference Codex startup/authentication path in background."""
@@ -1051,7 +1126,11 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
+        message = authoritative_text(message)
+        if context is not None:
+            context = authoritative_text(context)
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
         if mode not in self.models:
@@ -1092,6 +1171,7 @@ class APIClient:
                     cancellation=active_cancellation,
                     pipeline_started_at=pipeline_started_at,
                     before_first_speech=before_first_speech,
+                    on_lifecycle=on_lifecycle,
                 )
                 source_origins: set[ContentOrigin] = {turn.user.origin}
                 assistant_remote_eligible = turn.user.remote_eligible
@@ -1172,6 +1252,7 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
@@ -1358,10 +1439,17 @@ class APIClient:
             result = self._coordinator.run(
                 request,
                 executions,
-                speak=self._speech_callable() if speak else None,
+                speak=self._speech_callable(on_lifecycle, active_cancellation) if speak else None,
+                on_generation_completed=(
+                    (lambda: on_lifecycle(ResponseEvent.GENERATION_COMPLETED))
+                    if on_lifecycle else None
+                ),
                 before_first_speech=before_first_speech if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
                 speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
+                speech_chunk_max_delay_seconds=(
+                    self._mode_settings(mode).speech_chunk_max_delay_seconds
+                ),
                 maximum_first_audio_seconds=(
                     self.llm_settings.health.maximum_talk_first_audio_ms / 1_000
                     if mode == "talk" and speak
@@ -1427,6 +1515,16 @@ class APIClient:
                 first_audio_ms=request_relative(result.first_audio_seconds),
                 speech_dispatch_ms=request_relative(result.first_audio_seconds),
                 actual_first_audio_ms=request_relative(result.actual_first_audio_seconds),
+                streaming_lead_ms=(
+                    max(
+                        0.0,
+                        request_latency_ms
+                        - request_relative(result.actual_first_audio_seconds),
+                    )
+                    if result.actual_first_audio_seconds is not None
+                    and request_relative(result.actual_first_audio_seconds) is not None
+                    else None
+                ),
                 tts_synthesis_ms=result.tts_synthesis_seconds * 1_000 or None,
                 audio_playback_ms=result.audio_playback_seconds * 1_000 or None,
                 audio_duration_ms=result.audio_duration_seconds * 1_000 or None,
@@ -1552,6 +1650,7 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
         """Stream a conversational response and speak sentences as they arrive."""
 
@@ -1569,6 +1668,7 @@ class APIClient:
             cancellation=cancellation,
             pipeline_started_at=pipeline_started_at,
             before_first_speech=before_first_speech,
+            on_lifecycle=on_lifecycle,
         )
 
     def think(
@@ -1586,6 +1686,7 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
         """Stream a reasoning response and optionally speak it."""
 
@@ -1603,6 +1704,7 @@ class APIClient:
             cancellation=cancellation,
             pipeline_started_at=pipeline_started_at,
             before_first_speech=before_first_speech,
+            on_lifecycle=on_lifecycle,
         )
 
     def reset_conversation(self, *, reason: str = "explicit") -> str:
@@ -1684,9 +1786,12 @@ class APIClient:
         with self._speech_pipeline_lock:
             pipeline = self._speech_pipeline
             self._speech_pipeline = None
+        speech_shutdown_error = None
         if pipeline is not None:
             try:
                 pipeline.close()
+            except SpeechPipelineShutdownTimeout as error:
+                speech_shutdown_error = error
             except Exception:
                 logger.warning("Unable to close the speech pipeline")
         if self._owns_network_monitor and self._network_monitor is not None:
@@ -1710,13 +1815,15 @@ class APIClient:
                 self.metrics.close()
             except Exception:
                 logger.warning("Unable to flush language-model metrics")
-        if self._owns_tts and self._tts is not None:
+        if self._owns_tts and self._tts is not None and speech_shutdown_error is None:
             close = getattr(self._tts, "close", None)
             if callable(close):
                 try:
                     close()
                 except Exception:
                     logger.warning("Unable to close language-model speech output")
+        if speech_shutdown_error is not None:
+            raise speech_shutdown_error
 
     def __enter__(self) -> APIClient:
         return self

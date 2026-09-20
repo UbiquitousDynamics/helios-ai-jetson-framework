@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from audio.sound_player import SoundPlaybackError, SoundPlayer
+from api.realtime_conversation import ResponseEvent
 from audio.tts import (
     AudioSynthesisError,
     PiperTTS,
@@ -54,6 +55,17 @@ class CapturingBackend:
         sample_width: int,
     ) -> None:
         self.calls.append((frames, sample_rate, channels, sample_width))
+
+
+def test_synchronous_piper_emits_content_free_stages():
+    events = []
+    tts = PiperTTS(voice=FakeVoice(), audio_backend=CapturingBackend())
+    try:
+        tts.speak_with_timing("hello", on_lifecycle=events.append)
+        assert events == [ResponseEvent.SYNTHESIS_STARTED, ResponseEvent.SYNTHESIS_COMPLETED,
+                          ResponseEvent.PLAYBACK_STARTED, ResponseEvent.PLAYBACK_COMPLETED]
+    finally:
+        tts.close()
 
 
 class BlockingBackend(CapturingBackend):
@@ -164,8 +176,13 @@ def test_sounddevice_backend_reuses_stream_for_matching_pcm_format() -> None:
         "samplerate": 16_000,
         "channels": 1,
         "dtype": "int16",
+        "latency": "high",
+        "blocksize": 1_024,
     }
-    assert stream.writes == [b"\x01\x00", b"\x02\x00"]
+    assert stream.writes == [
+        b"\x00" * 3_840 + b"\x01\x00",
+        b"\x00" * 3_840 + b"\x02\x00",
+    ]
     assert stream.started == 2
     assert stream.stopped == 2
 
@@ -182,6 +199,20 @@ def test_sounddevice_backend_reopens_stream_when_pcm_format_changes() -> None:
 
     assert len(module.streams) == 2
     assert module.streams[0].closed == 1
+
+
+def test_sounddevice_backend_honors_explicit_output_device() -> None:
+    module = FakeSoundDevice()
+    backend = SoundDeviceBackend(
+        sounddevice_module=module,
+        device="Tegra Analog",
+        latency="low",
+    )
+
+    backend.play(b"\x01\x00", 16_000, 1, 2)
+
+    assert module.streams[0].kwargs["device"] == "Tegra Analog"
+    assert module.streams[0].kwargs["latency"] == "low"
 
 
 def test_piper_preserves_failure_that_occurs_before_wav_header() -> None:

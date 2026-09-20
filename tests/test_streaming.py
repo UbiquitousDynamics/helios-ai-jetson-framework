@@ -170,6 +170,36 @@ def test_unspoken_partial_output_is_discarded_before_fallback() -> None:
     assert spoken == ["Ready."]
 
 
+def test_target_history_limit_keeps_only_the_newest_complete_turn() -> None:
+    provider = FakeProvider("first", [[TextDelta("Ready."), completion("first")]])
+    original = replace(
+        request(),
+        messages=(
+            ChatMessage(Role.SYSTEM, "Instruction", ContentOrigin.STATIC_INSTRUCTION),
+            ChatMessage(Role.USER, "old user", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.ASSISTANT, "old answer", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.USER, "recent user", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.ASSISTANT, "recent answer", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.USER, "current user", ContentOrigin.RAW_TRANSCRIPT),
+        ),
+        conversation_turn=3,
+    )
+
+    result = coordinator(provider).run(
+        original,
+        (ExecutionTarget(target("first"), max_history_turns=1),),
+    )
+
+    assert result.text == "Ready."
+    assert [message.content for message in provider.calls[0].messages] == [
+        "Instruction",
+        "recent user",
+        "recent answer",
+        "current user",
+    ]
+    assert len(original.messages) == 6
+
+
 def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     transient = ProviderError(
         ErrorCategory.CONNECTIVITY,
@@ -193,6 +223,32 @@ def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     assert result.text == "Recovered."
     assert result.attempts == 2
     assert sleeps == [0.25]
+
+
+def test_transmitted_request_is_not_retried_on_the_same_provider() -> None:
+    uncertain = ProviderError(
+        ErrorCategory.FIRST_TOKEN_TIMEOUT,
+        "provider may still be processing the request",
+        provider="first",
+        model="model",
+        retryable_same_provider=True,
+        transmitted=True,
+    )
+    first = FakeProvider("first", [uncertain])
+    fallback = FakeProvider("fallback", [[TextDelta("Recovered."), completion("fallback")]])
+
+    result = coordinator(first, fallback, retry_wait=0).run(
+        request(),
+        (
+            ExecutionTarget(target("first"), retry_attempts=3),
+            ExecutionTarget(target("fallback")),
+        ),
+    )
+
+    assert result.target.name == "fallback"
+    assert result.attempts == 2
+    assert len(first.calls) == 1
+    assert len(fallback.calls) == 1
 
 
 def test_exhausted_route_reports_total_attempt_count() -> None:

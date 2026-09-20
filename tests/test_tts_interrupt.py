@@ -103,7 +103,7 @@ class InterruptingRawOutputStream:
 
     def write(self, frames: bytes) -> bool:
         self.writes.append(frames)
-        if len(self.writes) == 1:
+        if frames.strip(b"\x00"):
             self.interrupt_event.set()
         return False
 
@@ -137,7 +137,7 @@ class PausingRawOutputStream:
 
     def write(self, frames: bytes) -> bool:
         self.writes.append(frames)
-        if len(self.writes) == 1:
+        if frames.strip(b"\x00") and not self.first_chunk_written.is_set():
             self.pause_event.set()
             self.first_chunk_written.set()
         return False
@@ -233,6 +233,23 @@ def test_interrupt_while_idle_does_not_cancel_future_playback() -> None:
     assert tts.last_playback_was_interrupted is False
 
 
+def test_external_cancellation_before_playback_registration_does_not_play_audio():
+    backend = NonInterruptibleRecordingBackend()
+    tts = PiperTTS("unused.onnx", voice=LongVoice(), audio_backend=backend)
+    stop = threading.Event()
+    try:
+        fragment = tts.synthesize_fragment("hello")
+        stop.set()
+        tts.play_fragment(fragment, cancellation_event=stop)
+        assert backend.play_calls == 0
+        tts.speak_with_timing("hello", cancellation_event=stop)
+        assert backend.play_calls == 0
+        tts.play_fragment(fragment, cancellation_event=threading.Event())
+        assert backend.play_calls == 1
+    finally:
+        tts.close()
+
+
 def test_interrupt_during_synthesis_prevents_the_buffer_from_playing() -> None:
     voice = RecordingBlockingVoice()
     backend = NonInterruptibleRecordingBackend()
@@ -310,7 +327,7 @@ def test_sounddevice_backend_stops_between_chunks_and_recovers() -> None:
     )
 
     assert interrupted_frame_count == 1_600
-    assert [len(chunk) for chunk in module.stream.writes] == [3_200]
+    assert [len(chunk) for chunk in module.stream.writes] == [7_040]
     assert module.stream.stopped == 1
 
     complete_frame_count = backend.play_interruptibly(
@@ -323,8 +340,8 @@ def test_sounddevice_backend_stops_between_chunks_and_recovers() -> None:
 
     assert complete_frame_count == 4_000
     assert [len(chunk) for chunk in module.stream.writes] == [
-        3_200,
-        3_200,
+        7_040,
+        7_040,
         3_200,
         1_600,
     ]
@@ -357,14 +374,18 @@ def test_sounddevice_backend_duck_resumes_without_replaying_pcm() -> None:
     assert module.stream.first_chunk_written.wait(timeout=1)
     assert module.stream.paused.wait(timeout=1)
     assert playback.is_alive()
-    assert [len(chunk) for chunk in module.stream.writes] == [3_200]
+    assert [len(chunk) for chunk in module.stream.writes] == [7_040]
 
     pause_event.clear()
     playback.join(timeout=1)
 
     assert not playback.is_alive()
     assert result == [4_000]
-    assert [len(chunk) for chunk in module.stream.writes] == [3_200, 3_200, 1_600]
+    assert [len(chunk) for chunk in module.stream.writes] == [
+        7_040,
+        7_040,
+        1_600,
+    ]
     assert module.stream.started == 2
     assert module.stream.stopped == 2
 
@@ -398,7 +419,7 @@ def test_sounddevice_backend_interrupt_while_ducked_exits_promptly() -> None:
 
     assert not playback.is_alive()
     assert result == [1_600]
-    assert [len(chunk) for chunk in module.stream.writes] == [3_200]
+    assert [len(chunk) for chunk in module.stream.writes] == [7_040]
 
 
 def test_piper_duck_during_synthesis_blocks_playback_until_resume() -> None:

@@ -1,0 +1,34 @@
+[Unit]
+Description=Helios AI voice assistant
+Wants=network-online.target
+After=network-online.target sound.target ollama.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Replace these values with the deployment account and checkout path.
+User=emilia
+Group=emilia
+SupplementaryGroups=audio video
+WorkingDirectory=/home/emilia/helios-ai-jetson-framework
+Environment=PYTHONUNBUFFERED=1
+Environment=HELIOS_LANGUAGE=it
+Environment=HELIOS_LOG_LEVEL=INFO
+Environment=HELIOS_LOG_FILE=-
+# Pin both devices after verifying their names or indexes with PyAudio and
+# sounddevice. Remove these lines only when the platform default is deliberate.
+# Environment="HELIOS_AUDIO_INPUT_DEVICE=USB PnP Audio Device"
+# Environment="HELIOS_AUDIO_OUTPUT_DEVICE=Tegra Analog"
+Environment=HELIOS_AUDIO_OUTPUT_LATENCY=high
+# The launcher selects the virtualenv and the correct ARM64 OpenMP preload.
+ExecStart=/usr/bin/python3 /home/emilia/helios-ai-jetson-framework/scripts/run_jetson.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -15,6 +15,8 @@ from typing import Any, Protocol
 
 import config
 
+from api.realtime_conversation import ResponseEvent
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,9 +74,21 @@ class SpeechTiming:
 
 
 class SoundDeviceBackend:
-    """Persistent blocking sounddevice stream used by the production runtime."""
+    """Persistent blocking sounddevice stream used by the production runtime.
+
+    ``device`` is deliberately optional: a desktop can keep using its default
+    output, while an installed assistant can pin playback to the intended ALSA
+    or PulseAudio device instead of inheriting a conflicting user default.
+    """
 
     _PLAYBACK_CHUNK_MS = 100
+    # The Jetson's ALSA ``default`` device reports only ~35 ms even when
+    # PortAudio is asked for high latency.  That leaves too little room for the
+    # scheduler hand-off between ``start()`` and the first write.  120 ms of
+    # silence, followed by the first audible chunk in the same write, gives the
+    # device a real lead-in without adding a perceptible conversational delay.
+    _STARTUP_PREROLL_MS = 120
+    _HIGH_LATENCY_BLOCKSIZE_FRAMES = 1_024
 
     _DTYPE_BY_WIDTH = {
         1: "uint8",
@@ -82,8 +96,27 @@ class SoundDeviceBackend:
         4: "int32",
     }
 
-    def __init__(self, *, sounddevice_module: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        device: int | str | None = None,
+        latency: str = "high",
+        sounddevice_module: Any | None = None,
+    ) -> None:
+        if isinstance(device, bool) or (device is not None and not isinstance(device, (int, str))):
+            raise ValueError("device must be an integer index, a name, or None")
+        if isinstance(device, int) and device < 0:
+            raise ValueError("device index must be non-negative")
+        if isinstance(device, str):
+            device = device.strip()
+            if not device:
+                raise ValueError("device name cannot be empty")
+        normalized_latency = latency.strip().lower()
+        if normalized_latency not in {"low", "high"}:
+            raise ValueError("latency must be 'low' or 'high'")
         self._sounddevice = sounddevice_module
+        self._device = device
+        self._latency = normalized_latency
         self._stream: Any | None = None
         self._stream_format: tuple[int, int, str] | None = None
         self._lock = threading.RLock()
@@ -114,13 +147,63 @@ class SoundDeviceBackend:
         if self._stream is not None and self._stream_format == stream_format:
             return self._stream
         self._close_stream()
-        self._stream = self._module().RawOutputStream(
-            samplerate=sample_rate,
-            channels=channels,
-            dtype=dtype,
-        )
+        arguments: dict[str, Any] = {
+            "samplerate": sample_rate,
+            "channels": channels,
+            "dtype": dtype,
+            # Jetson's ALSA/Pulse bridge has occasionally under-run with the
+            # backend's implicit low-latency buffer. The conservative default
+            # trades a little response latency for stable spoken output.
+            "latency": self._latency,
+            # ``latency='high'`` alone still selected a very small ALSA period
+            # on the Jetson.  An explicit period makes playback resilient to
+            # short scheduler stalls while keeping the 100 ms interruption
+            # polling granularity below the device buffer size.
+            "blocksize": (
+                self._HIGH_LATENCY_BLOCKSIZE_FRAMES
+                if self._latency == "high"
+                else 0
+            ),
+        }
+        if self._device is not None:
+            arguments["device"] = self._device
+        self._stream = self._module().RawOutputStream(**arguments)
         self._stream_format = stream_format
         return self._stream
+
+    @classmethod
+    def _startup_preroll(
+        cls,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> bytes:
+        frame_count = max(1, round(sample_rate * cls._STARTUP_PREROLL_MS / 1_000))
+        return b"\x00" * (frame_count * channels * sample_width)
+
+    def _start_stream_with_first_chunk(
+        self,
+        stream: Any,
+        *,
+        first_chunk: bytes,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> bool:
+        """Start a stream and queue silence plus the first audible PCM atomically.
+
+        Keeping the lead-in and first user chunk in one blocking write avoids a
+        scheduler gap between two writes.  The returned PortAudio flag covers
+        the complete initial write, including user-audible data.
+        """
+
+        stream.start()
+        return bool(
+            stream.write(
+                self._startup_preroll(sample_rate, channels, sample_width)
+                + first_chunk
+            )
+        )
 
     def play(
         self,
@@ -139,8 +222,13 @@ class SoundDeviceBackend:
         with self._lock:
             try:
                 stream = self._get_stream(sample_rate, channels, dtype)
-                stream.start()
-                underflowed = stream.write(frames)
+                underflowed = self._start_stream_with_first_chunk(
+                    stream,
+                    first_chunk=frames,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    sample_width=sample_width,
+                )
                 stream.stop()
                 if underflowed:
                     logger.warning("Audio output underflow while playing TTS")
@@ -201,14 +289,23 @@ class SoundDeviceBackend:
                             pass
                         if interrupt_event.is_set():
                             break
-                    if not started:
-                        stream.start()
-                        started = True
                     chunk = frames[offset : offset + chunk_size]
-                    underflowed = stream.write(chunk)
+                    if not started:
+                        underflowed = self._start_stream_with_first_chunk(
+                            stream,
+                            first_chunk=chunk,
+                            sample_rate=sample_rate,
+                            channels=channels,
+                            sample_width=sample_width,
+                        )
+                        started = True
+                    else:
+                        underflowed = stream.write(chunk)
                     frames_written += len(chunk) // bytes_per_frame
                     if underflowed:
                         logger.warning("Audio output underflow while playing TTS")
+                    if interrupt_event.is_set():
+                        break
                 if started:
                     stream.stop()
                     started = False
@@ -631,7 +728,7 @@ class PiperTTS:
             synthesis_ms=(self._clock() - started_at) * 1_000,
         )
 
-    def play_fragment(self, fragment: SynthesizedFragment) -> SpeechTiming:
+    def play_fragment(self, fragment: SynthesizedFragment, *, cancellation_event: Any = None) -> SpeechTiming:
         """Play audio produced by :meth:`synthesize_fragment`.
 
         Stage two of the two-stage speech path. ``_speech_lock`` is held only
@@ -641,7 +738,7 @@ class PiperTTS:
 
         with self._speech_lock:
             self._ensure_open()
-            speech_interrupt = threading.Event()
+            speech_interrupt = cancellation_event if cancellation_event is not None else threading.Event()
             with self._state_lock:
                 self._active_speech_interrupt = speech_interrupt
             try:
@@ -661,7 +758,7 @@ class PiperTTS:
                     if self._active_speech_interrupt is speech_interrupt:
                         self._active_speech_interrupt = None
 
-    def speak_with_timing(self, text: str) -> SpeechTiming | None:
+    def speak_with_timing(self, text: str, *, on_lifecycle: Callable[[ResponseEvent], None] | None = None, cancellation_event: Any = None) -> SpeechTiming | None:
         """Speak text and return content-free synthesis/playback timing."""
 
         if text and text.strip() and not any(character.isalnum() for character in text):
@@ -669,25 +766,39 @@ class PiperTTS:
             return
         with self._speech_lock:
             self._ensure_open()
-            speech_interrupt = threading.Event()
+            speech_interrupt = cancellation_event if cancellation_event is not None else threading.Event()
             with self._state_lock:
                 self._active_speech_interrupt = speech_interrupt
             try:
+                if speech_interrupt.is_set():
+                    return None
                 logger.debug("Synthesizing %s character(s) of speech", len(text))
                 synthesis_started_at = self._clock()
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.SYNTHESIS_STARTED)
                 output = self.synthesize_wave(text)
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.SYNTHESIS_COMPLETED)
                 synthesis_ms = (self._clock() - synthesis_started_at) * 1_000
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.PLAYBACK_STARTED)
                 playback_ms, audio_duration_ms, audio_started_at = self._play_wave(
                     output,
                     interrupt_event=speech_interrupt,
                     playback_text=text,
                 )
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.PLAYBACK_COMPLETED)
                 return SpeechTiming(
                     synthesis_ms=synthesis_ms,
                     playback_ms=playback_ms,
                     audio_duration_ms=audio_duration_ms,
                     audio_started_at=audio_started_at,
                 )
+            except BaseException:
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.PLAYBACK_FAILED)
+                raise
             finally:
                 with self._state_lock:
                     if self._active_speech_interrupt is speech_interrupt:

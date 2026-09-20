@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 import uuid
@@ -54,6 +55,7 @@ class ExecutionTarget:
     max_output_words: int | None = None
     options: Mapping[str, Any] = field(default_factory=dict)
     price: ModelPrice | None = None
+    max_history_turns: int | None = None
 
     def __post_init__(self) -> None:
         if self.retry_attempts < 1:
@@ -66,6 +68,12 @@ class ExecutionTarget:
             or self.max_output_words < 1
         ):
             raise ValueError("max_output_words must be a positive integer")
+        if self.max_history_turns is not None and (
+            isinstance(self.max_history_turns, bool)
+            or not isinstance(self.max_history_turns, int)
+            or self.max_history_turns < 1
+        ):
+            raise ValueError("max_history_turns must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,8 +201,10 @@ class StreamingResponseCoordinator:
         *,
         speak: Callable[[str], Any] | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_generation_completed: Callable[[], Any] | None = None,
         first_speech_min_chars: int = 0,
         speech_chunk_max_chars: int = 0,
+        speech_chunk_max_delay_seconds: float = 0.0,
         maximum_first_audio_seconds: float | None = None,
         cancellation: CancellationToken | None = None,
         route_reason: str | None = None,
@@ -217,6 +227,15 @@ class StreamingResponseCoordinator:
             raise ValueError("first_speech_min_chars cannot be negative")
         if speech_chunk_max_chars < 0:
             raise ValueError("speech_chunk_max_chars cannot be negative")
+        if (
+            isinstance(speech_chunk_max_delay_seconds, bool)
+            or not isinstance(speech_chunk_max_delay_seconds, (int, float))
+            or not math.isfinite(float(speech_chunk_max_delay_seconds))
+            or speech_chunk_max_delay_seconds < 0
+        ):
+            raise ValueError("speech_chunk_max_delay_seconds must be finite and non-negative")
+        if on_generation_completed is not None and not callable(on_generation_completed):
+            raise TypeError("on_generation_completed must be callable")
         if before_first_speech is not None and not callable(before_first_speech):
             raise TypeError("before_first_speech must be callable")
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
@@ -291,8 +310,10 @@ class StreamingResponseCoordinator:
                         request=routed_request,
                         speak=speak,
                         before_first_speech=before_first_speech,
+                        on_generation_completed=on_generation_completed,
                         first_speech_min_chars=first_speech_min_chars,
                         speech_chunk_max_chars=speech_chunk_max_chars,
+                        speech_chunk_max_delay_seconds=speech_chunk_max_delay_seconds,
                         cancellation=cancellation,
                         state=state,
                     )
@@ -535,8 +556,10 @@ class StreamingResponseCoordinator:
         request: ChatRequest,
         speak: Callable[[str], Any] | None,
         before_first_speech: Callable[[], Any] | None,
+        on_generation_completed: Callable[[], Any] | None,
         first_speech_min_chars: int,
         speech_chunk_max_chars: int,
+        speech_chunk_max_delay_seconds: float,
         cancellation: CancellationToken | None,
         state: _AttemptState,
     ) -> StreamingResult:
@@ -546,6 +569,7 @@ class StreamingResponseCoordinator:
             SpeechChunker(
                 first_speech_min_chars=first_speech_min_chars,
                 speech_chunk_max_chars=speech_chunk_max_chars,
+                speech_chunk_max_delay_seconds=speech_chunk_max_delay_seconds,
             )
             if speak is not None
             else None
@@ -785,6 +809,8 @@ class StreamingResponseCoordinator:
                 retryable_same_provider=True,
                 transmitted=True,
             )
+        if on_generation_completed is not None:
+            on_generation_completed()
         if speech_chunker is not None:
             for sentence in speech_chunker.finish():
                 speak_fragment(sentence)
@@ -814,6 +840,30 @@ class StreamingResponseCoordinator:
         )
 
     @staticmethod
+    def _limit_history_turns(
+        messages: tuple[ChatMessage, ...],
+        maximum_turns: int,
+    ) -> tuple[tuple[ChatMessage, ...], int, int]:
+        """Keep only the newest complete conversation-history turns."""
+
+        history_user_positions = tuple(
+            index
+            for index, message in enumerate(messages)
+            if message.origin is ContentOrigin.CONVERSATION_HISTORY and message.role is Role.USER
+        )
+        original_turns = len(history_user_positions)
+        if original_turns <= maximum_turns:
+            return messages, original_turns, 0
+
+        cutoff = history_user_positions[-maximum_turns]
+        limited = tuple(
+            message
+            for index, message in enumerate(messages)
+            if message.origin is not ContentOrigin.CONVERSATION_HISTORY or index >= cutoff
+        )
+        return limited, maximum_turns, original_turns - maximum_turns
+
+    @staticmethod
     def _request_for_target(
         request: ChatRequest,
         execution: ExecutionTarget,
@@ -824,6 +874,22 @@ class StreamingResponseCoordinator:
         if execution.route.max_output_tokens is not None and max_output is not None:
             max_output = min(max_output, execution.route.max_output_tokens)
         messages = request.messages
+        if execution.max_history_turns is not None:
+            messages, retained_turns, omitted_turns = (
+                StreamingResponseCoordinator._limit_history_turns(
+                    messages,
+                    execution.max_history_turns,
+                )
+            )
+            if omitted_turns:
+                logger.info(
+                    "route=%s turn=%s event=target_history_trimmed "
+                    "retained_turns=%s omitted_turns=%s",
+                    execution.route.name,
+                    request.conversation_turn,
+                    retained_turns,
+                    omitted_turns,
+                )
         if execution.max_output_words is not None:
             suffix = (
                 f" Limita la risposta a un massimo di {execution.max_output_words} parole."
@@ -1320,7 +1386,14 @@ class StreamingResponseCoordinator:
         provider_attempt: int,
         execution: ExecutionTarget,
     ) -> bool:
-        return error.retryable_same_provider and provider_attempt < execution.retry_attempts
+        if not error.retryable_same_provider or provider_attempt >= execution.retry_attempts:
+            return False
+        # Once a request may have reached a provider, a local retry can run
+        # concurrently with the old worker after an HTTP timeout. Besides
+        # wasting scarce Jetson resources, that makes command-like prompts
+        # unsafe to replay. The caller can still use an explicitly configured
+        # fallback route; only the same-provider retry is suppressed.
+        return error.transmitted is not True
 
     @staticmethod
     def _elapsed_seconds(started_at: float, observed_at: float | None) -> float | None:
