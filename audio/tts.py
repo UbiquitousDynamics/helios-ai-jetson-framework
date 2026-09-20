@@ -15,6 +15,8 @@ from typing import Any, Protocol
 
 import config
 
+from api.realtime_conversation import ResponseEvent
+
 logger = logging.getLogger(__name__)
 
 
@@ -726,7 +728,7 @@ class PiperTTS:
             synthesis_ms=(self._clock() - started_at) * 1_000,
         )
 
-    def play_fragment(self, fragment: SynthesizedFragment) -> SpeechTiming:
+    def play_fragment(self, fragment: SynthesizedFragment, *, cancellation_event: Any = None) -> SpeechTiming:
         """Play audio produced by :meth:`synthesize_fragment`.
 
         Stage two of the two-stage speech path. ``_speech_lock`` is held only
@@ -736,7 +738,7 @@ class PiperTTS:
 
         with self._speech_lock:
             self._ensure_open()
-            speech_interrupt = threading.Event()
+            speech_interrupt = cancellation_event if cancellation_event is not None else threading.Event()
             with self._state_lock:
                 self._active_speech_interrupt = speech_interrupt
             try:
@@ -756,7 +758,7 @@ class PiperTTS:
                     if self._active_speech_interrupt is speech_interrupt:
                         self._active_speech_interrupt = None
 
-    def speak_with_timing(self, text: str) -> SpeechTiming | None:
+    def speak_with_timing(self, text: str, *, on_lifecycle: Callable[[ResponseEvent], None] | None = None, cancellation_event: Any = None) -> SpeechTiming | None:
         """Speak text and return content-free synthesis/playback timing."""
 
         if text and text.strip() and not any(character.isalnum() for character in text):
@@ -764,25 +766,39 @@ class PiperTTS:
             return
         with self._speech_lock:
             self._ensure_open()
-            speech_interrupt = threading.Event()
+            speech_interrupt = cancellation_event if cancellation_event is not None else threading.Event()
             with self._state_lock:
                 self._active_speech_interrupt = speech_interrupt
             try:
+                if speech_interrupt.is_set():
+                    return None
                 logger.debug("Synthesizing %s character(s) of speech", len(text))
                 synthesis_started_at = self._clock()
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.SYNTHESIS_STARTED)
                 output = self.synthesize_wave(text)
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.SYNTHESIS_COMPLETED)
                 synthesis_ms = (self._clock() - synthesis_started_at) * 1_000
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.PLAYBACK_STARTED)
                 playback_ms, audio_duration_ms, audio_started_at = self._play_wave(
                     output,
                     interrupt_event=speech_interrupt,
                     playback_text=text,
                 )
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.PLAYBACK_COMPLETED)
                 return SpeechTiming(
                     synthesis_ms=synthesis_ms,
                     playback_ms=playback_ms,
                     audio_duration_ms=audio_duration_ms,
                     audio_started_at=audio_started_at,
                 )
+            except BaseException:
+                if on_lifecycle:
+                    on_lifecycle(ResponseEvent.PLAYBACK_FAILED)
+                raise
             finally:
                 with self._state_lock:
                     if self._active_speech_interrupt is speech_interrupt:

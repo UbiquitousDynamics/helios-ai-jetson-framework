@@ -48,7 +48,9 @@ from api.streaming import (
     StreamingResponseCoordinator,
 )
 from api.target_compiler import TargetCompiler
-from audio.speech_pipeline import SpeechPipeline
+from api.transcripts import authoritative_text
+from audio.speech_pipeline import SpeechPipeline, SpeechPipelineShutdownTimeout
+from api.realtime_conversation import ResponseEvent, SpeechStopSignal, observed_speech_call
 
 logger = logging.getLogger(__name__)
 
@@ -670,7 +672,7 @@ class APIClient:
         except KeyError:
             raise ValueError(f"Unknown model mode: {mode!r}") from None
 
-    def _speech_callable(self) -> Callable[[str], Any]:
+    def _speech_callable(self, observer: Callable[[ResponseEvent], None] | None = None, cancellation: CancellationToken | None = None) -> Callable[[str], Any]:
         """Prefer overlapped speech, then timing-aware, then legacy TTS.
 
         When the backend exposes the two-stage API, wrap it in a SpeechPipeline
@@ -681,16 +683,20 @@ class APIClient:
 
         with self._speech_pipeline_lock:
             if self._speech_pipeline is not None:
-                return self._speech_pipeline
+                return self._speech_pipeline.with_observer(observer) if observer else self._speech_pipeline
             synthesize = getattr(self.tts, "synthesize_fragment", None)
             play = getattr(self.tts, "play_fragment", None)
             if self._overlapped_speech_enabled and callable(synthesize) and callable(play):
-                self._speech_pipeline = SpeechPipeline(synthesize=synthesize, play=play)
+                self._speech_pipeline = SpeechPipeline(
+                    synthesize=synthesize, play=play, interrupt=getattr(self.tts, "interrupt", None),
+                )
                 logger.info("Overlapped speech pipeline enabled")
-                return self._speech_pipeline
+                return self._speech_pipeline.with_observer(observer) if observer else self._speech_pipeline
 
         speak_with_timing = getattr(self.tts, "speak_with_timing", None)
-        return speak_with_timing if callable(speak_with_timing) else self.tts.speak
+        speak = speak_with_timing if callable(speak_with_timing) else self.tts.speak
+        stop = SpeechStopSignal(lambda: cancellation.cancelled) if cancellation is not None else None
+        return (lambda text: observed_speech_call(speak, text, observer, cancellation_event=stop)) if observer or stop else speak
 
     def _compile_timeouts(self, mode_settings: config.LLMModeSettings) -> Timeouts:
         values = self.llm_settings.timeouts
@@ -1120,7 +1126,11 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
+        message = authoritative_text(message)
+        if context is not None:
+            context = authoritative_text(context)
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
         if mode not in self.models:
@@ -1161,6 +1171,7 @@ class APIClient:
                     cancellation=active_cancellation,
                     pipeline_started_at=pipeline_started_at,
                     before_first_speech=before_first_speech,
+                    on_lifecycle=on_lifecycle,
                 )
                 source_origins: set[ContentOrigin] = {turn.user.origin}
                 assistant_remote_eligible = turn.user.remote_eligible
@@ -1241,6 +1252,7 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
         if not message or not message.strip():
             raise ValueError("message cannot be empty")
@@ -1427,7 +1439,11 @@ class APIClient:
             result = self._coordinator.run(
                 request,
                 executions,
-                speak=self._speech_callable() if speak else None,
+                speak=self._speech_callable(on_lifecycle, active_cancellation) if speak else None,
+                on_generation_completed=(
+                    (lambda: on_lifecycle(ResponseEvent.GENERATION_COMPLETED))
+                    if on_lifecycle else None
+                ),
                 before_first_speech=before_first_speech if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
                 speech_chunk_max_chars=(self._mode_settings(mode).speech_chunk_max_chars),
@@ -1634,6 +1650,7 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
         """Stream a conversational response and speak sentences as they arrive."""
 
@@ -1651,6 +1668,7 @@ class APIClient:
             cancellation=cancellation,
             pipeline_started_at=pipeline_started_at,
             before_first_speech=before_first_speech,
+            on_lifecycle=on_lifecycle,
         )
 
     def think(
@@ -1668,6 +1686,7 @@ class APIClient:
         cancellation: CancellationToken | None = None,
         pipeline_started_at: float | None = None,
         before_first_speech: Callable[[], Any] | None = None,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
         """Stream a reasoning response and optionally speak it."""
 
@@ -1685,6 +1704,7 @@ class APIClient:
             cancellation=cancellation,
             pipeline_started_at=pipeline_started_at,
             before_first_speech=before_first_speech,
+            on_lifecycle=on_lifecycle,
         )
 
     def reset_conversation(self, *, reason: str = "explicit") -> str:
@@ -1766,9 +1786,12 @@ class APIClient:
         with self._speech_pipeline_lock:
             pipeline = self._speech_pipeline
             self._speech_pipeline = None
+        speech_shutdown_error = None
         if pipeline is not None:
             try:
                 pipeline.close()
+            except SpeechPipelineShutdownTimeout as error:
+                speech_shutdown_error = error
             except Exception:
                 logger.warning("Unable to close the speech pipeline")
         if self._owns_network_monitor and self._network_monitor is not None:
@@ -1792,13 +1815,15 @@ class APIClient:
                 self.metrics.close()
             except Exception:
                 logger.warning("Unable to flush language-model metrics")
-        if self._owns_tts and self._tts is not None:
+        if self._owns_tts and self._tts is not None and speech_shutdown_error is None:
             close = getattr(self._tts, "close", None)
             if callable(close):
                 try:
                     close()
                 except Exception:
                     logger.warning("Unable to close language-model speech output")
+        if speech_shutdown_error is not None:
+            raise speech_shutdown_error
 
     def __enter__(self) -> APIClient:
         return self

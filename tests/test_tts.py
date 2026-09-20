@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from audio.sound_player import SoundPlaybackError, SoundPlayer
+from api.realtime_conversation import ResponseEvent
 from audio.tts import (
     AudioSynthesisError,
     PiperTTS,
@@ -54,6 +55,17 @@ class CapturingBackend:
         sample_width: int,
     ) -> None:
         self.calls.append((frames, sample_rate, channels, sample_width))
+
+
+def test_synchronous_piper_emits_content_free_stages():
+    events = []
+    tts = PiperTTS(voice=FakeVoice(), audio_backend=CapturingBackend())
+    try:
+        tts.speak_with_timing("hello", on_lifecycle=events.append)
+        assert events == [ResponseEvent.SYNTHESIS_STARTED, ResponseEvent.SYNTHESIS_COMPLETED,
+                          ResponseEvent.PLAYBACK_STARTED, ResponseEvent.PLAYBACK_COMPLETED]
+    finally:
+        tts.close()
 
 
 class BlockingBackend(CapturingBackend):

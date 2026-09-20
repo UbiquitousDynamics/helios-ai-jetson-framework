@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from recognizer.turn_endpoint_detector import TurnEndpointConfig
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 # Suggested hybrid profile, referenced by documentation and tooling. It is NOT
 # loaded implicitly: remote routing requires HELIOS_LLM_CONFIG to name a file.
@@ -1701,9 +1703,12 @@ class Settings:
     top_k: int = 4
     llm: LLMSettings = field(default_factory=LLMSettings)
     kpi: KPISettings = field(default_factory=KPISettings)
+    endpointing: TurnEndpointConfig = field(default_factory=TurnEndpointConfig)
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).expanduser().resolve()
+        if not isinstance(self.endpointing, TurnEndpointConfig):
+            raise ConfigurationError("endpointing must be a TurnEndpointConfig")
         language = self.language.strip().lower()
         if language not in _profile_paths(root):
             supported = ", ".join(sorted(_profile_paths(root)))
@@ -1825,6 +1830,22 @@ class Settings:
             logger.error("Invalid KPI configuration; KPI collection and dashboard are disabled")
             kpi = KPISettings(storage_path=(root / "logs/helios-kpi.sqlite3").resolve())
 
+        endpoint_defaults = TurnEndpointConfig()
+        try:
+            endpointing = TurnEndpointConfig(**{
+                name: _float_from_env(
+                    env.get(f"HELIOS_ENDPOINT_{name.upper()}", str(getattr(endpoint_defaults, name))),
+                    f"HELIOS_ENDPOINT_{name.upper()}",
+                )
+                for name in (
+                    "short_pause_seconds", "finalization_seconds", "inactivity_seconds",
+                    "maximum_utterance_seconds", "revision_stability_seconds",
+                    "final_result_timeout_seconds", "minimum_confidence", "minimum_speech_seconds",
+                )
+            })
+        except ValueError:
+            raise ConfigurationError("invalid turn endpoint configuration") from None
+
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
@@ -1862,6 +1883,7 @@ class Settings:
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
             kpi=kpi,
+            endpointing=endpointing,
         )
 
     @property
