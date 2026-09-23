@@ -8,6 +8,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -265,6 +266,20 @@ def _is_remote_endpoint(endpoint: str) -> bool:
     return hostname not in {"localhost", "127.0.0.1", "::1"}
 
 
+def _model_is_loaded(client: Any, model: str) -> bool | None:
+    """Return None when an injected/older client cannot report resident models."""
+
+    ps = getattr(client, "ps", None)
+    if not callable(ps):
+        return None
+    response = ps()
+    models = _value(response, "models", ()) or ()
+    for entry in models:
+        if model in {_value(entry, "model"), _value(entry, "name")}:
+            return True
+    return False
+
+
 class OllamaAdapter:
     """Lazy, typed boundary around the official Ollama Python client."""
 
@@ -509,6 +524,21 @@ class OllamaAdapter:
                 holder["client"] = client
                 if stop_requested.is_set():
                     return
+                if not self.identity.remote and _model_is_loaded(client, request.model) is False:
+                    holder["cold_loading"] = True
+                    cold_started = time.monotonic()
+                    # An empty local request loads the model without a user prompt.
+                    # It is accounted for inside the total request budget, before
+                    # the first-visible-token clock starts.
+                    client.chat(
+                        model=request.model,
+                        messages=[{"role": "user", "content": ""}],
+                        stream=False,
+                    )
+                    cold_ms = (time.monotonic() - cold_started) * 1_000
+                    mailbox.put(("cold_load_done", cold_ms))
+                    if stop_requested.is_set():
+                        return
                 holder["chat_attempted"] = True
                 try:
                     chunks = client.chat(**dict(arguments))
@@ -524,6 +554,7 @@ class OllamaAdapter:
                             pass
                     return
                 holder["chunks"] = chunks
+                mailbox.put(("ready", None))
                 for event in self._stream_events(
                     chunks,
                     request=request,
@@ -553,6 +584,8 @@ class OllamaAdapter:
         began = time.monotonic()
         last_event = began
         received_event = False
+        cold_load_ms: float | None = None
+        warm_first_token_ms: float | None = None
 
         def stop_worker(reason: str) -> None:
             nonlocal cancelled_worker
@@ -596,7 +629,9 @@ class OllamaAdapter:
                     raise
                 now = time.monotonic()
                 total_remaining = request.timeouts.total_seconds - (now - began)
-                if "chunks" not in holder:
+                if holder.get("cold_loading"):
+                    stage_limit = request.timeouts.total_seconds
+                elif "chunks" not in holder:
                     stage_limit = request.timeouts.connect_seconds
                 elif not received_event:
                     stage_limit = request.timeouts.first_token_seconds
@@ -606,7 +641,9 @@ class OllamaAdapter:
                 wait_seconds = min(0.05, total_remaining, stage_remaining)
                 if wait_seconds <= 0:
                     stop_worker("timeout")
-                    if "chunks" not in holder:
+                    if holder.get("cold_loading"):
+                        category = ErrorCategory.COLD_LOAD_TIMEOUT
+                    elif "chunks" not in holder:
                         category = ErrorCategory.CONNECT_TIMEOUT
                     elif not received_event:
                         category = ErrorCategory.FIRST_TOKEN_TIMEOUT
@@ -624,9 +661,43 @@ class OllamaAdapter:
                     kind, value = mailbox.get(timeout=wait_seconds)
                 except queue.Empty:
                     continue
-                if kind == "event":
-                    received_event = True
+                if kind == "cold_load_done":
+                    cold_load_ms = value
+                    holder["cold_loading"] = False
                     last_event = time.monotonic()
+                    logger.info(
+                        "provider=%s event=ollama_cold_load_completed duration_ms=%s",
+                        _PROVIDER_NAME,
+                        round(value),
+                    )
+                    continue
+                if kind == "ready":
+                    last_event = time.monotonic()
+                    holder["first_token_started"] = last_event
+                    continue
+                if kind == "event":
+                    if isinstance(value, TextDelta):
+                        received_event = True
+                    if received_event:
+                        last_event = time.monotonic()
+                    if isinstance(value, TextDelta) and not holder.get("first_token_reported"):
+                        holder["first_token_reported"] = True
+                        warm_first_token_ms = (
+                            last_event - holder.get("first_token_started", began)
+                        ) * 1_000
+                        logger.info(
+                            "provider=%s event=ollama_first_token_after_load duration_ms=%s",
+                            _PROVIDER_NAME,
+                            round(warm_first_token_ms),
+                        )
+                    if isinstance(value, Completed):
+                        value = Completed(
+                            replace(
+                                value.metadata,
+                                cold_load_ms=cold_load_ms,
+                                warm_first_token_ms=warm_first_token_ms,
+                            )
+                        )
                     yield value
                     continue
                 if kind == "eof":

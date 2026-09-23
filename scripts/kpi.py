@@ -66,6 +66,7 @@ def _store(settings: Any) -> Iterator[Any]:
     store = SQLiteKPIStore(
         settings.storage_path,
         raw_retention_days=settings.raw_retention_days,
+        background_retention_days=settings.background_retention_days,
         rollup_retention_days=settings.rollup_retention_days,
         max_size_bytes=settings.maximum_database_mb * 1024 * 1024,
         rollup_interval_seconds=settings.rollup_interval_seconds,

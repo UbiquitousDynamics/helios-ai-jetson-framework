@@ -12,6 +12,7 @@ import config
 from api.api_client import APIClient
 from api.conversation_control import ConversationFloor, ConversationFloorState
 from api.metrics import SafeMetricsRecorder
+from api.streaming import CancellationController
 from api.transcripts import AuthoritativeUtterance, TranscriptPromoter
 from assistant import (
     AssistantRuntimeError,
@@ -92,6 +93,19 @@ class FakeRecognizer:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_cancellation_before_legacy_response_worker_starts_prevents_dispatch():
+    assistant, tts, api, _sounds, _recognizer = make_assistant([])
+    token = CancellationController()
+    token.cancel()
+    try:
+        with pytest.raises(RuntimeError, match="request cancelled"):
+            assistant._process_model_prompt("synthetic request", cancellation=token)
+        assert api.messages == [] and tts.spoken == []
+        assert assistant.realtime.snapshot().response_id is None
+    finally:
+        assistant.close()
 
 
 def test_native_speech_shutdown_timeout_uses_bounded_terminal_shutdown_path():
@@ -316,7 +330,7 @@ def test_wake_only_utterance_activates_and_acknowledges_the_conversation() -> No
 
     assert assistant.run_once() is True
     assert assistant.conversation_state.name == "LISTENING"
-    assert tts.spoken == ["Certo."]
+    assert tts.spoken == ["Ti ascolto."]
     assert api.messages == []
 
     assert assistant.run_once() is True
@@ -324,7 +338,7 @@ def test_wake_only_utterance_activates_and_acknowledges_the_conversation() -> No
     assistant.close()
 
 
-def test_first_wake_command_is_acknowledged_before_model_processing() -> None:
+def test_first_wake_command_does_not_play_an_immediate_filler() -> None:
     class PreloadedTTS(FakeTTS):
         def speak_preloaded(self, phrase: str, *, cancellation: object | None = None) -> bool:
             del cancellation
@@ -345,7 +359,7 @@ def test_first_wake_command_is_acknowledged_before_model_processing() -> None:
     )
 
     assert assistant.run_once() is True
-    assert tts.spoken == ["Certo."]
+    assert tts.spoken == []
     assert api.messages == ["dimmi qualcosa"]
     assistant.close()
 
@@ -634,6 +648,7 @@ def test_voice_conversation_requires_wake_word_again_after_idle_timeout() -> Non
             language="it",
             barge_in_enabled=True,
             llm=config.LLMSettings(context_idle_timeout_seconds=5),
+            activation_timeout_seconds=5,
         ),
         tts=FakeTTS(),
         sound_player=FakeSoundPlayer(),
@@ -826,7 +841,8 @@ def test_run_waits_for_startup_tts_preload_before_first_listen() -> None:
             assert phrases[0] == assistant.profile.welcome_message.format(
                 wake_word=assistant.profile.wake_word,
             )
-            assert phrases[1:4] == ("Certo.", "Un momento.", "Vediamo.")
+            assert phrases[1:4] == ("Un momento.", "Vediamo.", "Sto valutando la richiesta.")
+            assert phrases[4] == "Ti ascolto."
             events.append("preload_started")
             events.append("preload_finished")
 
@@ -1642,6 +1658,11 @@ def test_high_energy_explicit_short_final_interrupts_playback(command: str) -> N
         is_speaking = True
         active_playback_started_at = 10.0
         active_playback_text = "Una risposta non correlata continua."
+        interrupt_calls = 0
+
+        def interrupt(self):
+            self.interrupt_calls += 1
+            return True
 
     class CommandRecognizer(FakeRecognizer):
         def listen_events(self, timeout: float | None, *, stop_event: object):
@@ -1672,8 +1693,11 @@ def test_high_energy_explicit_short_final_interrupts_playback(command: str) -> N
     )
     response: Future[str] = Future()
 
-    assert assistant._listen_for_barge_in(response) == command
-    assert api.cancelled is True
+    assert assistant._listen_for_barge_in(response) is None
+    assert assistant.tts.interrupt_calls == 1
+    assert assistant.realtime.speech_output.is_set()
+    assert api.cancelled is False
+    assert api.messages == []
     response.cancel()
     assistant.close()
 

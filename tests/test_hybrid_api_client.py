@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from threading import Lock
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +37,30 @@ class FakeTTS:
 
     def speak(self, text: str) -> None:
         self.spoken.append(text)
+
+
+def test_network_probe_persistence_preserves_state_changes_and_summarizes(monkeypatch) -> None:
+    recorded = []
+    client = APIClient.__new__(APIClient)
+    client.metrics = SimpleNamespace(record=lambda event: recorded.append(event))
+    client.kpi_settings = config.KPISettings(network_probe_persist_interval_seconds=60)
+    client._network_persist_lock = Lock()
+    client._network_last_persist_at = None
+    client._network_probes_since_persist = 0
+    clock = iter((0.0, 5.0, 10.0, 75.0))
+    monkeypatch.setattr("api.api_client.time.monotonic", lambda: next(clock))
+    online = SimpleNamespace(connectivity=SimpleNamespace(value="online"), quality_score=1.0)
+    offline = SimpleNamespace(connectivity=SimpleNamespace(value="offline"), quality_score=0.0)
+
+    client._record_network_snapshot(online, online)
+    client._record_network_snapshot(online, online)
+    client._record_network_snapshot(online, offline)
+    client._record_network_snapshot(offline, offline)
+
+    assert [item.event for item in recorded] == [
+        "network_probe_completed", "network_state_changed", "network_probe_completed"
+    ]
+    assert [item.count for item in recorded] == [1, 2, 1]
 
 
 class FakeOllamaClient:

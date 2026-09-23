@@ -18,6 +18,8 @@ minversion = "8.2"
 python_files = ["test_*.py"]
 testpaths = ["tests"]
 markers = [
+    "voice_local: deterministic voice-suite validation without audio devices",
+    "voice_hil: requires explicit calibrated PC/Helios acoustic devices",
     "hardware: requires local audio hardware or bundled inference models",
     "integration: requires a running external service such as Ollama",
     "remote_live: requires explicit remote enablement and provider credentials",

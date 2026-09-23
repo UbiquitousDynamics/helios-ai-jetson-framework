@@ -51,6 +51,7 @@ from api.target_compiler import TargetCompiler
 from api.transcripts import authoritative_text
 from audio.speech_pipeline import SpeechPipeline, SpeechPipelineShutdownTimeout
 from api.realtime_conversation import ResponseEvent, SpeechStopSignal, observed_speech_call
+from api.control_intents import ControlledSpeech, SpeechOutputControl
 
 logger = logging.getLogger(__name__)
 
@@ -204,11 +205,15 @@ class APIClient:
         # Escape hatch: forces the fully synchronous speech path if a device
         # turns out to misbehave with concurrent synthesis and playback.
         overlapped_speech: bool = True,
+        spoken_response_style: bool = False,
     ) -> None:
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be at least one")
         if retry_wait < 0:
             raise ValueError("retry_wait cannot be negative")
+        if not isinstance(spoken_response_style, bool):
+            raise TypeError("spoken_response_style must be boolean")
+        self._spoken_response_style = spoken_response_style
 
         self.host = config.normalize_ollama_host(api_url)
         self.models = {"talk": model_talk, "think": model_think}
@@ -220,6 +225,9 @@ class APIClient:
         )
         self._conversation_request_lock = threading.Lock()
         self.kpi_settings = kpi_settings or config.KPISettings()
+        self._network_persist_lock = threading.Lock()
+        self._network_last_persist_at: float | None = None
+        self._network_probes_since_persist = 0
         self._kpi_service: Any | None = None
         self._mode_settings_by_name = {
             "talk": self.llm_settings.talk,
@@ -249,6 +257,8 @@ class APIClient:
         self._closed = False
         self._cancellation_lock = threading.Lock()
         self._speech_pipeline_lock = threading.Lock()
+        self._output_control = SpeechOutputControl()
+        self._externally_controlled_output = False
         self._speech_pipeline: SpeechPipeline | None = None
         self._overlapped_speech_enabled = overlapped_speech
         self._active_cancellations: list[CancellationToken] = []
@@ -406,12 +416,32 @@ class APIClient:
 
         return self._tts
 
+    def set_output_control(self, control: SpeechOutputControl) -> None:
+        if not isinstance(control, SpeechOutputControl):
+            raise TypeError("control must be SpeechOutputControl")
+        self._output_control = control
+        self._externally_controlled_output = True
+        setter = getattr(self._tts, "set_output_control", None)
+        if callable(setter):
+            setter(control)
+
+    def discard_speech(self) -> None:
+        """Discard queued/current audio without cancelling model generation."""
+        with self._speech_pipeline_lock:
+            pipeline = self._speech_pipeline
+        if pipeline is not None:
+            pipeline.cancel()
+        interrupt = getattr(self._tts, "interrupt", None)
+        if callable(interrupt):
+            interrupt()
+
     @property
     def tts(self) -> TextToSpeech:
         if self._tts is None:
             from audio.tts import PiperTTS
 
             self._tts = PiperTTS()
+            self._tts.set_output_control(self._output_control)
             self._owns_tts = True
         return self._tts
 
@@ -628,9 +658,24 @@ class APIClient:
         state = getattr(getattr(current, "connectivity", None), "value", None)
         previous_state = getattr(getattr(previous, "connectivity", None), "value", None)
         score = getattr(current, "quality_score", None)
+        changed = previous_state != state
+        now = time.monotonic()
+        with self._network_persist_lock:
+            self._network_probes_since_persist += 1
+            due = (
+                self._network_last_persist_at is None
+                or now - self._network_last_persist_at
+                >= self.kpi_settings.network_probe_persist_interval_seconds
+            )
+            if not changed and not due:
+                return
+            represented_count = self._network_probes_since_persist
+            self._network_probes_since_persist = 0
+            self._network_last_persist_at = now
         record_safely(
             self.metrics,
-            ("network_state_changed" if previous_state != state else "network_probe_completed"),
+            ("network_state_changed" if changed else "network_probe_completed"),
+            count=represented_count,
             network_state=state,
             network_quality_score=score,
             network_quality_tier=self._network_quality_tier(score, state),
@@ -673,6 +718,9 @@ class APIClient:
             raise ValueError(f"Unknown model mode: {mode!r}") from None
 
     def _speech_callable(self, observer: Callable[[ResponseEvent], None] | None = None, cancellation: CancellationToken | None = None) -> Callable[[str], Any]:
+        return ControlledSpeech(self._raw_speech_callable(observer, cancellation), self._output_control)
+
+    def _raw_speech_callable(self, observer: Callable[[ResponseEvent], None] | None = None, cancellation: CancellationToken | None = None) -> Callable[[str], Any]:
         """Prefer overlapped speech, then timing-aware, then legacy TTS.
 
         When the backend exposes the two-stage API, wrap it in a SpeechPipeline
@@ -748,6 +796,7 @@ class APIClient:
         context_redacted: bool,
         privacy: PrivacyLevel | str | None,
         request_options: Mapping[str, Any] | None,
+        spoken: bool = False,
     ) -> ChatRequest:
         selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
         message_remote_eligible = selected_privacy is PrivacyLevel.REMOTE_ALLOWED or (
@@ -759,6 +808,11 @@ class APIClient:
         messages: list[ChatMessage] = (
             [self._hybrid_system_message] if self._hybrid_system_message is not None else []
         )
+        if spoken and self._spoken_response_style:
+            messages.append(ChatMessage(
+                Role.SYSTEM, config.spoken_response_instruction(self.language),
+                origin=ContentOrigin.STATIC_INSTRUCTION,
+            ))
         if context:
             messages.append(
                 ChatMessage(
@@ -1139,6 +1193,8 @@ class APIClient:
         active_cancellation = cancellation or CancellationController()
         selected_privacy = PrivacyLevel(privacy or self.llm_settings.privacy.default)
         with self._conversation_request_lock:
+            if not self._externally_controlled_output:
+                self._output_control.begin_response()
             previous_session_id = self.conversation.session_id
             turn = self.conversation.begin_turn(
                 message,
@@ -1361,6 +1417,7 @@ class APIClient:
                 context_redacted=context_redacted,
                 privacy=privacy,
                 request_options=request_options,
+                spoken=speak,
             )
             logger.info(
                 "conversation_session=%s turn=%s event=llm_request_built "
@@ -1512,6 +1569,8 @@ class APIClient:
                     else None
                 ),
                 first_token_ms=request_relative(result.first_token_seconds),
+                cold_load_ms=result.metadata.cold_load_ms,
+                warm_first_token_ms=result.metadata.warm_first_token_ms,
                 first_audio_ms=request_relative(result.first_audio_seconds),
                 speech_dispatch_ms=request_relative(result.first_audio_seconds),
                 actual_first_audio_ms=request_relative(result.actual_first_audio_seconds),
@@ -1712,8 +1771,23 @@ class APIClient:
 
         with self._conversation_request_lock:
             previous_id = self.conversation.session_id
+            next_id = self.conversation.reset(reason=reason)
             self._forget_provider_conversations(previous_id, reason=reason)
-            return self.conversation.reset(reason=reason)
+            return next_id
+
+    def try_reset_conversation(self, *, reason: str = "explicit") -> str | None:
+        """Reset without waiting for an active provider request to finish."""
+        if not self._conversation_request_lock.acquire(blocking=False):
+            return None
+        try:
+            if self.conversation.snapshot().active_turn is not None:
+                return None
+            previous_id = self.conversation.session_id
+            next_id = self.conversation.reset(reason=reason)
+            self._forget_provider_conversations(previous_id, reason=reason)
+            return next_id
+        finally:
+            self._conversation_request_lock.release()
 
     def _forget_provider_conversations(self, conversation_id: str, *, reason: str) -> None:
         for provider in self._registry.instantiated():

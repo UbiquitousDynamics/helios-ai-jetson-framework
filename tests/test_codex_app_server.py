@@ -291,6 +291,29 @@ def test_prepare_rejects_non_chatgpt_auth_before_transmission() -> None:
     assert runtime.started is None
 
 
+def test_sanitized_premium_credit_and_rate_window_shapes_are_distinct():
+    from api.providers.codex_app_server import (
+        _classify_exception, _rate_window_retry_after, _safe_error_message,
+    )
+
+    class Refusal(Exception):
+        def __init__(self, data):
+            super().__init__("usage limit reached")
+            self.data = data
+
+    premium = Refusal({"limit_id": "premium", "primary": None, "secondary": None,
+                       "credits": {"balance": "0", "has_credits": False}})
+    window = Refusal({"limit_id": "codex",
+                      "primary": {"resets_at": 1790088601, "used_percent": 100.0},
+                      "secondary": {"resets_at": 1790539837, "used_percent": 40.0},
+                      "credits": {"balance": "0", "has_credits": False}})
+    assert _classify_exception(premium) == (ErrorCategory.CREDIT_EXHAUSTED, False)
+    assert _classify_exception(window) == (ErrorCategory.RATE_LIMITED, False)
+    assert _rate_window_retry_after(window, 1790088501) == pytest.approx(100)
+    assert _rate_window_retry_after(premium, 1790088501) is None
+    assert "waiting will not restore" in _safe_error_message(ErrorCategory.CREDIT_EXHAUSTED)
+
+
 def test_timeout_while_prepare_holds_auth_lock_never_starts_orphan_turn() -> None:
     runtime = BlockingAuthRuntime()
     provider = CodexAppServerAdapter("openai-codex", runtime=runtime)

@@ -15,7 +15,8 @@ from typing import Any, Protocol
 
 import config
 
-from api.realtime_conversation import ResponseEvent
+from api.realtime_conversation import ResponseEvent, SpeechStopSignal
+from api.control_intents import SpeechOutputControl
 
 logger = logging.getLogger(__name__)
 
@@ -365,6 +366,12 @@ class PiperTTS:
         self._last_playback_frame_count = 0
         self._last_playback_total_frames = 0
         self._closed = False
+        self._output_control: SpeechOutputControl | None = None
+
+    def set_output_control(self, control: SpeechOutputControl) -> None:
+        if not isinstance(control, SpeechOutputControl):
+            raise TypeError("control must be SpeechOutputControl")
+        self._output_control = control
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -622,6 +629,11 @@ class PiperTTS:
             with self._playback_lock:
                 self._ensure_open()
                 playback_interrupt = interrupt_event or threading.Event()
+                if self._output_control is not None:
+                    original_interrupt = playback_interrupt
+                    playback_interrupt = SpeechStopSignal(
+                        lambda: original_interrupt.is_set() or self._output_control.is_set()
+                    )
                 audio_started_at = self._clock()
                 with self._state_lock:
                     self._active_interrupt = playback_interrupt
@@ -638,7 +650,9 @@ class PiperTTS:
                         "play_interruptibly",
                         None,
                     )
-                    if callable(play_interruptibly):
+                    if playback_interrupt.is_set():
+                        frames_written = 0
+                    elif callable(play_interruptibly):
                         try:
                             signature = inspect.signature(play_interruptibly)
                             supports_pause = "pause_event" in signature.parameters or any(

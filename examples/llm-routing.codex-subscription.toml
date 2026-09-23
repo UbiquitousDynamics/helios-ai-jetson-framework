@@ -75,7 +75,9 @@ first_speech_min_chars = 0
 speech_chunk_max_chars = 64
 speech_chunk_max_delay_seconds = 0.75
 # A local fallback may need to process canonical remote history on the Jetson.
-# Thirty seconds leaves useful headroom without using the 120-second global cap.
+# The 30-second visible-token budget is not calibrated for CPU-only inference
+# on Emilia. Cold model loading is measured separately inside total_seconds;
+# collect at least 20 cold and 20 warm samples before setting this from p95.
 first_visible_token_seconds = 30.0
 
 [modes.think]

@@ -126,12 +126,23 @@ def test_environment_configures_explicit_audio_devices(tmp_path: Path) -> None:
             "HELIOS_AUDIO_INPUT_DEVICE": "USB PnP Audio Device",
             "HELIOS_AUDIO_OUTPUT_DEVICE": "3",
             "HELIOS_AUDIO_OUTPUT_LATENCY": "low",
+            "HELIOS_AUDIO_INPUT_STRICT": "true",
+            "HELIOS_AUDIO_INPUT_CHANNEL_MODE": "stronger",
         },
     )
 
     assert settings.audio_input_device == "USB PnP Audio Device"
     assert settings.audio_output_device == 3
     assert settings.audio_output_latency == "low"
+    assert settings.audio_input_strict is True
+    assert settings.audio_input_channel_mode == "stronger"
+
+
+def test_invalid_capture_selector_policy_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(config.ConfigurationError, match="audio_input_channel_mode"):
+        config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_INPUT_CHANNEL_MODE": "magic"})
+    with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_INPUT_STRICT"):
+        config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_INPUT_STRICT": "maybe"})
 
 
 def test_invalid_audio_device_configuration_is_rejected(tmp_path: Path) -> None:

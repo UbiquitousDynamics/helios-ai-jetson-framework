@@ -6,6 +6,8 @@ response workers may publish content-free events with their immutable ID.
 
 from __future__ import annotations
 
+from api.control_intents import SpeechOutputControl
+
 import inspect
 import math
 import threading
@@ -174,6 +176,7 @@ class RealtimeConversationController:
             raise TypeError("clock must be callable")
         self.endpointing, self.activity_energy, self.clock = endpointing, activity_energy, clock
         self.transcripts = TranscriptRevisionAggregator()
+        self.speech_output = SpeechOutputControl()
         self._floor = ConversationFloor()
         self._lock = threading.RLock()
         self._capture: CaptureLease | None = None
@@ -193,15 +196,29 @@ class RealtimeConversationController:
 
     def arm(self) -> None:
         with self._lock:
-            if self._stopped or self._response is not None:
+            if self._stopped or self._response is not None or self._floor.snapshot().state is S.SUSPENDED:
                 return
             self._apply(E.END_SESSION)
             self._apply(E.ACTIVATE)
 
     def idle(self) -> None:
         with self._lock:
-            if self._response is None:
+            if self._response is None and self._floor.snapshot().state is not S.SUSPENDED:
                 self._apply(E.END_SESSION)
+
+    def suspend_session(self) -> None:
+        with self._lock:
+            self._apply(E.SUSPEND)
+
+    def resume_session(self) -> None:
+        with self._lock:
+            if self._floor.snapshot().state is S.SUSPENDED:
+                self._apply(E.RESUME)
+
+    def end_session(self) -> None:
+        with self._lock:
+            self.transcripts.clear_pending()
+            self._apply(E.END_SESSION)
 
     def observe(self, result: Any):
         with self._lock:
@@ -211,7 +228,7 @@ class RealtimeConversationController:
                 result.text, is_final=result.is_final, capture_id=result.capture_id,
                 segment_id=result.segment_id, revision=result.revision,
             )
-            if self._response is None and self._floor.snapshot().state is not S.BARGE_IN_CANDIDATE:
+            if self._response is None and self._floor.snapshot().state not in {S.BARGE_IN_CANDIDATE, S.SUSPENDED}:
                 if isinstance(value, (ProvisionalRevision, AuthoritativeUtterance)):
                     if self._floor.snapshot().state is S.IDLE:
                         self._apply(E.ACTIVATE)
@@ -220,7 +237,8 @@ class RealtimeConversationController:
 
     def endpoint_event(self, lease: CaptureLease, action: EndpointAction) -> None:
         with self._lock:
-            if self._stopped or self._capture is not lease or self._response is not None:
+            if (self._stopped or self._capture is not lease or self._response is not None
+                    or self._floor.snapshot().state is S.SUSPENDED):
                 return
             if action is EndpointAction.PAUSE:
                 self._apply(E.SILENCE)
@@ -251,6 +269,8 @@ class RealtimeConversationController:
         with self._lock:
             if self._stopped or self._response is not None:
                 raise RealtimeBusyError("response cannot start while stopped or busy")
+            if self._floor.snapshot().state is S.SUSPENDED:
+                raise RealtimeBusyError("session is suspended")
             if self._capture is not None and not self._capture.response:
                 raise RealtimeBusyError("primary capture must release before dispatch")
             if self._floor.snapshot().state is not S.FINALIZING:
@@ -258,6 +278,7 @@ class RealtimeConversationController:
                 self._apply(E.FINAL_SPEECH)
             self._sequence += 1
             self._response = self._sequence
+            self.speech_output.begin_response()
             self._synthesizing = self._generation_complete = False
             self._apply(E.GENERATION_STARTED)
             return self._response
@@ -271,7 +292,7 @@ class RealtimeConversationController:
         with self._lock:
             if self._stopped or response_id != self._response:
                 return
-            if self._floor.snapshot().state is S.INTERRUPTED:
+            if self._floor.snapshot().state in {S.INTERRUPTED, S.SUSPENDED, S.IDLE}:
                 return
             if event is ResponseEvent.SYNTHESIS_STARTED:
                 self._synthesizing = True

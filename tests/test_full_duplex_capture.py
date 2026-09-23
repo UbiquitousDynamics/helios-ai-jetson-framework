@@ -178,7 +178,7 @@ def test_candidate_can_finalize_after_response_eof_but_has_bounded_inactivity():
     assert stop.consume_candidate_timeout()
 
 
-def test_cancelled_rag_retrieval_cannot_start_late_speech_or_model_request():
+def test_stop_during_rag_retrieval_suppresses_speech_without_cancelling_retrieval():
     retrieving, release = threading.Event(), threading.Event()
 
     class Search:
@@ -203,9 +203,9 @@ def test_cancelled_rag_retrieval_cannot_start_late_speech_or_model_request():
                              api_client=api, tts=tts, sound_player=FakeSoundPlayer(),
                              sound_executor=ImmediateExecutor())
     try:
-        assert runtime.process_rag_command("synthetic query", Search()) == ""
+        assert runtime.process_rag_command("synthetic query", Search()) == "synthetic result after cancellation"
         assert tts.spoken == [] and api.messages == []
-        assert api.cancelled
+        assert not api.cancelled
         assert not runtime.realtime.snapshot().capture_active
     finally:
         release.set()

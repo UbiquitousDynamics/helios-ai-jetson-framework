@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "profile_version": "1.0.0",
+  "test_task": "01",
+  "scope": "Local state/event invariants only. Acoustic performance uses the shared thresholds.json and requires deployment calibration; no acoustic thresholds are weakened here.",
+  "profiles": {
+    "desktop": {
+      "required_matrix_cases": 228,
+      "maximum_trace_records": 4096,
+      "invariants": {
+        "transition_verdict_errors": {
+          "definition": "Cases whose accepted/rejected outcome differs from the declared state/event contract.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "transition_state_errors": {
+          "definition": "Accepted cases whose resulting floor or candidate return state differs from the declared contract.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "revision_errors": {
+          "definition": "Accepted cases whose revision does not advance exactly once per changed immutable snapshot.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "rejected_event_mutations": {
+          "definition": "Rejected cases that replace or mutate the previous snapshot.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "snapshot_identity_errors": {
+          "definition": "Accepted legal no-ops that replace the immutable snapshot, or changed state that retains the same object.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl failure codes from before/after object identity checks."
+        }
+      }
+    },
+    "jetson": {
+      "required_matrix_cases": 228,
+      "maximum_trace_records": 4096,
+      "invariants": {
+        "transition_verdict_errors": {
+          "definition": "Cases whose accepted/rejected outcome differs from the declared state/event contract.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "transition_state_errors": {
+          "definition": "Accepted cases whose resulting floor or candidate return state differs from the declared contract.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "revision_errors": {
+          "definition": "Accepted cases whose revision does not advance exactly once per changed immutable snapshot.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "rejected_event_mutations": {
+          "definition": "Rejected cases that replace or mutate the previous snapshot.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+        },
+        "snapshot_identity_errors": {
+          "definition": "Accepted legal no-ops that replace the immutable snapshot, or changed state that retains the same object.",
+          "unit": "cases",
+          "maximum": 0,
+          "mandatory": true,
+          "minimum_samples": 228,
+          "artifact_source": "cases.jsonl failure codes from before/after object identity checks."
+        }
+      }
+    }
+  },
+  "local_test_bounds": {
+    "thread_join_seconds": 5,
+    "pytest_process_timeout_seconds": 120
+  }
+}

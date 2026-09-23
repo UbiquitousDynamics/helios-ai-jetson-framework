@@ -103,6 +103,9 @@ class BargeInRecognizer:
         if self._barge_events_emitted:
             return
         self._barge_events_emitted = True
+        # This scenario asserts interruption of audible playback. Scheduling
+        # may otherwise deliver the final before the legacy worker starts.
+        assert self.api.tts.wait_until_speaking(timeout=1)
         yield RecognitionResult("nuova", is_final=False)
         yield RecognitionResult("nuova domanda in corso", is_final=False)
         # A provisional hypothesis must not cancel the response. The complete

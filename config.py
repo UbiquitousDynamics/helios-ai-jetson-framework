@@ -70,10 +70,12 @@ class KPISettings:
     batch_size: int = 64
     flush_interval_seconds: float = 0.5
     raw_retention_days: int = 14
+    background_retention_days: int = 1
     rollup_retention_days: int = 90
     maximum_database_mb: int = 256
     rollup_interval_seconds: int = 300
     resource_sample_interval_seconds: float = 5.0
+    network_probe_persist_interval_seconds: float = 60.0
     dashboard_enabled: bool = False
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8_765
@@ -100,6 +102,7 @@ class KPISettings:
             ("queue_size", self.queue_size),
             ("batch_size", self.batch_size),
             ("raw_retention_days", self.raw_retention_days),
+            ("background_retention_days", self.background_retention_days),
             ("rollup_retention_days", self.rollup_retention_days),
             ("maximum_database_mb", self.maximum_database_mb),
             ("rollup_interval_seconds", self.rollup_interval_seconds),
@@ -118,6 +121,8 @@ class KPISettings:
             raise ConfigurationError(
                 "KPI rollup retention cannot be shorter than raw-event retention"
             )
+        if self.background_retention_days > self.raw_retention_days:
+            raise ConfigurationError("KPI background retention cannot exceed raw retention")
         if self.maximum_export_rows > 100_000:
             raise ConfigurationError("KPI maximum_export_rows cannot exceed 100000")
         if self.maximum_query_days > 90:
@@ -138,6 +143,13 @@ class KPISettings:
             or self.resource_sample_interval_seconds <= 0
         ):
             raise ConfigurationError("KPI resource interval must be finite and positive")
+        if (
+            isinstance(self.network_probe_persist_interval_seconds, bool)
+            or not isinstance(self.network_probe_persist_interval_seconds, (int, float))
+            or not math.isfinite(float(self.network_probe_persist_interval_seconds))
+            or self.network_probe_persist_interval_seconds <= 0
+        ):
+            raise ConfigurationError("KPI network persistence interval must be finite and positive")
         if (
             isinstance(self.dashboard_port, bool)
             or not isinstance(self.dashboard_port, int)
@@ -616,6 +628,23 @@ class LLMSettings:
             object.__setattr__(self, "routing_policy", "local_only")
 
 
+def spoken_response_instruction(language: str) -> str:
+    """Static voice style, independent of user content and provider routing."""
+    if language == "it":
+        return (
+            "Per le risposte vocali, rispondi in modo conciso e diretto per impostazione predefinita. "
+            "Approfondisci quando richiesto o necessario per la correttezza. "
+            "Mantieni dettagli essenziali, incertezze e condizioni di sicurezza; non troncare una risposta necessaria. "
+            "Non dichiarare un'azione eseguita senza conferma del servizio responsabile."
+        )
+    return (
+        "For spoken responses, answer concisely and directly by default. "
+        "Expand when requested or needed for correctness. "
+        "Preserve essential details, uncertainty and safety conditions; do not truncate a necessary answer. "
+        "Do not claim an action is complete without confirmation from the responsible service."
+    )
+
+
 @dataclass(frozen=True)
 class LanguageProfile:
     code: str
@@ -632,6 +661,10 @@ class LanguageProfile:
     backchannel_phrases: tuple[str, ...]
     rag_result_prefix: str
     model_error_message: str
+
+    @property
+    def wake_acknowledgement(self) -> str:
+        return "Ti ascolto." if self.code == "it" else "I'm listening."
 
 
 def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
@@ -662,7 +695,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
                 "Hi! I just woke up and I'm ready to help. Just remember to call "
                 "me '{wake_word}' when you talk to me."
             ),
-            backchannel_phrases=("Sure.", "One moment.", "Let's see."),
+            backchannel_phrases=("One moment.", "Let's see.", "I'm considering that."),
             rag_result_prefix="Here's what I found: ",
             model_error_message="I could not contact the language model.",
         ),
@@ -686,7 +719,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
                 "Ciao! Mi sono appena svegliata e sono pronta ad aiutarti. "
                 "Ricordati solo di chiamarmi '{wake_word}' quando mi parli."
             ),
-            backchannel_phrases=("Certo.", "Un momento.", "Vediamo."),
+            backchannel_phrases=("Un momento.", "Vediamo.", "Sto valutando la richiesta."),
             rag_result_prefix="Ecco cosa ho trovato: ",
             model_error_message="Non riesco a contattare il modello linguistico.",
         ),
@@ -861,6 +894,10 @@ def _kpi_from_env(
             env.get("HELIOS_KPI_RAW_RETENTION_DAYS", str(defaults.raw_retention_days)),
             "HELIOS_KPI_RAW_RETENTION_DAYS",
         ),
+        background_retention_days=_int_from_env(
+            env.get("HELIOS_KPI_BACKGROUND_RETENTION_DAYS", str(defaults.background_retention_days)),
+            "HELIOS_KPI_BACKGROUND_RETENTION_DAYS",
+        ),
         rollup_retention_days=_int_from_env(
             env.get(
                 "HELIOS_KPI_ROLLUP_RETENTION_DAYS",
@@ -885,6 +922,13 @@ def _kpi_from_env(
                 str(defaults.resource_sample_interval_seconds),
             ),
             "HELIOS_KPI_RESOURCE_INTERVAL_SECONDS",
+        ),
+        network_probe_persist_interval_seconds=_float_from_env(
+            env.get(
+                "HELIOS_KPI_NETWORK_PERSIST_INTERVAL_SECONDS",
+                str(defaults.network_probe_persist_interval_seconds),
+            ),
+            "HELIOS_KPI_NETWORK_PERSIST_INTERVAL_SECONDS",
         ),
         dashboard_enabled=_bool_from_env(
             env.get(
@@ -1691,6 +1735,14 @@ class Settings:
     barge_in_event_energy: float = 0.08
     barge_in_expected_echo_energy: float = 0.04
     barge_in_minimum_interrupt_energy: float = 0.06
+    barge_in_minimum_active_seconds: float = 0.12
+    barge_in_minimum_partial_words: int = 3
+    barge_in_minimum_recognition_confidence: float = 0.5
+    barge_in_candidate_inactivity_seconds: float = 1.5
+    barge_in_candidate_maximum_seconds: float = 3.0
+    barge_in_echo_energy_ratio: float = 1.5
+    barge_in_startup_window_seconds: float = 0.4
+    barge_in_startup_energy_multiplier: float = 1.5
     backchannel_delay_seconds: float = 0.7
     log_level: int = logging.INFO
     log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -1704,6 +1756,10 @@ class Settings:
     llm: LLMSettings = field(default_factory=LLMSettings)
     kpi: KPISettings = field(default_factory=KPISettings)
     endpointing: TurnEndpointConfig = field(default_factory=TurnEndpointConfig)
+    activation_timeout_seconds: float = 30.0
+    audio_input_strict: bool = False
+    audio_input_channel_mode: str = "mono"
+    audio_capture_stall_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).expanduser().resolve()
@@ -1717,10 +1773,16 @@ class Settings:
             )
         if self.listen_timeout <= 0:
             raise ConfigurationError("listen_timeout must be greater than zero")
+        if (isinstance(self.activation_timeout_seconds, bool)
+                or not isinstance(self.activation_timeout_seconds, (int, float))
+                or not math.isfinite(self.activation_timeout_seconds)
+                or self.activation_timeout_seconds <= 0):
+            raise ConfigurationError("activation_timeout_seconds must be finite and positive")
         for name, value in (
             ("barge_in_event_energy", self.barge_in_event_energy),
             ("barge_in_expected_echo_energy", self.barge_in_expected_echo_energy),
             ("barge_in_minimum_interrupt_energy", self.barge_in_minimum_interrupt_energy),
+            ("barge_in_minimum_recognition_confidence", self.barge_in_minimum_recognition_confidence),
         ):
             if (
                 isinstance(value, bool)
@@ -1729,6 +1791,23 @@ class Settings:
                 or not 0 <= float(value) <= 1
             ):
                 raise ConfigurationError(f"{name} must be finite and between zero and one")
+        for name, value, minimum, exclusive in (
+            ("barge_in_minimum_active_seconds", self.barge_in_minimum_active_seconds, 0, False),
+            ("barge_in_candidate_inactivity_seconds", self.barge_in_candidate_inactivity_seconds, 0, True),
+            ("barge_in_candidate_maximum_seconds", self.barge_in_candidate_maximum_seconds, 0, True),
+            ("barge_in_echo_energy_ratio", self.barge_in_echo_energy_ratio, 1, False),
+            ("barge_in_startup_window_seconds", self.barge_in_startup_window_seconds, 0, False),
+            ("barge_in_startup_energy_multiplier", self.barge_in_startup_energy_multiplier, 1, False),
+        ):
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < minimum or (exclusive and value == minimum)):
+                raise ConfigurationError(f"invalid {name}")
+        if (isinstance(self.barge_in_minimum_partial_words, bool)
+                or not isinstance(self.barge_in_minimum_partial_words, int)
+                or self.barge_in_minimum_partial_words < 1):
+            raise ConfigurationError("barge_in_minimum_partial_words must be a positive integer")
+        if self.barge_in_candidate_inactivity_seconds > self.barge_in_candidate_maximum_seconds:
+            raise ConfigurationError("barge-in inactivity cannot exceed maximum candidate duration")
         if (
             isinstance(self.backchannel_delay_seconds, bool)
             or not isinstance(self.backchannel_delay_seconds, (int, float))
@@ -1738,6 +1817,15 @@ class Settings:
             raise ConfigurationError("backchannel_delay_seconds must be positive")
         if self.top_k < 1:
             raise ConfigurationError("top_k must be at least one")
+        if not isinstance(self.audio_input_strict, bool):
+            raise ConfigurationError("audio_input_strict must be a boolean")
+        if self.audio_input_channel_mode not in {"mono", "average", "sum", "stronger"}:
+            raise ConfigurationError("audio_input_channel_mode must be mono, average, sum, or stronger")
+        if (isinstance(self.audio_capture_stall_seconds, bool)
+                or not isinstance(self.audio_capture_stall_seconds, (int, float))
+                or not math.isfinite(self.audio_capture_stall_seconds)
+                or self.audio_capture_stall_seconds <= 0):
+            raise ConfigurationError("audio_capture_stall_seconds must be positive")
 
         for name, value in (
             ("audio_input_device", self.audio_input_device),
@@ -1849,6 +1937,10 @@ class Settings:
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
+            activation_timeout_seconds=_float_from_env(
+                env.get("HELIOS_ACTIVATION_TIMEOUT_SECONDS", "30.0"),
+                "HELIOS_ACTIVATION_TIMEOUT_SECONDS",
+            ),
             barge_in_enabled=_bool_from_env(
                 env.get("HELIOS_BARGE_IN_ENABLED", "true"),
                 "HELIOS_BARGE_IN_ENABLED",
@@ -1865,6 +1957,22 @@ class Settings:
                 env.get("HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY", "0.06"),
                 "HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY",
             ),
+            **{
+                name: _float_from_env(env.get("HELIOS_" + name.upper(), str(default)), "HELIOS_" + name.upper())
+                for name, default in (
+                    ("barge_in_minimum_active_seconds", 0.12),
+                    ("barge_in_minimum_recognition_confidence", 0.5),
+                    ("barge_in_candidate_inactivity_seconds", 1.5),
+                    ("barge_in_candidate_maximum_seconds", 3.0),
+                    ("barge_in_echo_energy_ratio", 1.5),
+                    ("barge_in_startup_window_seconds", 0.4),
+                    ("barge_in_startup_energy_multiplier", 1.5),
+                )
+            },
+            barge_in_minimum_partial_words=_int_from_env(
+                env.get("HELIOS_BARGE_IN_MINIMUM_PARTIAL_WORDS", "3"),
+                "HELIOS_BARGE_IN_MINIMUM_PARTIAL_WORDS",
+            ),
             backchannel_delay_seconds=_float_from_env(
                 env.get("HELIOS_BACKCHANNEL_DELAY_SECONDS", "0.7"),
                 "HELIOS_BACKCHANNEL_DELAY_SECONDS",
@@ -1874,6 +1982,15 @@ class Settings:
             audio_input_device=_audio_device_from_env(
                 env.get("HELIOS_AUDIO_INPUT_DEVICE"),
                 "HELIOS_AUDIO_INPUT_DEVICE",
+            ),
+            audio_input_strict=_bool_from_env(
+                env.get("HELIOS_AUDIO_INPUT_STRICT", "false"),
+                "HELIOS_AUDIO_INPUT_STRICT",
+            ),
+            audio_input_channel_mode=env.get("HELIOS_AUDIO_INPUT_CHANNEL_MODE", "mono").strip().lower(),
+            audio_capture_stall_seconds=_float_from_env(
+                env.get("HELIOS_AUDIO_CAPTURE_STALL_SECONDS", "5.0"),
+                "HELIOS_AUDIO_CAPTURE_STALL_SECONDS",
             ),
             audio_output_device=_audio_device_from_env(
                 env.get("HELIOS_AUDIO_OUTPUT_DEVICE"),
