@@ -744,100 +744,106 @@ class StreamingResponseCoordinator:
                 except Exception:
                     pass
 
-        self._raise_if_cancelled(
-            cancellation,
-            execution.route,
-            transmitted=True,
-        )
-        if completed is None:
-            raise ProviderError(
-                ErrorCategory.MALFORMED_RESPONSE,
-                "Provider stream ended without completion metadata",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=True,
+        try:
+            self._raise_if_cancelled(
+                cancellation,
+                execution.route,
                 transmitted=True,
             )
-        if completed.finish_reason is FinishReason.SAFETY:
-            raise ProviderError(
-                ErrorCategory.SAFETY_REFUSAL,
-                "The provider declined this request",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
-        if completed.finish_reason is FinishReason.CANCELLED:
-            raise ProviderError(
-                ErrorCategory.CANCELLED,
-                "Provider stream was cancelled",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
-        if completed.finish_reason is FinishReason.ERROR:
-            raise ProviderError(
-                ErrorCategory.UNKNOWN,
-                "Provider reported an unsuccessful completion",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
-        if completed.finish_reason is FinishReason.TOOL_CALL:
-            raise ProviderError(
-                ErrorCategory.UNSUPPORTED_FEATURE,
-                "Provider returned an unsupported tool call",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
+            if completed is None:
+                raise ProviderError(
+                    ErrorCategory.MALFORMED_RESPONSE,
+                    "Provider stream ended without completion metadata",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=True,
+                    transmitted=True,
+                )
+            if completed.finish_reason is FinishReason.SAFETY:
+                raise ProviderError(
+                    ErrorCategory.SAFETY_REFUSAL,
+                    "The provider declined this request",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
+            if completed.finish_reason is FinishReason.CANCELLED:
+                raise ProviderError(
+                    ErrorCategory.CANCELLED,
+                    "Provider stream was cancelled",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
+            if completed.finish_reason is FinishReason.ERROR:
+                raise ProviderError(
+                    ErrorCategory.UNKNOWN,
+                    "Provider reported an unsuccessful completion",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
+            if completed.finish_reason is FinishReason.TOOL_CALL:
+                raise ProviderError(
+                    ErrorCategory.UNSUPPORTED_FEATURE,
+                    "Provider returned an unsupported tool call",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
 
-        text = "".join(response_parts)
-        if not text.strip():
-            raise ProviderError(
-                ErrorCategory.EMPTY_COMPLETION,
-                "Provider returned an empty completion",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=True,
-                transmitted=True,
+            text = "".join(response_parts)
+            if not text.strip():
+                raise ProviderError(
+                    ErrorCategory.EMPTY_COMPLETION,
+                    "Provider returned an empty completion",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=True,
+                    transmitted=True,
+                )
+            if on_generation_completed is not None:
+                on_generation_completed()
+            if speech_chunker is not None:
+                for sentence in speech_chunker.finish():
+                    speak_fragment(sentence)
+            # The response is not finished until its audio has actually been played,
+            # otherwise the caller returns to listening while the assistant speaks.
+            flush_speech()
+            return StreamingResult(
+                text=text,
+                metadata=completed,
+                target=execution.route,
+                attempts=1,
+                first_token_seconds=self._elapsed_seconds(
+                    state.started_at,
+                    state.first_token_at,
+                ),
+                first_audio_seconds=self._elapsed_seconds(
+                    state.started_at,
+                    state.first_audio_at,
+                ),
+                actual_first_audio_seconds=self._elapsed_seconds(
+                    state.started_at,
+                    state.actual_first_audio_at,
+                ),
+                tts_synthesis_seconds=state.tts_synthesis_seconds,
+                audio_playback_seconds=state.audio_playback_seconds,
+                audio_duration_seconds=state.audio_duration_seconds,
             )
-        if on_generation_completed is not None:
-            on_generation_completed()
-        if speech_chunker is not None:
-            for sentence in speech_chunker.finish():
-                speak_fragment(sentence)
-        # The response is not finished until its audio has actually been played,
-        # otherwise the caller returns to listening while the assistant speaks.
-        flush_speech()
-        return StreamingResult(
-            text=text,
-            metadata=completed,
-            target=execution.route,
-            attempts=1,
-            first_token_seconds=self._elapsed_seconds(
-                state.started_at,
-                state.first_token_at,
-            ),
-            first_audio_seconds=self._elapsed_seconds(
-                state.started_at,
-                state.first_audio_at,
-            ),
-            actual_first_audio_seconds=self._elapsed_seconds(
-                state.started_at,
-                state.actual_first_audio_at,
-            ),
-            tts_synthesis_seconds=state.tts_synthesis_seconds,
-            audio_playback_seconds=state.audio_playback_seconds,
-            audio_duration_seconds=state.audio_duration_seconds,
-        )
+        except BaseException:
+            # EOF validation, final chunk dispatch and audio drain still own
+            # this response's queued work. Retire it on every terminal failure.
+            cancel_pending_speech()
+            raise
 
     @staticmethod
     def _limit_history_turns(
@@ -1113,6 +1119,8 @@ class StreamingResponseCoordinator:
             latency_ms=latency * 1_000,
             inference_ms=max(0.0, latency * 1_000 - synthesis_ms - playback_ms),
             first_token_ms=self._elapsed_ms(state.started_at, state.first_token_at),
+            cold_load_ms=result.metadata.cold_load_ms,
+            warm_first_token_ms=result.metadata.warm_first_token_ms,
             first_audio_ms=self._elapsed_ms(state.started_at, state.first_audio_at),
             speech_dispatch_ms=self._elapsed_ms(state.started_at, state.first_audio_at),
             actual_first_audio_ms=actual_first_audio_ms,

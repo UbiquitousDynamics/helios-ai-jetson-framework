@@ -534,7 +534,8 @@ sequenceDiagram
 
 Only finalized recognition results are executed. Partial phrases and measured
 PCM energy are available through `listen_events()` and, while default-on barge-in is
-active, can stop the current response early. One continuous microphone/Vosk
+active, can duck current playback for a plausible speech candidate. Confirmed
+final speech cancels the response. One continuous microphone/Vosk
 session then flushes the finalized interruption utterance, which is executed as
 an immediate follow-up without another wake word. A finalized utterance during
 model generation or TTS synthesis also supersedes that response instead of
@@ -547,17 +548,16 @@ is safe. Once speech has started, a failed stream is not replayed because doing
 so could duplicate audio already heard by the user. TTS failures are preserved
 as TTS errors rather than being relabeled as network failures.
 
-### Interruptible conversation (opt-in)
+### Interruptible conversation
 
-Set `HELIOS_BARGE_IN_ENABLED=true` to keep one Vosk capture session open while a
-response is generated and Piper is speaking. Detection is armed only for actual
-playback and its short echo tail. The same opt-in flow pre-synthesizes short
-language-specific backchannels before the first command and plays one after a
-configurable 700 ms silent gap. A fast real fragment cancels the cue before it
-starts; a cue already playing is stopped through its own cancellation event and
-joined before real speech. The default remains `false` until thresholds and
-timing are calibrated on the target microphone, speaker, enclosure, and playback
-level.
+Barge-in is enabled by default (`HELIOS_BARGE_IN_ENABLED=true`). It keeps one
+Vosk capture session active during response generation, synthesis, and playback.
+Plausible speech first ducks playback; a confirmed final interrupts speech and
+cancels model work. Cached neutral backchannels may play after a configurable
+700 ms delay while a response is pending. Fast real speech supersedes the cue,
+and a playing cue is cancelled before response speech. Local controls and
+sensitive-confirmation modes suppress cues. Acoustic thresholds still require
+calibration on the deployed microphone, speaker, enclosure, and playback level.
 
 ```mermaid
 sequenceDiagram
@@ -573,10 +573,12 @@ sequenceDiagram
         TTS-->>User: Response audio
     and Barge-in monitoring
         User->>STT: Begin follow-up while audio plays
-        STT-->>VA: Partial/final RecognitionResult
+        STT-->>VA: Provisional revision
     end
-    VA->>TTS: interrupt()
-    VA->>API: cancel_current()
+    VA->>TTS: duck() for plausible candidate
+    STT-->>VA: Authoritative final
+    VA->>TTS: interrupt() after confirmation
+    VA->>API: cancel_current() after confirmation
     Note over API: Cancellation is terminal; no retry/fallback
     STT-->>VA: Finalized follow-up
     VA->>API: Process follow-up without another wake word
@@ -589,6 +591,11 @@ and a conservative software echo gate; see
 [`docs/BARGE_IN_DESIGN.md`](docs/BARGE_IN_DESIGN.md) for calibration guidance,
 the scripted first-audio benchmark, rejected AEC alternatives, and the
 cancellation/budget contract.
+
+The current floor, task-state, migration and 45-requirement audit is in
+[`docs/live-conversation-final-audit.md`](docs/live-conversation-final-audit.md).
+The optional task API operates on injected fake work only; it does not connect
+calendar, messaging, booking, vehicle or robot services.
 
 ### RAG query
 
@@ -1181,7 +1188,10 @@ Audio environment overrides are independent of routing:
 
 | Variable | Purpose |
 |---|---|
-| `HELIOS_AUDIO_INPUT_DEVICE` | PyAudio input index or one unambiguous capture-device name; blank uses the platform default |
+| `HELIOS_AUDIO_INPUT_DEVICE` | PyAudio index, input-device name, or `pulse:<exact source>`; blank uses the platform default |
+| `HELIOS_AUDIO_INPUT_STRICT` | Fail if the requested input cannot be resolved; default `false` falls back with a warning |
+| `HELIOS_AUDIO_INPUT_CHANNEL_MODE` | `mono` (default), `average`, `sum`, or `stronger` for stereo capture |
+| `HELIOS_AUDIO_CAPTURE_STALL_SECONDS` | Log a stalled capture if no frame arrives within this interval; default `5`; does not reopen the stream |
 | `HELIOS_AUDIO_OUTPUT_DEVICE` | sounddevice output index or name; blank uses the platform default |
 | `HELIOS_AUDIO_OUTPUT_LATENCY` | `high` (default, robust) or `low` (only after device-specific validation) |
 
@@ -1295,13 +1305,14 @@ after the remote issue has been reviewed.
 | `language` | `"it"` | Selects Vosk, Piper, prompts, trigger, and chat model |
 | `name` | `"emilia"` | Compatibility assistant identity |
 | `listen_timeout` | `6.5` seconds | Maximum duration of one recognition call |
+| `activation_timeout_seconds` | `30` seconds | Wake-free follow-up window, independent of one recognition call; overridden by `HELIOS_ACTIVATION_TIMEOUT_SECONDS` |
 | `barge_in_enabled` | `true` | Enables interruptible listen-while-speaking turns; overridden by `HELIOS_BARGE_IN_ENABLED` |
 | `barge_in_event_energy` | `0.08` | Legacy-event detection energy; overridden by `HELIOS_BARGE_IN_EVENT_ENERGY` |
 | `barge_in_expected_echo_energy` | `0.04` | Calibrated Piper leakage RMS; overridden by `HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY` |
 | `barge_in_minimum_interrupt_energy` | `0.06` | Conservative interruption floor; overridden by `HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY` |
 | `backchannel_delay_seconds` | `0.7` seconds | Silent-gap threshold for a cached cue; overridden by `HELIOS_BACKCHANNEL_DELAY_SECONDS` |
 | `log_level` | `INFO` | Root logging level; overridden by `HELIOS_LOG_LEVEL` |
-| `log_file_name` | `app.log` | Append-only log; overridden by `HELIOS_LOG_FILE` |
+| `log_file_name` | `app.log` | Rotated log (5 MiB plus three backups); overridden by `HELIOS_LOG_FILE` |
 | `ollama_host` | `http://localhost:11434` | Host passed to the Ollama SDK |
 | `think_model` | `qwen3:0.6b` | Model used by `APIClient.think()` |
 | `top_k` | `4` | Number of RAG passages returned and spoken |
@@ -1914,7 +1925,7 @@ target-device measurements.
 - Conversation history is not durable across process restarts. Codex physical
   threads are also ephemeral, but interruption, fallback, idle rotation, and
   turn-cap rotation recover from bounded logical history while Helios runs.
-- Barge-in is opt-in and uses a conservative software echo gate. Its thresholds
+- Barge-in is enabled by default and uses a conservative software echo gate. Its thresholds
   and 200-300 ms interruption target require calibration and measurement on the
   deployed microphone, speaker, enclosure, and audio level; hardware AEC is not
   assumed. The documented first-audio numbers use a fake timed stream, not
@@ -1980,10 +1991,10 @@ connectivity.
 
 ### Does Helios remember previous conversations?
 
-No. Persistent or session conversation memory is not implemented in the current
-codebase. A programmatic caller may pass explicitly classified context to an
-individual `APIClient` request, but the voice loop does not retain facts between
-commands.
+Helios retains bounded conversation history during the active in-process session,
+including wake-free follow-ups and safe provider fallback. It clears that history
+when the session ends or resets. Persistent user memory across process restarts
+is not implemented.
 
 ### Does the ChatGPT-subscription route need an API key?
 

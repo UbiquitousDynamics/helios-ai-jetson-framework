@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sqlite3
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -303,6 +305,57 @@ def test_retention_rolls_up_counts_and_clear_is_transactional(tmp_path: Path) ->
     assert any(row["fallback_cause"] == "unspecified" for row in rollups)
     assert cleared == {"raw_events_removed": 0, "rollup_rows_removed": len(rollups)}
     assert status["raw_event_count"] == status["rollup_row_count"] == 0
+
+
+def test_background_rows_roll_up_before_voice_rows(tmp_path: Path) -> None:
+    now = _now()
+    old = now - timedelta(days=2)
+    store = SQLiteKPIStore(
+        tmp_path / "kpi.sqlite3",
+        raw_retention_days=7,
+        background_retention_days=1,
+        maintenance_interval_seconds=10_000,
+    )
+    store.write_batch(
+        (
+            {"event": "resource_sample", "timestamp": old, "count": 5},
+            {"event": "network_probe_completed", "timestamp": old, "count": 3},
+            {"event": "voice_listen_completed", "timestamp": old},
+        )
+    )
+    assert store.maintain(now=now)["raw_events_rolled_up"] == 2
+    assert [row["event"] for row in store.query_events()] == ["voice_listen_completed"]
+    assert sum(row["count"] for row in store.query_rollups()) == 8
+    store.close()
+
+
+def test_committed_wal_recovers_after_unclean_process_exit(tmp_path: Path) -> None:
+    path = tmp_path / "kpi.sqlite3"
+    script = (
+        "import os; from observability.storage import SQLiteKPIStore; "
+        f"store=SQLiteKPIStore({str(path)!r}); "
+        "store.write_batch(({'event':'voice_listen_completed'},)); os._exit(0)"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+    store = SQLiteKPIStore(path)
+    try:
+        assert [row["event"] for row in store.query_events()] == ["voice_listen_completed"]
+    finally:
+        store.close()
+
+
+def test_ollama_load_phase_metrics_survive_storage_sanitization(tmp_path: Path) -> None:
+    store = SQLiteKPIStore(tmp_path / "kpi.sqlite3")
+    try:
+        assert store.write_batch((MetricEvent(
+            "llm_attempt_succeeded", provider="ollama", cold_load_ms=37_320.0,
+            warm_first_token_ms=12_000.0,
+        ),)) == 1
+        row = store.query_events()[0]
+        assert row["cold_load_ms"] == 37_320.0
+        assert row["warm_first_token_ms"] == 12_000.0
+    finally:
+        store.close()
 
 
 def test_max_size_pressure_prefers_compacted_counts(tmp_path: Path) -> None:

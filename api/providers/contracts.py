@@ -48,11 +48,13 @@ class ErrorCategory(str, Enum):
     TLS = "tls"
     CONNECT_TIMEOUT = "connect_timeout"
     FIRST_TOKEN_TIMEOUT = "first_token_timeout"
+    COLD_LOAD_TIMEOUT = "cold_load_timeout"
     READ_TIMEOUT = "read_timeout"
     RATE_LIMITED = "rate_limited"
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
     QUOTA_EXHAUSTED = "quota_exhausted"
+    CREDIT_EXHAUSTED = "credit_exhausted"
     CONTEXT_OVERFLOW = "context_overflow"
     SAFETY_REFUSAL = "safety_refusal"
     UNSUPPORTED_FEATURE = "unsupported_feature"
@@ -187,6 +189,8 @@ class CompletionMetadata:
     usage: Usage = field(default_factory=Usage)
     request_id: str | None = None
     rate_limits: RateLimitSnapshot | None = None
+    cold_load_ms: float | None = None
+    warm_first_token_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "task_id": "02",
+  "status": "blocked",
+  "local_authority": {
+    "status": "passed",
+    "contract_version": "1.0.0",
+    "threshold_version": "1.0.0",
+    "languages": ["en", "it"],
+    "scenarios": 10,
+    "events": 36,
+    "declared_events": {"provisional": 10, "final": 14, "ignored": 12},
+    "metrics": {
+      "authority_mismatches": {"unit": "events", "sample_count": 36, "median": 0, "p95": 0, "maximum": 0, "failure_count": 0, "required_maximum": 0, "status": "passed"},
+      "final_count_mismatches": {"unit": "scenarios", "sample_count": 10, "median": 0, "p95": 0, "maximum": 0, "failure_count": 0, "required_maximum": 0, "status": "passed"},
+      "provisional_sink_admissions": {"unit": "events", "sample_count": 10, "median": 0, "p95": 0, "maximum": 0, "failure_count": 0, "required_maximum": 0, "status": "passed"}
+    }
+  },
+  "hil": {
+    "status": "blocked",
+    "required_for_task": true,
+    "reasons": ["four_explicit_physical_roles_unselected", "device_indices_changed_between_target_enumerations", "calibration_unverified", "capture_isolation_unconfirmed", "pc_piper_vosk_pyaudio_onnxruntime_missing", "acoustic_adapter_and_exchange_not_executed"],
+    "devices_opened": 0,
+    "acoustic_exchanges": 0,
+    "calibration_artifact": null,
+    "hardware_manifest": "tests/voice_suite/hardware.example.json",
+    "hardware_manifest_sha256": "4aaf46e0bb1de07196ffa0745a485d2a19aff9d96c1af63312499dac152a0c5c"
+  },
+  "profiles": {
+    "desktop": {"host": "PC", "run_id": "8250499e-9985-4401-ae73-1c80698a0afb", "exit_code": 2, "local_status": "passed", "hil_status": "blocked", "artifact_directory": ".voice-test-artifacts/task02/8250499e-9985-4401-ae73-1c80698a0afb/"},
+    "jetson": {"host": "PC", "run_id": "09d45154-39e7-444a-8271-13a4f8b60c59", "exit_code": 2, "local_status": "passed", "hil_status": "blocked", "artifact_directory": ".voice-test-artifacts/task02/09d45154-39e7-444a-8271-13a4f8b60c59/"}
+  },
+  "environment": {
+    "pc": {"system": "Windows 11 AMD64", "python": "3.12.10", "pytest": "8.4.2", "ruff": "0.16.8", "sounddevice": "0.5.6", "portaudio": "V19.7.0-devel", "piper_tts": null, "vosk": null, "pyaudio": null, "onnxruntime": null},
+    "emilia": {"python": "3.10.0", "piper_tts": "1.6.0", "vosk": "0.3.45", "sounddevice": "0.5.5", "pyaudio": "0.2.14", "onnxruntime": "1.23.2", "portaudio": "V19.6.0-devel"}
+  },
+  "device_inventory": {
+    "status": "enumerated_not_selected",
+    "pc": {"portaudio_endpoint_count": 25, "host_apis": ["MME", "Windows DirectSound", "Windows WASAPI", "Windows WDM-KS"], "wasapi_candidates": [{"index": 10, "name": "SAMSUNG (NVIDIA High Definition Audio)", "max_input_channels": 0, "max_output_channels": 2, "default_samplerate_hz": 48000}, {"index": 11, "name": "Speaker (Realtek(R) Audio)", "max_input_channels": 0, "max_output_channels": 2, "default_samplerate_hz": 48000}, {"index": 12, "name_status": "Intel Smart Sound microphone name has PortAudio encoding corruption", "max_input_channels": 2, "max_output_channels": 0, "default_samplerate_hz": 48000}], "loopback_candidate_excluded": "Missaggio stereo (Realtek HD Audio Stereo input)"},
+    "emilia": {"host_apis": ["ALSA", "OSS"], "first_endpoint_count": 13, "second_endpoint_count": 24, "second_usb_candidate": {"host_api": "ALSA", "index": 11, "name": "USB PnP Audio Device: Audio (hw:2,0)", "max_input_channels": 2, "max_output_channels": 2, "default_samplerate_hz": 44100}, "physical_input_output_roles_verified": false},
+    "selected_roles": {"pc_input": null, "pc_output": null, "helios_input": null, "helios_output": null}
+  },
+  "acoustic_metrics": {"status": "unverified", "sample_count": 0, "latency_ms": {"median": null, "p95": null, "maximum": null}, "wer": null, "cer": null, "state_event_mapping": null, "cleanup_after_acoustic_exchange": null},
+  "cleanup": {"status": "passed_for_local_execution", "workers_started": 0, "audio_streams_opened": 0, "audio_files_created": 0, "transcripts_created": 0},
+  "validation": {"focused": {"passed": 29, "failed": 0, "skipped": 0}, "repository_local": {"passed": 2043, "failed": 0, "skipped": 1, "deselected": 1, "marker_filter": "not hardware and not integration and not remote_live and not voice_hil"}, "syntax": "passed", "ruff": "passed", "git_diff_check": "passed"},
+  "exhaustive_gate": {"status": "blocked", "local": "passed", "hil": "blocked", "reason": "Piper playback and physical PC/Emilia capture were not executed or calibrated"},
+  "implementation": {"commit": "d0446f0bb04ac74aaebd59f858ee0ba5170a4fb2", "identity": "commit_plus_file_hashes_in_raw_results"},
+  "spec_sha256": {"task02-contract.json": "2b1392dead8c4869697e943eac740fab06dddeffb4d9d085b00c482e3fcfc772", "task02-profile.json": "913df20400d0b40fd058bf3da20c3e7b1867d2eaa94f20a8792b927973a2a528"},
+  "harness_sha256": "75f5706b6bf52a7fdad963ef4b035bc76ee41109e029378f9edd55c137d597fb",
+  "next_task": "03",
+  "next_task_started": false
+}

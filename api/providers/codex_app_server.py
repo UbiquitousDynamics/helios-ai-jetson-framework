@@ -237,6 +237,10 @@ def _safe_error_message(category: ErrorCategory) -> str:
             "Codex is not signed in with a ChatGPT account; local fallback is required"
         ),
         ErrorCategory.QUOTA_EXHAUSTED: "The ChatGPT Codex usage allowance is exhausted",
+        ErrorCategory.CREDIT_EXHAUSTED: (
+            "The ChatGPT Codex premium credit balance is empty; waiting will not restore credits"
+        ),
+        ErrorCategory.RATE_LIMITED: "The ChatGPT Codex rate-limit window is exhausted",
         ErrorCategory.CONTEXT_OVERFLOW: "The request exceeds the Codex model context limit",
         ErrorCategory.CONNECTIVITY: "Could not connect through the Codex app-server",
         ErrorCategory.CONNECT_TIMEOUT: "Timed out while starting the Codex app-server",
@@ -252,7 +256,16 @@ def _safe_error_message(category: ErrorCategory) -> str:
 
 
 def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
+    for candidate in (field_value(error, "rate_limits"), field_value(error, "rateLimits"),
+                      field_value(error, "data"), field_value(error, "details")):
+        category = _classify_usage_snapshot(candidate)
+        if category is not None:
+            return category, False
     marker = f"{type(error).__module__}.{type(error).__name__} {error}".lower()
+    if "premium" in marker and any(word in marker for word in ("credit", "balance", "usage limit")):
+        return ErrorCategory.CREDIT_EXHAUSTED, False
+    if "rate limit" in marker or "rate_limit" in marker:
+        return ErrorCategory.RATE_LIMITED, False
     if any(
         word in marker
         for word in ("usage limit", "usage_limit", "usagelimit", "quota", "billing", "credit")
@@ -269,6 +282,45 @@ def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
     if isinstance(error, (FileNotFoundError, ImportError)):
         return ErrorCategory.PROVIDER_UNAVAILABLE, False
     return ErrorCategory.UNKNOWN, False
+
+
+def _classify_usage_snapshot(snapshot: Any) -> ErrorCategory | None:
+    """Distinguish sanitized account-window data from an empty credit pool."""
+
+    if snapshot is None:
+        return None
+    nested = field_value(snapshot, "rate_limits", field_value(snapshot, "rateLimits"))
+    if nested is not None:
+        return _classify_usage_snapshot(nested)
+    credits = field_value(snapshot, "credits")
+    limit_id = field_value(snapshot, "limit_id", field_value(snapshot, "limitId"))
+    balance = field_value(credits, "balance")
+    has_credits = field_value(credits, "has_credits", field_value(credits, "hasCredits"))
+    if limit_id == "premium" and (balance == "0" or balance == 0 or has_credits is False):
+        return ErrorCategory.CREDIT_EXHAUSTED
+    if limit_id == "codex" and (
+        field_value(snapshot, "primary") is not None
+        or field_value(snapshot, "secondary") is not None
+    ):
+        return ErrorCategory.RATE_LIMITED
+    return None
+
+
+def _rate_window_retry_after(error: BaseException, now_epoch: float) -> float | None:
+    snapshot = field_value(error, "rate_limits", field_value(error, "rateLimits"))
+    if snapshot is None:
+        snapshot = field_value(error, "data", field_value(error, "details"))
+    if snapshot is None or _classify_usage_snapshot(snapshot) is not ErrorCategory.RATE_LIMITED:
+        return None
+    delays = []
+    for name in ("primary", "secondary"):
+        window = field_value(snapshot, name)
+        used = field_value(window, "used_percent", field_value(window, "usedPercent"))
+        reset = field_value(window, "resets_at", field_value(window, "resetsAt"))
+        if isinstance(used, (int, float)) and not isinstance(used, bool) and used >= 100:
+            if isinstance(reset, (int, float)) and not isinstance(reset, bool):
+                delays.append(max(0.0, float(reset) - now_epoch))
+    return max(delays) if delays else None
 
 
 def _prompt(request: ChatRequest, *, include_history: bool = True) -> tuple[str, str]:
@@ -417,6 +469,7 @@ class CodexAppServerAdapter:
         retryable: bool = False,
         transmitted: bool | None,
         request_id: str | None = None,
+        retry_after_seconds: float | None = None,
     ) -> ProviderError:
         return ProviderError(
             category,
@@ -425,6 +478,7 @@ class CodexAppServerAdapter:
             model=model,
             retryable_same_provider=retryable,
             request_id=request_id,
+            retry_after_seconds=retry_after_seconds,
             transmitted=transmitted,
         )
 
@@ -1102,6 +1156,10 @@ class CodexAppServerAdapter:
                     retryable=retryable,
                     transmitted="turn" in holder,
                     request_id=request_id,
+                    retry_after_seconds=(
+                        _rate_window_retry_after(value, time.time())
+                        if category is ErrorCategory.RATE_LIMITED else None
+                    ),
                 ) from None
             if kind == "eof":
                 if not saw_completed:

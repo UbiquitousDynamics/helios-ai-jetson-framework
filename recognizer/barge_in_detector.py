@@ -68,11 +68,11 @@ class BargeInDetector:
         suppression_policy: EchoSuppressionPolicy | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        if sample_rate <= 0:
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
-        if not math.isfinite(energy_threshold) or not 0 <= energy_threshold <= 1:
+        if not self._finite_number(energy_threshold) or not 0 <= energy_threshold <= 1:
             raise ValueError("energy_threshold must be finite and between 0 and 1")
-        if not math.isfinite(minimum_active_seconds) or minimum_active_seconds < 0:
+        if not self._finite_number(minimum_active_seconds) or minimum_active_seconds < 0:
             raise ValueError("minimum_active_seconds must be finite and non-negative")
         if (
             isinstance(minimum_partial_words, bool)
@@ -80,10 +80,10 @@ class BargeInDetector:
             or minimum_partial_words < 1
         ):
             raise ValueError("minimum_partial_words must be a positive integer")
-        if not math.isfinite(recognition_event_energy) or not 0 <= recognition_event_energy <= 1:
+        if not self._finite_number(recognition_event_energy) or not 0 <= recognition_event_energy <= 1:
             raise ValueError("recognition_event_energy must be finite and between 0 and 1")
         if (
-            not math.isfinite(minimum_recognition_confidence)
+            not self._finite_number(minimum_recognition_confidence)
             or not 0 <= minimum_recognition_confidence <= 1
         ):
             raise ValueError("minimum_recognition_confidence must be finite and between 0 and 1")
@@ -101,6 +101,7 @@ class BargeInDetector:
         self._active_samples = 0
         self._detected = False
         self._recognition_segment_id: int | None = None
+        self._recognition_capture_id: int | None = None
         self._recognition_started_at: float | None = None
         self._recognition_peak_energy: float | None = None
         self._recognition_partial_count = 0
@@ -200,6 +201,10 @@ class BargeInDetector:
 
         raw_segment_id = getattr(result, "segment_id", None)
         segment_id = raw_segment_id if isinstance(raw_segment_id, int) else None
+        capture_id = getattr(result, "capture_id", None)
+        if (capture_id is not None and self._recognition_capture_id is not None
+                and capture_id != self._recognition_capture_id):
+            self._clear_recognition_candidate()
         same_pending_segment = self._recognition_partial_count > 0 and (
             segment_id is None
             or self._recognition_segment_id is None
@@ -286,6 +291,7 @@ class BargeInDetector:
             and segment_id != self._recognition_segment_id
         ):
             self._recognition_segment_id = segment_id
+            self._recognition_capture_id = capture_id
             self._recognition_started_at = observation_time
             self._recognition_peak_energy = candidate_energy
             self._recognition_partial_count = 1
@@ -310,10 +316,15 @@ class BargeInDetector:
 
     def _clear_recognition_candidate(self) -> None:
         self._recognition_segment_id = None
+        self._recognition_capture_id = None
         self._recognition_started_at = None
         self._recognition_peak_energy = None
         self._recognition_partial_count = 0
         self._recognition_text = ""
+
+    @staticmethod
+    def _finite_number(value: object) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
     @staticmethod
     def _optional_probability(value: object, name: str) -> float | None:

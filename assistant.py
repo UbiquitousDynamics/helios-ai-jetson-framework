@@ -20,6 +20,7 @@ import config
 from api.api_client import APIClient, APIClientError
 from api.conversation import safe_conversation_identifier
 from api.conversation_control import ConversationFloorState
+from api.control_intents import ControlIntent, parse_control
 from api.metrics import record_safely
 from api.realtime_conversation import (
     RealtimeBusyError, RealtimeConversationController, SpeechStopSignal, observed_speech_call,
@@ -31,7 +32,9 @@ from api.transcripts import (
     TranscriptCapacityError,
     authoritative_text,
 )
-from audio.backchannel import BackchannelSession
+from audio.backchannel import (
+    BACKCHANNEL_STOP_TIMEOUT_SECONDS, BackchannelMode, BackchannelSession, suppress_backchannel_for,
+)
 from audio.sound_player import SoundPlaybackError, SoundPlayer
 from audio.speech_pipeline import SpeechPipelineShutdownTimeout
 from audio.tts import PiperTTS, SoundDeviceBackend, TTSError
@@ -46,7 +49,6 @@ from recognizer.speech_recognizer import (
 logger = logging.getLogger(__name__)
 
 _BARGE_IN_LISTEN_SLICE_SECONDS = 0.25
-_BARGE_IN_CANDIDATE_INACTIVITY_SECONDS = 1.5
 _TTS_ECHO_TAIL_SECONDS = 0.25
 _TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 # Minimum gap between spoken failure notices, so a provider outage does not
@@ -55,19 +57,6 @@ _FAILURE_NOTICE_MIN_INTERVAL = 15.0
 _RESPONSE_CANCEL_TIMEOUT_SECONDS = 2.5
 _EXPLICIT_SHORT_INTERRUPT_ENERGY = 0.12
 _EXPLICIT_SHORT_INTERRUPT_CONFIDENCE = 0.65
-_EXPLICIT_SHORT_INTERRUPT_COMMANDS = frozenset(
-    {
-        "basta",
-        "cancella",
-        "fermati",
-        "interrompi",
-        "silenzio",
-        "stop",
-        "cancel",
-        "enough",
-        "pause",
-    }
-)
 
 
 class _BargeInCaptureStop:
@@ -79,14 +68,19 @@ class _BargeInCaptureStop:
         clock: Callable[[], float],
         follow_up_timeout_seconds: float,
         response_deadline: float | None = None,
+        candidate_inactivity_seconds: float = 1.5,
+        candidate_maximum_seconds: float = 3.0,
     ) -> None:
         self._clock = clock
         self._follow_up_timeout_seconds = follow_up_timeout_seconds
         self._response_deadline = response_deadline
+        self._candidate_inactivity_seconds = candidate_inactivity_seconds
+        self._candidate_maximum_seconds = candidate_maximum_seconds
         self._lock = threading.Lock()
         self._response_finished = False
         self._detected_at: float | None = None
         self._candidate_activity_at: float | None = None
+        self._candidate_started_at: float | None = None
         self._candidate_timeout_expired = False
         self._forced = False
         self._finished = threading.Event()
@@ -112,6 +106,8 @@ class _BargeInCaptureStop:
 
         with self._lock:
             self._candidate_activity_at = self._clock() if observed_at is None else observed_at
+            if self._candidate_started_at is None:
+                self._candidate_started_at = self._candidate_activity_at
             self._candidate_timeout_expired = False
 
     def candidate_finished(self) -> None:
@@ -119,6 +115,21 @@ class _BargeInCaptureStop:
 
         with self._lock:
             self._candidate_activity_at = None
+            self._candidate_started_at = None
+            self._candidate_timeout_expired = False
+
+    def candidate_expired(self, observed_at: float) -> bool:
+        """Bound duck duration even when partial hypotheses keep changing."""
+
+        with self._lock:
+            if self._candidate_activity_at is None or self._candidate_started_at is None:
+                return False
+            expired = (
+                observed_at - self._candidate_activity_at >= self._candidate_inactivity_seconds
+                or observed_at - self._candidate_started_at >= self._candidate_maximum_seconds
+            )
+            self._candidate_timeout_expired |= expired
+            return self._candidate_timeout_expired
 
     def consume_candidate_timeout(self) -> bool:
         """Consume a provisional timeout so capture can restart cleanly."""
@@ -128,6 +139,7 @@ class _BargeInCaptureStop:
             self._candidate_timeout_expired = False
             if expired:
                 self._candidate_activity_at = None
+                self._candidate_started_at = None
             return expired
 
     def force_stop(self) -> None:
@@ -151,11 +163,8 @@ class _BargeInCaptureStop:
         if detected_at is None:
             candidate_expired = bool(
                 candidate_activity_at is not None
-                and self._clock() - candidate_activity_at >= _BARGE_IN_CANDIDATE_INACTIVITY_SECONDS
+                and self.candidate_expired(self._clock())
             )
-            if candidate_expired:
-                with self._lock:
-                    self._candidate_timeout_expired = True
             return candidate_expired or (response_finished and candidate_activity_at is None)
         return self._clock() - detected_at >= self._follow_up_timeout_seconds
 
@@ -229,6 +238,7 @@ class VoiceAssistant:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         metrics: Any | None = None,
+        task_delegator: Any | None = None,
     ) -> None:
         self.settings = settings
         self.profile = settings.profile
@@ -266,17 +276,27 @@ class VoiceAssistant:
                 llm_settings=settings.llm,
                 kpi_settings=settings.kpi,
                 metrics=metrics,
+                spoken_response_style=True,
             )
         else:
             self.api_client = api_client
             if isinstance(api_client, APIClient) and api_client.configured_tts is None:
                 api_client.tts = self.tts
         self.metrics = metrics if metrics is not None else getattr(self.api_client, "metrics", None)
+        self.task_delegator = task_delegator
+        self._active_delegated_task_id: str | None = None
         self.realtime = RealtimeConversationController(
             endpointing=settings.endpointing, activity_energy=settings.barge_in_event_energy,
             clock=clock,
         )
         self._transcript_revisions = self.realtime.transcripts
+        for component in (self.tts, self.api_client):
+            setter = getattr(component, "set_output_control", None)
+            if callable(setter):
+                setter(self.realtime.speech_output)
+        self._session_requires_activation = False
+        self._backchannel_mode = BackchannelMode.NORMAL
+        self.last_control_result: tuple[ControlIntent, bool] | None = None
         self._run_once_lock = threading.Lock()
         self.speech_recognizer = (
             speech_recognizer
@@ -284,6 +304,10 @@ class VoiceAssistant:
             else SpeechRecognizer(
                 self.profile.vosk_model,
                 input_device=settings.audio_input_device,
+                input_device_strict=settings.audio_input_strict,
+                channel_mode=settings.audio_input_channel_mode,
+                sanity_rms_threshold=settings.barge_in_minimum_interrupt_energy * 0.1,
+                capture_stall_seconds=settings.audio_capture_stall_seconds,
             )
         )
         if barge_in_detector is not None:
@@ -291,9 +315,15 @@ class VoiceAssistant:
         elif settings.barge_in_enabled:
             self._barge_in_detector = BargeInDetector(
                 recognition_event_energy=settings.barge_in_event_energy,
+                minimum_active_seconds=settings.barge_in_minimum_active_seconds,
+                minimum_partial_words=settings.barge_in_minimum_partial_words,
+                minimum_recognition_confidence=settings.barge_in_minimum_recognition_confidence,
                 suppression_policy=ConservativeEchoSuppressionPolicy(
                     expected_echo_energy=settings.barge_in_expected_echo_energy,
                     minimum_interrupt_energy=(settings.barge_in_minimum_interrupt_energy),
+                    echo_energy_ratio=settings.barge_in_echo_energy_ratio,
+                    startup_window_seconds=settings.barge_in_startup_window_seconds,
+                    startup_energy_multiplier=settings.barge_in_startup_energy_multiplier,
                 ),
             )
         else:
@@ -335,6 +365,8 @@ class VoiceAssistant:
         self._sleep = sleep
         self._clock = clock
         self._voice_conversation_lock = threading.Lock()
+        self._session_reset_lock = threading.RLock()
+        self._pending_history_reset: str | None = None
         self._voice_conversation_active = False
         self._voice_conversation_last_activity_at: float | None = None
         self.state = AssistantState.COMMAND
@@ -395,15 +427,20 @@ class VoiceAssistant:
             )
 
     def _activate_voice_conversation(self) -> None:
+        self._ensure_history_reset()
+        self._session_requires_activation = False
+        self.realtime.resume_session()
+        if self.realtime.snapshot().response_id is None:
+            self.realtime.speech_output.begin_response()
         with self._voice_conversation_lock:
             self._voice_conversation_active = True
             self._voice_conversation_last_activity_at = self._clock()
         logger.info("event=voice_conversation_activated")
 
-    def _touch_voice_conversation(self) -> None:
+    def _touch_voice_conversation(self, observed_at: float | None = None) -> None:
         with self._voice_conversation_lock:
             if self._voice_conversation_active:
-                self._voice_conversation_last_activity_at = self._clock()
+                self._voice_conversation_last_activity_at = self._clock() if observed_at is None else observed_at
 
     def _deactivate_voice_conversation(self) -> None:
         with self._voice_conversation_lock:
@@ -416,25 +453,74 @@ class VoiceAssistant:
         with self._voice_conversation_lock:
             if not self._voice_conversation_active:
                 return False
+            if self.realtime.snapshot().response_id is not None:
+                return True
             last_activity = self._voice_conversation_last_activity_at
             if (
                 last_activity is not None
-                and self._clock() - last_activity >= self.settings.llm.context_idle_timeout_seconds
+                and self._clock() - last_activity >= self.settings.activation_timeout_seconds
             ):
                 self._voice_conversation_active = False
                 self._voice_conversation_last_activity_at = None
                 expired = True
         if expired:
-            self._transition_voice_conversation(VoiceConversationState.IDLE)
-            reset = getattr(self.api_client, "reset_conversation", None)
-            if callable(reset):
-                try:
-                    reset(reason="voice_idle_timeout")
-                except Exception:
-                    logger.warning("Unable to reset an expired conversation", exc_info=True)
+            self._session_requires_activation = True
+            self.state = AssistantState.COMMAND
+            self.realtime.end_session()
+            self._request_history_reset("voice_idle_timeout")
             logger.info("event=voice_conversation_expired reason=idle_timeout")
             return False
         return True
+
+    def _request_history_reset(self, reason: str) -> bool:
+        with self._session_reset_lock:
+            self._pending_history_reset = self._pending_history_reset or reason
+            return self._flush_history_reset()
+
+    def _flush_history_reset(self) -> bool:
+        """Apply one deferred reset only after response/history ownership ends."""
+        with self._session_reset_lock:
+            reason = self._pending_history_reset
+            if reason is None:
+                return True
+            if self.realtime.snapshot().response_id is not None:
+                return False
+            reset = getattr(self.api_client, "try_reset_conversation", None)
+            nonblocking = callable(reset)
+            if not nonblocking:
+                reset = getattr(self.api_client, "reset_conversation", None)
+            try:
+                if callable(reset):
+                    result = reset(reason=reason)
+                    if nonblocking and result is None:
+                        return False
+                elif getattr(self.api_client, "conversation", None) is not None:
+                    return False
+                # A legacy injected API without canonical state needs only the
+                # local reset. Never silently ignore a known history owner.
+            except Exception:
+                logger.warning("event=conversation_reset_deferred reason=reset_failed")
+                return False
+            self._pending_history_reset = None
+            return True
+
+    def _ensure_history_reset(self) -> None:
+        if not self._flush_history_reset():
+            raise AssistantRuntimeError("conversation reset is pending; new requests are blocked")
+
+    def _finish_response(self, response_id: int, *, failed: bool = False) -> None:
+        self.realtime.finish_response(response_id, failed=failed)
+        self._flush_history_reset()
+
+    def reset_conversation(self) -> bool:
+        """End activation and clear history, or defer until active work unwinds."""
+        self.realtime.speech_output.stop_speaking()
+        self._discard_current_speech()
+        self._deactivate_voice_conversation()
+        self._session_requires_activation = True
+        self.state = AssistantState.COMMAND
+        self.realtime.end_session()
+        return self._request_history_reset("voice_session_ended")
 
     def _discard_task(self, future: Future[Any]) -> None:
         with self._task_lock:
@@ -473,6 +559,8 @@ class VoiceAssistant:
             return self._track_task(future, owned=owned)
 
     def _speak_observed(self, text: str, *, scope: str, response_id: int | None = None, cancellation: CancellationController | None = None) -> Any:
+        if self.realtime.speech_output.is_set():
+            return None
         started_at = self._clock()
         try:
             speak_with_timing = getattr(self.tts, "speak_with_timing", None)
@@ -573,6 +661,90 @@ class VoiceAssistant:
     def _contains_rag_word(self, command: str) -> bool:
         return self._contains_phrase(command, self.profile.rag_word)
 
+    def _parse_control(self, command: str) -> ControlIntent | None:
+        return parse_control(command, language=self.profile.code, wake_words=self.profile.wake_word_aliases)
+
+    def _discard_current_speech(self) -> None:
+        with self._backchannel_lock:
+            backchannel = self._last_backchannel_session
+        if backchannel is not None:
+            backchannel.supersede(timeout=0)
+        discard = getattr(self.api_client, "discard_speech", None)
+        if callable(discard):
+            try:
+                discard()
+                return
+            except Exception:
+                logger.warning("event=local_speech_discard_failed")
+        interrupt = getattr(self.tts, "interrupt", None)
+        if callable(interrupt):
+            try:
+                interrupt()
+            except Exception:
+                logger.warning("event=local_speech_interrupt_failed")
+
+    def _handle_local_control(self, command: str) -> bool:
+        intent = self._parse_control(command)
+        if intent is None:
+            return False
+        applied = True
+        if intent is ControlIntent.UNMUTE:
+            self.realtime.speech_output.set_muted(False)
+        elif intent is ControlIntent.RESUME_SESSION:
+            applied = self.realtime.snapshot().floor.state is ConversationFloorState.SUSPENDED
+            if applied:
+                self._activate_voice_conversation()
+        elif intent is ControlIntent.CANCEL_TASK:
+            applied = False
+            if self.task_delegator is not None and self._active_delegated_task_id is not None:
+                try:
+                    self.task_delegator.cancel(self._active_delegated_task_id)
+                    applied = True
+                except ValueError:
+                    pass
+        else:
+            if intent is ControlIntent.MUTE:
+                self.realtime.speech_output.set_muted(True)
+            else:
+                self.realtime.speech_output.stop_speaking()
+            self._discard_current_speech()
+            if intent in {ControlIntent.SUSPEND_SESSION, ControlIntent.END_SESSION}:
+                self._deactivate_voice_conversation()
+                self.state = AssistantState.COMMAND
+                if intent is ControlIntent.SUSPEND_SESSION:
+                    self.realtime.suspend_session()
+                else:
+                    self._session_requires_activation = True
+                    self.realtime.end_session()
+                    self._request_history_reset("voice_session_ended")
+        self.last_control_result = (intent, applied)
+        logger.info("event=local_control intent=%s applied=%s", intent.value, applied)
+        return True
+
+    def delegate_task(self, work: Callable[..., Any], *,
+                      requires_confirmation: bool = False) -> Any:
+        """Start explicitly injected fake work without blocking the voice loop."""
+
+        if self.task_delegator is None:
+            raise RuntimeError("task delegation is not configured")
+        task = self.task_delegator.delegate(work, requires_confirmation=requires_confirmation)
+        self._active_delegated_task_id = task.task_id
+        return task
+
+    def confirm_task(self, task_id: str, allowed: bool, work: Callable[..., Any]) -> Any:
+        if self.task_delegator is None:
+            raise RuntimeError("task delegation is not configured")
+        return self.task_delegator.confirm(task_id, allowed, work)
+
+    def steer_task(self, task_id: str, work: Callable[..., Any]) -> Any:
+        """Replace explicit active work; retain a causal parent link."""
+
+        if self.task_delegator is None:
+            raise RuntimeError("task delegation is not configured")
+        replacement = self.task_delegator.supersede(task_id, work)
+        self._active_delegated_task_id = replacement.task_id
+        return replacement
+
     def process_command(
         self,
         command: str,
@@ -591,28 +763,42 @@ class VoiceAssistant:
         """
 
         command = authoritative_text(command)
-        if not command:
+        if self._handle_local_control(command):
+            return None
+        if self.realtime.snapshot().floor.state is ConversationFloorState.SUSPENDED:
+            return None
+        if not command.strip():
             logger.warning("No command to process")
             return None
-        if not self.contains_wake_word(command):
+        has_wake_word = self.contains_wake_word(command)
+        conversation_active = self._voice_conversation_is_active()
+        if not has_wake_word and not conversation_active:
             logger.info("Ignoring command without a configured wake word")
             return None
 
-        model_prompt = self._without_wake_word(command)
+        if has_wake_word:
+            self._activate_voice_conversation()
+        else:
+            self._touch_voice_conversation()
+
+        model_prompt = self._without_wake_word(command) if has_wake_word else command.strip()
         if not model_prompt:
-            logger.info("Ignoring wake word without a command")
+            self._acknowledge_wake_only()
             return None
 
         if self.settings.barge_in_enabled and callable(getattr(self.speech_recognizer, "listen_events", None)):
-            return self._process_command_with_barge_in(
+            result = self._process_command_with_barge_in(
                 model_prompt, pipeline_started_at=pipeline_started_at if pipeline_started_at is not None else self._clock(),
                 cancellation=cancellation,
             )
-        return self._process_model_prompt(
-            model_prompt,
-            pipeline_started_at=pipeline_started_at,
-            cancellation=cancellation,
-        )
+        else:
+            result = self._process_model_prompt(
+                model_prompt,
+                pipeline_started_at=pipeline_started_at,
+                cancellation=cancellation,
+            )
+        self._touch_voice_conversation()
+        return result
 
     def _process_model_prompt(
         self, model_prompt: str, *, pipeline_started_at: float | None = None,
@@ -620,9 +806,17 @@ class VoiceAssistant:
         _response_id: int | None = None,
     ) -> str | None:
         model_prompt = authoritative_text(model_prompt)
+        if self._handle_local_control(model_prompt):
+            if _response_id is not None:
+                self._finish_response(_response_id)
+            return None
+        if _response_id is None:
+            self._ensure_history_reset()
         response_id = _response_id if _response_id is not None else self.realtime.begin_response()
         failed = True
         try:
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
             result = self._process_model_prompt_body(
                 model_prompt, pipeline_started_at=pipeline_started_at, cancellation=cancellation,
                 use_backchannel=use_backchannel, response_id=response_id,
@@ -630,7 +824,7 @@ class VoiceAssistant:
             failed = False
             return result
         finally:
-            self.realtime.finish_response(response_id, failed=failed)
+            self._finish_response(response_id, failed=failed)
 
     def _process_model_prompt_body(
         self,
@@ -710,7 +904,28 @@ class VoiceAssistant:
             self._backchannel_index += 1
             return phrase
 
-    def _start_backchannel(self) -> BackchannelSession:
+    def set_backchannel_mode(self, mode: BackchannelMode) -> None:
+        """Let a local dictation/confirmation flow suppress optional filler cues."""
+        if not isinstance(mode, BackchannelMode):
+            raise TypeError("backchannel mode must be typed")
+        with self._backchannel_lock:
+            self._backchannel_mode = mode
+            session = self._last_backchannel_session
+        if mode is not BackchannelMode.NORMAL and session is not None:
+            session.supersede(timeout=0)
+
+    def _backchannel_allowed(self, response_id: int | None) -> bool:
+        snapshot = self.realtime.snapshot()
+        with self._backchannel_lock:
+            normal = self._backchannel_mode is BackchannelMode.NORMAL
+        return (normal and not self.realtime.speech_output.is_set()
+                and not self.realtime.transcripts.snapshot().pending
+                and not snapshot.stopped and snapshot.response_id == response_id
+                and response_id is not None and snapshot.floor.state is ConversationFloorState.THINKING)
+
+    def _start_backchannel(
+        self, *, response_id: int | None = None, cancellation: CancellationController | None = None,
+    ) -> BackchannelSession:
         with self._close_lock:
             if self._closed:
                 raise AssistantRuntimeError("Voice assistant is closed")
@@ -719,6 +934,8 @@ class VoiceAssistant:
                 phrase=self._next_backchannel_phrase(),
                 delay_seconds=self.settings.backchannel_delay_seconds,
                 executor=self._conversation_executor,
+                allowed=lambda: self._backchannel_allowed(response_id),
+                cancellation=cancellation,
             )
             self._track_task(
                 session.future,
@@ -751,21 +968,27 @@ class VoiceAssistant:
             kwargs["on_lifecycle"] = self.realtime.observer(response_id)
 
         backchannel: BackchannelSession | None = None
-        if use_backchannel and self.settings.barge_in_enabled and self._accepts_keyword(
+        if (use_backchannel and self._backchannel_allowed(response_id)
+                and not suppress_backchannel_for(prompt, language=self.profile.code)
+                and self.settings.barge_in_enabled and self._accepts_keyword(
             method,
             "before_first_speech",
-        ):
+        )):
             try:
-                backchannel = self._start_backchannel()
+                backchannel = self._start_backchannel(response_id=response_id, cancellation=cancellation)
             except AssistantRuntimeError:
                 logger.debug("No safe preloaded backchannel is currently available")
             else:
-                kwargs["before_first_speech"] = backchannel.supersede
+                kwargs["before_first_speech"] = backchannel.before_first_speech
         try:
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
             return method(prompt, **kwargs)
         finally:
             if backchannel is not None:
-                backchannel.supersede()
+                if not backchannel.supersede(timeout=BACKCHANNEL_STOP_TIMEOUT_SECONDS):
+                    self.stop()
+                    raise AssistantRuntimeError("backchannel playback did not stop")
 
     @staticmethod
     def _rag_result_text(result: Any) -> str:
@@ -793,6 +1016,14 @@ class VoiceAssistant:
 
     def process_rag_command(self, command: str, searcher: Any | None = None) -> str:
         command = authoritative_text(command)
+        if self._handle_local_control(command):
+            return ""
+        if self.realtime.snapshot().floor.state is ConversationFloorState.SUSPENDED:
+            return ""
+        if self._session_requires_activation:
+            if not self.contains_wake_word(command):
+                return ""
+            self._activate_voice_conversation()
         if self.settings.barge_in_enabled and callable(getattr(self.speech_recognizer, "listen_events", None)):
             return self._process_command_with_barge_in(
                 "", pipeline_started_at=self._clock(), suppress_backchannel=True,
@@ -806,6 +1037,8 @@ class VoiceAssistant:
         self, command: str, searcher: Any | None = None, *,
         cancellation: CancellationController | None = None, _response_id: int | None = None,
     ) -> str:
+        if _response_id is None:
+            self._ensure_history_reset()
         response_id = _response_id if _response_id is not None else self.realtime.begin_response()
         failed = True
         try:
@@ -813,7 +1046,7 @@ class VoiceAssistant:
             failed = False
             return result
         finally:
-            self.realtime.finish_response(response_id, failed=failed)
+            self._finish_response(response_id, failed=failed)
 
     def _process_rag_command_body(
         self, command: str, searcher: Any | None = None, *, response_id: int,
@@ -950,6 +1183,8 @@ class VoiceAssistant:
         provider outage cannot turn every loop iteration into an announcement.
         """
 
+        if self.realtime.speech_output.is_set():
+            return
         message = getattr(self.profile, "model_error_message", "")
         if not message:
             return
@@ -1013,7 +1248,9 @@ class VoiceAssistant:
     def _acknowledge(self, *, event: str, scope: str) -> bool:
         """Play a short local acknowledgement and report whether it succeeded."""
 
-        phrase = self.profile.backchannel_phrases[0]
+        if self.realtime.speech_output.is_set():
+            return False
+        phrase = self.profile.wake_acknowledgement
         try:
             speak_preloaded = getattr(self.tts, "speak_preloaded", None)
             if callable(speak_preloaded) and speak_preloaded(phrase):
@@ -1034,25 +1271,14 @@ class VoiceAssistant:
         return self._acknowledge(event="wake_only_acknowledged", scope="wake_activation")
 
     def _acknowledge_command_start(self) -> bool:
-        """Give immediate local feedback before a potentially cold model turn."""
-
-        phrase = self.profile.backchannel_phrases[0]
-        speak_preloaded = getattr(self.tts, "speak_preloaded", None)
-        if not callable(speak_preloaded):
-            return False
-        try:
-            if speak_preloaded(phrase):
-                logger.info("event=command_start_acknowledged source=preloaded_tts")
-                return True
-        except Exception:
-            # The immediate cue is optional. The normal model/backchannel path
-            # must remain available if the cached playback backend fails.
-            logger.warning("Unable to play command-start acknowledgement", exc_info=True)
+        """Command cues use the delayed, scoped model path; wake-only is separate."""
         return False
 
     def _speak_preloaded_observed(self, text: str, *, scope: str) -> bool:
         """Play a cached phrase and record its startup latency when possible."""
 
+        if self.realtime.speech_output.is_set():
+            return False
         speak_preloaded = getattr(self.tts, "speak_preloaded", None)
         if not callable(speak_preloaded):
             return False
@@ -1111,6 +1337,7 @@ class VoiceAssistant:
                 for phrase in (
                     welcome,
                     *self.profile.backchannel_phrases,
+                    self.profile.wake_acknowledgement,
                     getattr(self.profile, "model_error_message", ""),
                 )
                 if str(phrase).strip()
@@ -1374,7 +1601,13 @@ class VoiceAssistant:
         self, result: RecognitionResult
     ) -> ProvisionalRevision | AuthoritativeUtterance | None:
         try:
-            return self.realtime.observe(result)
+            value = self.realtime.observe(result)
+            if isinstance(value, ProvisionalRevision):
+                with self._backchannel_lock:
+                    session = self._last_backchannel_session
+                if session is not None:
+                    session.supersede(timeout=0)
+            return value
         except TranscriptCapacityError:
             raise SpeechRecognitionError("transcript revision exceeds the character limit") from None
 
@@ -1390,6 +1623,8 @@ class VoiceAssistant:
         cancellation: CancellationController | None = None,
     ) -> None:
         self.realtime.interruption()
+        record_safely(self.metrics, "voice_response_interrupted", outcome="cancelled",
+                      success=False, interruption_count=1)
         session_id, turn_number = self._conversation_coordinates()
         logger.info(
             "conversation_session=%s turn=%s event=response_cancel_requested",
@@ -1641,8 +1876,7 @@ class VoiceAssistant:
             and result.segment_id != pending_segment_id
         )
 
-    @staticmethod
-    def _is_confirmed_explicit_interrupt(result: RecognitionResult) -> bool:
+    def _is_confirmed_explicit_interrupt(self, result: RecognitionResult) -> bool:
         if not result.is_final:
             return False
         peak_energy = (
@@ -1651,7 +1885,7 @@ class VoiceAssistant:
             else result.frame_energy
         )
         return bool(
-            VoiceAssistant._normalized_echo_text(result.text) in _EXPLICIT_SHORT_INTERRUPT_COMMANDS
+            self._parse_control(result.text) is not None
             and peak_energy is not None
             and peak_energy >= _EXPLICIT_SHORT_INTERRUPT_ENERGY
             and result.confidence is not None
@@ -1747,6 +1981,8 @@ class VoiceAssistant:
             clock=self._clock,
             follow_up_timeout_seconds=self.settings.listen_timeout,
             response_deadline=response_deadline,
+            candidate_inactivity_seconds=self.settings.barge_in_candidate_inactivity_seconds,
+            candidate_maximum_seconds=self.settings.barge_in_candidate_maximum_seconds,
         )
         with self._capture_lock:
             self._active_capture_stop = capture_stop
@@ -1811,6 +2047,8 @@ class VoiceAssistant:
     ) -> str | None:
         playback_started_at: float | None = None
         echo_references: list[str] = []
+        echo_segment: tuple[int | None, int | None] | None = None
+        expired_segment: tuple[int | None, int | None] | None = None
         detector_playback_epoch: float | None = None
         # If capture starts while the model is still generating, Vosk can open
         # an ambient segment before playback and keep revising that same segment
@@ -1826,6 +2064,9 @@ class VoiceAssistant:
             continuous = True
             events: Any = None
             restart_capture = False
+            echo_references.clear()
+            echo_segment = None
+            expired_segment = None
             try:
                 try:
                     events = listen_events(timeout=None, stop_event=capture_stop)
@@ -1862,6 +2103,31 @@ class VoiceAssistant:
                         )
                         return None
                     now = self._clock()
+                    segment = (result.capture_id, result.segment_id)
+                    if expired_segment == segment:
+                        if result.is_final:
+                            expired_segment = None
+                        continue
+                    if echo_segment is not None and segment != echo_segment:
+                        echo_references.clear()
+                        discard = getattr(detector, "discard_recognition_candidate", None)
+                        if callable(discard):
+                            discard()
+                        capture_stop.candidate_finished()
+                        self._resume_tts_after_barge_in_candidate()
+                    echo_segment = segment
+                    if capture_stop.candidate_expired(now):
+                        record_safely(self.metrics, "barge_in_candidate_rejected",
+                                      outcome="expired", success=False, count=1)
+                        expired_segment = None if result.is_final else segment
+                        capture_stop.consume_candidate_timeout()
+                        discard = getattr(detector, "discard_recognition_candidate", None)
+                        if callable(discard):
+                            discard()
+                        self._resume_tts_after_barge_in_candidate()
+                        if capture_lease is not None and capture_lease.reset_supported:
+                            capture_lease.decoder_reset.set()
+                        continue
                     actual_started_at = self._tts_echo_epoch_start(now)
                     if actual_started_at is not None and not playback_has_started:
                         playback_has_started = True
@@ -1909,17 +2175,25 @@ class VoiceAssistant:
                     for reference in self._current_tts_echo_references(now):
                         if reference not in echo_references:
                             echo_references.append(reference)
+                    # A segment may span fragments, but cannot retain an
+                    # unbounded response history for echo matching.
+                    del echo_references[:-8]
 
                     residual, removed_echo_indices = self._remove_current_tts_echo(
                         result.text,
                         now,
                         references=tuple(echo_references),
                     )
+                    if result.is_final:
+                        echo_references.clear()
+                        echo_segment = None
                     echo_word_count = len(removed_echo_indices)
                     if removed_echo_indices and not residual:
                         discard_candidate = getattr(detector, "discard_recognition_candidate", None)
                         if callable(discard_candidate):
                             discard_candidate()
+                        capture_stop.candidate_finished()
+                        self._resume_tts_after_barge_in_candidate()
                         logger.info("event=barge_in_candidate_suppressed reason=tts_text_match")
                         continue
                     if removed_echo_indices:
@@ -2197,7 +2471,25 @@ class VoiceAssistant:
                         capture_stop.candidate_finished()
                         self._resume_tts_after_barge_in_candidate()
                         continue
+                    if self._handle_local_control(authoritative_text(utterance)):
+                        capture_stop.candidate_finished()
+                        detector.reset()
+                        self._resume_tts_after_barge_in_candidate()
+                        continue
+                    if self.realtime.snapshot().floor.state is ConversationFloorState.SUSPENDED:
+                        capture_stop.candidate_finished()
+                        detector.reset()
+                        self._resume_tts_after_barge_in_candidate()
+                        continue
+                    if self._session_requires_activation:
+                        if not self.contains_wake_word(result.text):
+                            capture_stop.candidate_finished()
+                            detector.reset()
+                            self._resume_tts_after_barge_in_candidate()
+                            continue
+                        self._activate_voice_conversation()
                     phase = "playback" if playback_started_at is not None else "pre_playback"
+                    self._touch_voice_conversation(now)
                     capture_stop.candidate_finished()
                     session_id, turn_number = self._conversation_coordinates()
                     logger.info(
@@ -2239,9 +2531,13 @@ class VoiceAssistant:
                 continue
             if continuous:
                 if capture_lease is not None and capture_lease.endpoint_ended and not capture_stop.is_set():
+                    record_safely(self.metrics, "voice_endpoint_reached",
+                                  outcome="finalized", success=True)
                     if not response_future.done() and not self._stop_requested and not self._closed:
                         continue
                 if capture_stop.consume_candidate_timeout():
+                    record_safely(self.metrics, "barge_in_candidate_rejected",
+                                  outcome="expired", success=False, count=1)
                     discard_candidate = getattr(
                         detector,
                         "discard_recognition_candidate",
@@ -2281,6 +2577,7 @@ class VoiceAssistant:
     ) -> str | None:
         cancellation = cancellation or CancellationController()
         response_deadline = time.monotonic() + self.settings.llm.timeouts.total_seconds + 30.0
+        self._ensure_history_reset()
         response_id = self.realtime.begin_response()
 
         def execute_initial() -> str | None:
@@ -2299,7 +2596,7 @@ class VoiceAssistant:
         try:
             response_future = self._submit_task(self._conversation_executor, execute_initial)
         except BaseException:
-            self.realtime.finish_response(response_id, failed=True)
+            self._finish_response(response_id, failed=True)
             self._set_active_response_cancellation(None)
             raise
         while True:
@@ -2376,11 +2673,7 @@ class VoiceAssistant:
                 model_prompt = self._without_wake_word(model_prompt)
             if not model_prompt:
                 return None
-            if self._normalized_echo_text(model_prompt) in _EXPLICIT_SHORT_INTERRUPT_COMMANDS:
-                # An explicit stop is control input, not a new conversational
-                # request. The interrupted turn marker is committed by the API
-                # cancellation path; return to listening without asking a model
-                # to answer "stop".
+            if self._handle_local_control(model_prompt):
                 self._transition_voice_conversation(VoiceConversationState.LISTENING)
                 return None
             if self._stop_requested or self._closed:
@@ -2390,6 +2683,7 @@ class VoiceAssistant:
             follow_up_started_at = self._clock()
             cancellation = CancellationController()
             response_deadline = time.monotonic() + self.settings.llm.timeouts.total_seconds + 30.0
+            self._ensure_history_reset()
             response_id = self.realtime.begin_response()
 
             def execute_follow_up(prompt: str = model_prompt) -> str | None:
@@ -2405,7 +2699,7 @@ class VoiceAssistant:
             try:
                 response_future = self._submit_task(self._conversation_executor, execute_follow_up)
             except BaseException:
-                self.realtime.finish_response(response_id, failed=True)
+                self._finish_response(response_id, failed=True)
                 self._set_active_response_cancellation(None)
                 raise
 
@@ -2433,7 +2727,9 @@ class VoiceAssistant:
 
         if self._stop_requested or self._closed:
             return False
+        self._voice_conversation_is_active()
         result = self._recognize_once()
+        self._voice_conversation_is_active()
         if result is None or self._stop_requested or self._closed:
             return False
         utterance = self._observe_transcript(result)
@@ -2441,6 +2737,12 @@ class VoiceAssistant:
             self._transcript_revisions.clear_pending()
             return False
         command = authoritative_text(utterance)
+        if self._handle_local_control(command):
+            return True
+        if self.realtime.snapshot().floor.state is ConversationFloorState.SUSPENDED:
+            return False
+        if self._session_requires_activation and not self.contains_wake_word(command):
+            return False
         finalized_at = self._clock()
         session_id, turn_number = self._conversation_coordinates(next_turn=True)
         logger.info(
@@ -2452,6 +2754,7 @@ class VoiceAssistant:
 
         if self.state is AssistantState.COMMAND:
             if self._contains_rag_word(command):
+                self._activate_voice_conversation()
                 self.play_sound_async(str(self.settings.wake_sound))
                 self.prepare_rag_async()
                 self.state = AssistantState.RAG
@@ -2469,8 +2772,7 @@ class VoiceAssistant:
             has_wake_word = self.contains_wake_word(command)
             conversation_active = self._voice_conversation_is_active()
             is_follow_up = (
-                self.settings.barge_in_enabled
-                and not has_wake_word
+                not has_wake_word
                 and conversation_active
             )
             fresh_wake_activation = has_wake_word and not conversation_active
@@ -2569,7 +2871,9 @@ class VoiceAssistant:
 
         if self.state is AssistantState.RAG:
             try:
+                self._touch_voice_conversation()
                 self.process_rag_command(command)
+                self._touch_voice_conversation()
                 record_safely(
                     self.metrics,
                     "voice_command_completed",

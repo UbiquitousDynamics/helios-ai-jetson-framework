@@ -18,6 +18,7 @@ from api.providers.contracts import (
     ReasoningDelta,
     Role,
     TextDelta,
+    Timeouts,
 )
 from api.providers.ollama import OllamaAdapter
 from api.streaming import CancellationController
@@ -389,6 +390,66 @@ def test_warm_up_uses_non_streaming_empty_user_message() -> None:
             "stream": False,
         }
     ]
+
+
+def test_cold_model_load_is_measured_before_first_token() -> None:
+    class ColdClient(FakeClient):
+        def ps(self) -> dict[str, object]:
+            return {"models": []}
+
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            if kwargs["stream"] is False:
+                return {"done": True}
+            return [{"message": {"content": "Ready"}, "done": True}]
+
+    raw_client = ColdClient()
+    adapter = OllamaAdapter("127.0.0.1:11434", client=raw_client)
+    events = list(adapter.stream(request()))
+
+    assert [call["stream"] for call in raw_client.calls] == [False, True]
+    assert events[0] == TextDelta("Ready")
+    metadata = events[1].metadata
+    assert metadata.cold_load_ms is not None
+    assert metadata.warm_first_token_ms is not None
+    assert metadata.cold_load_ms >= 0
+    assert metadata.warm_first_token_ms >= 0
+
+
+def test_cold_load_timeout_has_distinct_category() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class ColdClient(FakeClient):
+        def ps(self) -> dict[str, object]:
+            return {"models": []}
+
+        def chat(self, **kwargs: object) -> object:
+            if kwargs["stream"] is False:
+                entered.set()
+                release.wait(timeout=2)
+            return {"done": True}
+
+        def close(self) -> None:
+            release.set()
+
+    raw_client = ColdClient()
+    adapter = OllamaAdapter("127.0.0.1:11434", client=raw_client)
+    cold_request = request()
+    cold_request = ChatRequest(
+        model=cold_request.model,
+        messages=cold_request.messages,
+        mode=cold_request.mode,
+        language=cold_request.language,
+        timeouts=Timeouts(connect_seconds=0.01, first_token_seconds=0.01, total_seconds=0.05),
+    )
+
+    with pytest.raises(ProviderError) as captured:
+        list(adapter.stream(cold_request))
+
+    assert entered.is_set()
+    assert captured.value.category is ErrorCategory.COLD_LOAD_TIMEOUT
+    release.set()
 
 
 def test_call_time_transport_error_is_sanitized_and_retryable() -> None:

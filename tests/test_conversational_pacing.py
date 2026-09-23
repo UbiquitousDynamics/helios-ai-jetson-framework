@@ -228,8 +228,8 @@ def test_scoped_cancellation_cannot_miss_pre_playback_setup_race() -> None:
 @pytest.mark.parametrize(
     ("language", "expected_phrases"),
     [
-        ("it", ("Certo.", "Un momento.", "Vediamo.")),
-        ("en", ("Sure.", "One moment.", "Let's see.")),
+        ("it", ("Un momento.", "Vediamo.", "Sto valutando la richiesta.")),
+        ("en", ("One moment.", "Let's see.", "I'm considering that.")),
     ],
 )
 def test_voice_assistant_rotates_active_language_backchannels_before_real_speech(

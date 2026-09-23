@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import threading
+import os
+import time
 from array import array
 
 import pytest
 
-from recognizer.speech_recognizer import RecognitionResult, SpeechRecognizer
+from recognizer.speech_recognizer import (
+    RecognitionResult, SpeechRecognizer, SpeechRecognitionError, downmix_stereo_pcm16,
+)
 from api.realtime_conversation import RealtimeConversationController
 from recognizer.turn_endpoint_detector import EndpointAction, TurnEndpointConfig
 
@@ -42,6 +46,51 @@ class FakeAudio:
 
     def terminate(self) -> None:
         self.terminated = True
+
+
+def test_capture_stall_logs_once_without_reopening_stream(caplog) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingStream(FakeStream):
+        def read(self, _chunk: int, *, exception_on_overflow: bool) -> bytes:
+            entered.set()
+            release.wait(timeout=1)
+            return b"audio"
+
+    class CountingAudio(FakeAudio):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stream = BlockingStream()
+            self.opens = 0
+
+        def open(self, **kwargs: object) -> FakeStream:
+            self.opens += 1
+            return super().open(**kwargs)
+
+    audio = CountingAudio()
+    recognizer = SpeechRecognizer(
+        model=object(), audio_interface=audio, recognizer_factory=FinalRecognizer,
+        capture_stall_seconds=0.02,
+    )
+    finished = threading.Event()
+
+    def consume() -> None:
+        try:
+            next(recognizer.listen_events())
+        finally:
+            finished.set()
+
+    with caplog.at_level("WARNING"):
+        consumer = threading.Thread(target=consume)
+        consumer.start()
+        assert entered.wait(timeout=1)
+        time.sleep(0.08)
+        release.set()
+        assert finished.wait(timeout=1)
+        consumer.join(timeout=1)
+    assert caplog.text.count("event=capture_stall_detected") == 1
+    assert audio.opens == 1
 
 
 class FinalRecognizer:
@@ -303,6 +352,148 @@ def test_configured_microphone_name_is_resolved_without_default_fallback() -> No
 
     assert result is not None
     assert audio.open_kwargs["input_device_index"] == 1
+
+
+@pytest.mark.parametrize("selector,strict,expected", [
+    ("USB PnP Audio Device", False, 1),
+    ("usb pnp", False, 1),
+    ("missing", False, None),
+    (1, False, 1),
+    (7, False, None),
+    (0, False, None),
+])
+def test_capture_device_resolution_and_fallback(selector, strict, expected, caplog):
+    class Devices(FakeAudio):
+        def get_device_count(self):
+            return 3
+
+        def get_device_info_by_index(self, index):
+            return (
+                {"name": "Playback only", "maxInputChannels": 0},
+                {"name": "USB PnP Audio Device", "maxInputChannels": 2},
+                {"name": "pulse", "maxInputChannels": 32},
+            )[index]
+
+    audio = Devices()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
+                                  recognizer_factory=FinalRecognizer,
+                                  input_device=selector, input_device_strict=strict)
+    assert recognizer.listen_once(timeout=1).is_final
+    assert audio.open_kwargs.get("input_device_index") == expected
+    if expected is None:
+        assert "event=capture_device_fallback" in caplog.text
+
+
+@pytest.mark.parametrize("selector", ["missing", 7, 0])
+def test_capture_device_strict_rejects_unavailable_or_noninput(selector):
+    class Devices(FakeAudio):
+        def get_device_count(self):
+            return 1
+
+        def get_device_info_by_index(self, index):
+            return {"name": "output", "maxInputChannels": 0}
+
+    recognizer = SpeechRecognizer(model=object(), audio_interface=Devices(),
+                                  recognizer_factory=FinalRecognizer,
+                                  input_device=selector, input_device_strict=True)
+    with pytest.raises(SpeechRecognitionError, match="Configured microphone device"):
+        recognizer.listen_once(timeout=1)
+
+
+def test_pulse_source_selector_uses_virtual_device_and_restores_environment(monkeypatch):
+    class Devices(FakeAudio):
+        def get_device_count(self):
+            return 1
+
+        def get_device_info_by_index(self, index):
+            return {"name": "pulse", "maxInputChannels": 32}
+
+    monkeypatch.delenv("PULSE_SOURCE", raising=False)
+    audio = Devices()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
+                                  recognizer_factory=FinalRecognizer,
+                                  input_device="pulse:alsa_input.usb-mic.analog-stereo",
+                                  pulse_sources=lambda: ("alsa_input.usb-mic.analog-stereo",))
+    assert recognizer.listen_once(timeout=1).is_final
+    assert audio.open_kwargs["input_device_index"] == 0
+    assert os.environ["PULSE_SOURCE"] == "alsa_input.usb-mic.analog-stereo"
+    recognizer.close()
+    assert "PULSE_SOURCE" not in os.environ
+
+
+def test_missing_pulse_source_strict_fails_before_open(monkeypatch, caplog):
+    monkeypatch.delenv("PULSE_SOURCE", raising=False)
+    audio = FakeAudio()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
+                                  recognizer_factory=FinalRecognizer,
+                                  input_device="pulse:missing", input_device_strict=True,
+                                  pulse_sources=lambda: ("alsa_input.usb-mic.analog-stereo",))
+    with pytest.raises(SpeechRecognitionError, match="PulseAudio source is unavailable"):
+        recognizer.listen_once(timeout=1)
+    assert "requested=missing" in caplog.text
+    assert audio.open_kwargs == {}
+    assert "PULSE_SOURCE" not in os.environ
+
+
+def test_downmix_modes_preserve_stronger_one_channel_signal():
+    import struct
+
+    stereo = struct.pack("<hhhh", 1000, 0, -1000, 0)
+    assert struct.unpack("<hh", downmix_stereo_pcm16(stereo, "average")) == (500, -500)
+    assert struct.unpack("<hh", downmix_stereo_pcm16(stereo, "sum")) == (1000, -1000)
+    assert struct.unpack("<hh", downmix_stereo_pcm16(stereo, "stronger")) == (1000, -1000)
+    with pytest.raises(ValueError):
+        downmix_stereo_pcm16(b"bad", "stronger")
+
+
+def test_stereo_capture_downmixes_before_vosk_and_logs_identity(caplog):
+    import struct
+
+    received = []
+
+    class Stereo(FakeStream):
+        def read(self, frames, **kwargs):
+            return struct.pack("<hh", 1200, 0) * frames
+
+    class Audio(FakeAudio):
+        def get_default_input_device_info(self):
+            return {"index": 9, "name": "pulse", "maxInputChannels": 32,
+                    "defaultSampleRate": 44100}
+
+    class Native(FinalRecognizer):
+        def AcceptWaveform(self, data):
+            received.append(data)
+            return True
+
+    audio = Audio()
+    audio.stream = Stereo()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
+                                  recognizer_factory=Native, channel_mode="stronger")
+    with caplog.at_level("INFO"):
+        assert recognizer.listen_once(timeout=1).is_final
+    assert audio.open_kwargs["channels"] == 2
+    assert struct.unpack("<h", received[0][:2]) == (1200,)
+    assert "event=capture_device_resolved" in caplog.text
+    assert "index=9" in caplog.text
+    assert "downmix=stronger" in caplog.text
+
+
+def test_low_capture_level_warning_uses_only_scalar(caplog):
+    now = [0.0]
+
+    class Silence(FakeStream):
+        def read(self, frames, **kwargs):
+            now[0] += 0.25
+            return b"\0\0" * frames
+
+    audio = FakeAudio()
+    audio.stream = Silence()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
+                                  recognizer_factory=PendingRecognizer,
+                                  clock=lambda: now[0], sanity_rms_threshold=0.006,
+                                  sanity_window_seconds=0.5)
+    list(recognizer.listen_events(timeout=1))
+    assert "event=capture_level_low peak_rms=0.000000" in caplog.text
 
 
 def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
