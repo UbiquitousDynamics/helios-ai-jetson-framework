@@ -107,7 +107,9 @@ near_dir = args.out / "near_espeak_22050"
 far_dir.mkdir(exist_ok=True)
 near_dir.mkdir(exist_ok=True)
 
-from piper.voice import PiperVoice
+# Imported after argument validation so the heavy native Piper runtime is not
+# loaded when the script is invoked with bad arguments.
+from piper.voice import PiperVoice  # noqa: E402
 
 model = args.repo / "audio/models/it_IT-paola-medium.onnx"
 voice = PiperVoice.load(str(model))
