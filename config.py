@@ -1759,6 +1759,7 @@ class Settings:
     activation_timeout_seconds: float = 30.0
     audio_input_strict: bool = False
     audio_input_channel_mode: str = "mono"
+    audio_capture_level_min_rms: float = 0.001
     audio_capture_stall_seconds: float = 5.0
 
     def __post_init__(self) -> None:
@@ -1821,6 +1822,11 @@ class Settings:
             raise ConfigurationError("audio_input_strict must be a boolean")
         if self.audio_input_channel_mode not in {"mono", "average", "sum", "stronger"}:
             raise ConfigurationError("audio_input_channel_mode must be mono, average, sum, or stronger")
+        if (isinstance(self.audio_capture_level_min_rms, bool)
+                or not isinstance(self.audio_capture_level_min_rms, (int, float))
+                or not math.isfinite(self.audio_capture_level_min_rms)
+                or self.audio_capture_level_min_rms <= 0):
+            raise ConfigurationError("audio_capture_level_min_rms must be positive and finite")
         if (isinstance(self.audio_capture_stall_seconds, bool)
                 or not isinstance(self.audio_capture_stall_seconds, (int, float))
                 or not math.isfinite(self.audio_capture_stall_seconds)
@@ -1988,6 +1994,10 @@ class Settings:
                 "HELIOS_AUDIO_INPUT_STRICT",
             ),
             audio_input_channel_mode=env.get("HELIOS_AUDIO_INPUT_CHANNEL_MODE", "mono").strip().lower(),
+            audio_capture_level_min_rms=_float_from_env(
+                env.get("HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS", "0.001"),
+                "HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS",
+            ),
             audio_capture_stall_seconds=_float_from_env(
                 env.get("HELIOS_AUDIO_CAPTURE_STALL_SECONDS", "5.0"),
                 "HELIOS_AUDIO_CAPTURE_STALL_SECONDS",

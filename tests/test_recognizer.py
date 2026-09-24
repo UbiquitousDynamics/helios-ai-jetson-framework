@@ -490,10 +490,32 @@ def test_low_capture_level_warning_uses_only_scalar(caplog):
     audio.stream = Silence()
     recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
                                   recognizer_factory=PendingRecognizer,
-                                  clock=lambda: now[0], sanity_rms_threshold=0.006,
+                                  clock=lambda: now[0], sanity_rms_threshold=0.001,
                                   sanity_window_seconds=0.5)
     list(recognizer.listen_events(timeout=1))
     assert "event=capture_level_low peak_rms=0.000000" in caplog.text
+
+
+@pytest.mark.parametrize("sample, warns", [(0, True), (32, True), (33, False)])
+def test_capture_health_floor_boundary(sample, warns, caplog):
+    import struct
+
+    now = [0.0]
+
+    class Constant(FakeStream):
+        def read(self, frames, **kwargs):
+            now[0] += 0.25
+            return struct.pack("<h", sample) * frames
+
+    audio = FakeAudio()
+    audio.stream = Constant()
+    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
+                                  recognizer_factory=PendingRecognizer,
+                                  clock=lambda: now[0], sanity_rms_threshold=0.001,
+                                  sanity_window_seconds=0.5)
+    with caplog.at_level("WARNING"):
+        list(recognizer.listen_events(timeout=1))
+    assert ("event=capture_level_low" in caplog.text) is warns
 
 
 def test_stop_event_ends_one_session_and_flushes_pending_text() -> None:
