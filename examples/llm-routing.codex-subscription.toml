@@ -10,7 +10,9 @@ unknown_connectivity = "prefer_local"
 [privacy]
 default = "remote_allowed"
 allow_remote_transcripts = true
-allow_remote_context = false
+# Enabled by default for natural multi-turn voice conversation. Set false when
+# prior turns must remain local; local fallback still keeps canonical history.
+allow_remote_context = true
 allow_remote_rag_context = false
 redaction_failure = "local_only"
 
@@ -20,7 +22,8 @@ redaction_failure = "local_only"
 enabled = false
 
 # Native app-server startup and the first ChatGPT turn are slower than a warm
-# HTTP connection, especially on Jetson. Later turns reuse the same process.
+# HTTP connection, especially on Jetson. The Codex process itself is reused;
+# conversation history is rehydrated into a fresh remote thread for each turn.
 [timeouts]
 connect_seconds = 60.0
 first_token_seconds = 120.0
@@ -51,7 +54,9 @@ enabled = true
 probe_url = "https://chatgpt.com/"
 probe_interval_seconds = 3.0
 result_max_age_seconds = 6.0
-probe_timeout_seconds = 1.2
+# Wi-Fi on the Jetson can take longer than a second for a TLS probe even while
+# ChatGPT is usable. Keep fail-closed routing, but avoid false offline flips.
+probe_timeout_seconds = 3.0
 probe_bytes = 32768
 goodput_probe_interval_seconds = 60.0
 minimum_quality_score = 0.50
@@ -67,14 +72,20 @@ interface_allowlist = []
 candidates = ["codex-talk-luna", "codex-talk-terra", "codex-talk-sol", "local-talk"]
 max_output_tokens = 128
 first_speech_min_chars = 0
-speech_chunk_max_chars = 80
-first_visible_token_seconds = 15.0
+speech_chunk_max_chars = 64
+speech_chunk_max_delay_seconds = 0.75
+# A local fallback may need to process canonical remote history on the Jetson.
+# The 30-second visible-token budget is not calibrated for CPU-only inference
+# on Emilia. Cold model loading is measured separately inside total_seconds;
+# collect at least 20 cold and 20 warm samples before setting this from p95.
+first_visible_token_seconds = 30.0
 
 [modes.think]
 candidates = ["codex-think-luna", "codex-think-terra", "codex-think-sol", "local-think"]
 max_output_tokens = 256
 first_speech_min_chars = 0
-speech_chunk_max_chars = 96
+speech_chunk_max_chars = 80
+speech_chunk_max_delay_seconds = 0.90
 first_visible_token_seconds = 30.0
 
 [providers.openai-codex]
@@ -83,6 +94,10 @@ endpoint = "stdio://codex"
 locality = "remote"
 enabled = true
 internal_retries = 0
+# Codex app-server rollouts are not durable on this device: resume produces
+# "no rollout found". Helios keeps the canonical conversation and includes it
+# in every fresh Codex thread instead, preserving multi-turn conversation.
+reuse_remote_thread = false
 
 [targets.codex-talk-luna]
 provider = "openai-codex"
@@ -92,6 +107,7 @@ languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
 max_output_words = 50
+max_history_turns = 6
 min_complexity_score = 0
 options = { reasoning_effort = "none" }
 
@@ -103,6 +119,7 @@ languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
 max_output_words = 50
+max_history_turns = 6
 min_complexity_score = 3
 options = { reasoning_effort = "low" }
 
@@ -114,6 +131,7 @@ languages = ["it", "en"]
 retry_attempts = 1
 max_output_tokens = 128
 max_output_words = 50
+max_history_turns = 6
 min_complexity_score = 5
 options = { reasoning_effort = "low" }
 
@@ -123,6 +141,7 @@ model = "gpt-5.6-luna"
 tier = "luna"
 languages = ["it", "en"]
 retry_attempts = 1
+max_history_turns = 6
 min_complexity_score = 0
 options = { reasoning_effort = "low" }
 
@@ -132,6 +151,7 @@ model = "gpt-5.6-terra"
 tier = "terra"
 languages = ["it", "en"]
 retry_attempts = 1
+max_history_turns = 6
 min_complexity_score = 3
 options = { reasoning_effort = "medium" }
 
@@ -141,6 +161,7 @@ model = "gpt-5.6-sol"
 tier = "sol"
 languages = ["it", "en"]
 retry_attempts = 1
+max_history_turns = 6
 min_complexity_score = 5
 options = { reasoning_effort = "medium" }
 
@@ -151,9 +172,14 @@ languages = ["it", "en"]
 retry_attempts = 3
 max_output_tokens = 40
 max_output_words = 20
+# Gemma is configured with a 512-token context on the Jetson. Keep canonical
+# history intact, but send only the newest completed turn to this small local
+# fallback so an offline request does not spend its deadline prefilling old text.
+max_history_turns = 1
 
 [targets.local-think]
 provider = "ollama"
 model = "qwen3:0.6b"
 languages = ["it", "en"]
 retry_attempts = 3
+max_history_turns = 1

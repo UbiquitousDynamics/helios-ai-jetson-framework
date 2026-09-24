@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import config
 from api.providers.contracts import ChatProvider
+
+if TYPE_CHECKING:
+    from api.conversation import ConversationSession
 
 ProviderFactory = Callable[[], ChatProvider]
 
 
 def configured_provider_factory(
     settings: config.LLMProviderSettings,
+    *,
+    allow_remote_context: bool = False,
+    context_idle_timeout_seconds: float = 900.0,
+    context_max_turns: int = 20,
+    conversation_session: ConversationSession | None = None,
 ) -> ProviderFactory | None:
     """Return a lazy adapter factory, or ``None`` for externally handled types."""
 
@@ -36,6 +45,11 @@ def configured_provider_factory(
             return CodexAppServerAdapter(
                 provider=settings.name,
                 endpoint=settings.endpoint,
+                allow_remote_context=allow_remote_context,
+                reuse_remote_thread=settings.reuse_remote_thread,
+                context_idle_timeout_seconds=context_idle_timeout_seconds,
+                context_max_turns=context_max_turns,
+                conversation_session=conversation_session,
             )
 
         return codex_app_server_factory

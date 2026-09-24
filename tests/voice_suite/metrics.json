@@ -1,0 +1,806 @@
+{
+  "schema_version": 1,
+  "metric_catalog_version": "1.0.0",
+  "status": "definitions_only_no_measurements",
+  "threshold_reference": {
+    "path": "tests/voice_suite/thresholds.json",
+    "join_key": "id",
+    "direction_semantics": {
+      "max": "An upper bound: observed statistic must be <= configured limit.",
+      "min": "A lower bound: observed statistic must be >= configured limit."
+    }
+  },
+  "correlation": {
+    "required_fields": [
+      "run_id",
+      "correlation_id",
+      "fixture_id",
+      "event_id",
+      "host_id",
+      "clock_id",
+      "monotonic_ns"
+    ],
+    "optional_ids": [
+      "turn_id",
+      "segment_id",
+      "revision_id",
+      "request_id",
+      "attempt_id",
+      "task_id",
+      "parent_task_id",
+      "task_revision",
+      "response_id"
+    ],
+    "identity": "Generate opaque run-scoped IDs unrelated to text or personal data; each exchange retains its own correlation_id through stimulus, recognition, model, TTS, interruption and fake-backend events.",
+    "content_policy": "Numeric values, closed event/state labels and declared opaque IDs only. No waveform, recognized text, prompt, response text, URL, header, credential, arbitrary tag or free-form error may enter metrics/events. Fixture text remains synthetic catalog data; generated audio and derived transcripts stay in the explicit temporary artifact directory."
+  },
+  "clocks": {
+    "source": "Per-host monotonic_ns; retain host_id, clock_id and process/run identity across event boundaries.",
+    "cross_host": "Never subtract raw PC and target monotonic values or wall timestamps. Acoustic end-to-end, answer and interruption use paired PC timestamps. STT/endpointing/model/TTS/task intervals use paired target timestamps. Clock alignment, if later required, must be explicitly calibrated with offset/drift/uncertainty recorded; it is not implemented in this baseline.",
+    "missing": "Missing timestamps, unmatched correlation, rebooted clock domains, negative intervals or insufficient synchronization invalidate the sample and prevent a mandatory pass."
+  },
+  "normalization_reference": "tests/voice_suite/fixtures.json#/comparison",
+  "reporting": {
+    "baseline_samples": 0,
+    "required_per_metric": [
+      "metric_id",
+      "profile_id",
+      "threshold_version",
+      "sample_count",
+      "eligible_count",
+      "missing_count",
+      "failure_count",
+      "artifact_source",
+      "status"
+    ],
+    "distributions": [
+      "median",
+      "p95",
+      "maximum",
+      "failure_count",
+      "sample_count"
+    ],
+    "rates": [
+      "numerator",
+      "denominator",
+      "value",
+      "failure_count",
+      "sample_count"
+    ],
+    "counts": [
+      "value",
+      "sample_count",
+      "failure_count"
+    ],
+    "p95": "R-7 linearly interpolated p95: position (n-1)*0.95 in sorted finite samples; interpolate adjacent ranks. Median averages the middle two for even n. Never average per-run percentiles. Below minimum sample count no pass is possible, but an observed breach remains a failure.",
+    "rate_sample_count": "sample_count is the denominator's declared sample_unit, with numerator and denominator preserved; WER/CER also retain turn sample_count and reference-unit denominator.",
+    "invalid_or_zero": "Zero samples, zero rate denominator, insufficient declared sample count or missing mandatory evidence cannot pass. Report blocked/unverified with a reason; conditional inapplicability is explicit and never a numerical zero.",
+    "unavailable_resources": "Temperature/power are optional only where the source is unavailable and the profile permits that absence; report unavailable and the reason. A profile may promote optional metrics to mandatory.",
+    "raw_samples": "Retain per-case monotonic timing and content-free counts in the explicit temporary artifact directory. Publish sanitized aggregates and opaque IDs. Do not average away p95/max/outlier failures.",
+    "thresholds": "Resolve every applicable metric against the reviewed selected desktop/Jetson profile. Uncalibrated acoustic and Jetson-specific limits remain provisional and cannot establish a calibrated HIL pass.",
+    "hard_failures": [
+      "mandatory p95 above the configured threshold",
+      "false_barge_in_rate above the configured threshold",
+      "any unauthorized egress attempt",
+      "any duplicate authoritative dispatch",
+      "any provisional dispatch or mutation of authoritative sinks",
+      "any leaked worker",
+      "any unverified completion claim",
+      "missing mandatory assertion or insufficient sample count"
+    ]
+  },
+  "events": [
+    {
+      "id": "stimulus_synthesis_start",
+      "clock_domain": "pc",
+      "applicability": "Before each nonempty Piper segment synthesis"
+    },
+    {
+      "id": "stimulus_ready",
+      "clock_domain": "pc",
+      "applicability": "After pinned PCM is available; for silence/noise after recipe materialization"
+    },
+    {
+      "id": "stimulus_playback_start",
+      "clock_domain": "pc",
+      "applicability": "Each PC stimulus playback; exclude prior marker from spoken stimulus boundary"
+    },
+    {
+      "id": "stimulus_speech_onset",
+      "clock_domain": "pc",
+      "applicability": "First intended synthetic user speech energy; required for genuine interruption"
+    },
+    {
+      "id": "stimulus_playback_end",
+      "clock_domain": "pc",
+      "applicability": "After final PC stimulus frame; retain internal pause boundaries separately"
+    },
+    {
+      "id": "pc_microphone_capture_start",
+      "clock_domain": "pc",
+      "applicability": "Before every PC synthetic-only response capture window"
+    },
+    {
+      "id": "pc_first_response_energy",
+      "clock_domain": "pc",
+      "applicability": "First validated Helios answer energy; marker/echo/cue must be excluded"
+    },
+    {
+      "id": "pc_response_stop_or_duck",
+      "clock_domain": "pc",
+      "applicability": "First calibrated persistent response stop/duck for interruption opportunities"
+    },
+    {
+      "id": "pc_response_audio_end",
+      "clock_domain": "pc",
+      "applicability": "Last valid required response audio; exclude recording tail"
+    },
+    {
+      "id": "response_capture_end",
+      "clock_domain": "pc",
+      "applicability": "End of bounded PC response recording"
+    },
+    {
+      "id": "pc_microphone_capture_end",
+      "clock_domain": "pc",
+      "applicability": "Confirmed PC input capture stream closure"
+    },
+    {
+      "id": "pc_cleanup_start",
+      "clock_domain": "pc",
+      "applicability": "PC cleanup begins"
+    },
+    {
+      "id": "pc_cleanup_complete",
+      "clock_domain": "pc",
+      "applicability": "All PC owned resources confirmed released"
+    },
+    {
+      "id": "target_microphone_capture_start",
+      "clock_domain": "target",
+      "applicability": "Each owned target capture-stream start"
+    },
+    {
+      "id": "target_stimulus_speech_end",
+      "clock_domain": "target",
+      "applicability": "Target-clock annotation of last intended user speech frame"
+    },
+    {
+      "id": "first_provisional_recognition",
+      "clock_domain": "target",
+      "applicability": "First provisional revision when produced; absence remains explicit"
+    },
+    {
+      "id": "endpoint_decision",
+      "clock_domain": "target",
+      "applicability": "Turn endpoint accepted before authoritative final"
+    },
+    {
+      "id": "authoritative_final_recognition",
+      "clock_domain": "target",
+      "applicability": "Each authoritative final; duplicates retain original turn/segment correlation"
+    },
+    {
+      "id": "model_dispatch",
+      "clock_domain": "target",
+      "applicability": "Each admitted model request; controls and partials must not emit this"
+    },
+    {
+      "id": "model_start",
+      "clock_domain": "target",
+      "applicability": "Execution starts after any dispatch queue"
+    },
+    {
+      "id": "model_first_token",
+      "clock_domain": "target",
+      "applicability": "First generated token when successful token output is applicable"
+    },
+    {
+      "id": "model_completion",
+      "clock_domain": "target",
+      "applicability": "Request completes or reaches labelled failure/cancellation terminal outcome"
+    },
+    {
+      "id": "tts_synthesis_start",
+      "clock_domain": "target",
+      "applicability": "First and each subsequent answer-chunk synthesis"
+    },
+    {
+      "id": "tts_synthesis_end",
+      "clock_domain": "target",
+      "applicability": "Corresponding synthesis completes or fails"
+    },
+    {
+      "id": "helios_audio_playback_start",
+      "clock_domain": "target",
+      "applicability": "First answer playback; wake/cue playback carry distinct roles"
+    },
+    {
+      "id": "helios_audio_playback_end",
+      "clock_domain": "target",
+      "applicability": "Last answer playback frame or confirmed cancellation"
+    },
+    {
+      "id": "interruption_confirmed",
+      "clock_domain": "target",
+      "applicability": "Genuine barge-in confirmed after provisional candidate resolution"
+    },
+    {
+      "id": "cancellation_confirmed",
+      "clock_domain": "target",
+      "applicability": "Requested cancellation acknowledged by the affected component"
+    },
+    {
+      "id": "task_transition_request",
+      "clock_domain": "target",
+      "applicability": "Legal/illegal fake-backend transition attempt"
+    },
+    {
+      "id": "task_backend_acknowledgement",
+      "clock_domain": "target",
+      "applicability": "Authoritative fake-backend ack including causal ID/revision and terminal outcome"
+    },
+    {
+      "id": "task_state_transition",
+      "clock_domain": "target",
+      "applicability": "Actual task state change with prior/current states"
+    },
+    {
+      "id": "session_activated",
+      "clock_domain": "target",
+      "applicability": "Wake activation accepted"
+    },
+    {
+      "id": "component_failure",
+      "clock_domain": "target",
+      "applicability": "Injected/observed failure detected"
+    },
+    {
+      "id": "floor_recovered",
+      "clock_domain": "target",
+      "applicability": "Valid floor restored or bounded terminal shutdown confirmed"
+    },
+    {
+      "id": "backchannel_playback_start",
+      "clock_domain": "target",
+      "applicability": "Optional delayed cue actually starts"
+    },
+    {
+      "id": "target_microphone_capture_end",
+      "clock_domain": "target",
+      "applicability": "Target capture stream confirmed released"
+    },
+    {
+      "id": "cleanup_start",
+      "clock_domain": "target",
+      "applicability": "Target cleanup begins"
+    },
+    {
+      "id": "cleanup_complete",
+      "clock_domain": "target",
+      "applicability": "All target owned resources confirmed released"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "end_to_end_first_audio_ms",
+      "definition": "(pc_first_response_energy - stimulus_playback_start) / 1e6 on the PC clock. First energy must be attributable to the expected Helios answer; exclude marker, noise, stimulus echo, wake acknowledgement and optional backchannel.",
+      "unit": "ms",
+      "artifact_source": "PC monotonic acoustic annotations from pinned synthetic stimulus and isolated response capture; pinned audio retained only in the explicit temporary artifact directory.",
+      "sample_unit": "One eligible spoken-answer exchange",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "final_answer_ms",
+      "definition": "(pc_response_audio_end - stimulus_playback_start) / 1e6 on the PC clock after complete expected response content; trailing capture padding is excluded. Incomplete output is a failure, never a faster complete answer.",
+      "unit": "ms",
+      "artifact_source": "PC monotonic acoustic annotations from pinned synthetic stimulus and isolated response capture; pinned audio retained only in the explicit temporary artifact directory.",
+      "sample_unit": "One eligible spoken-answer exchange",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "stt_ms",
+      "definition": "(authoritative_final_recognition - target_stimulus_speech_end) / 1e6 on the target clock. The target speech-end annotation must refer to the same generated stimulus, not PC playback_end subtracted across hosts.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One intended authoritative user turn",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "model_ttft_ms",
+      "definition": "(model_first_token - model_start) / 1e6 on the target clock. Dispatch queue delay is separately available from model_dispatch and model_start; unavailable tokens cannot become zero latency.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Existing MetricEvent.first_token_ms is supporting evidence only when its boundaries match.",
+      "sample_unit": "One admitted model request",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "model_generation_ms",
+      "definition": "(model_completion - model_start) / 1e6 on the target clock, including time until first token. Distinguish cancelled/failed from completed samples.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One model request",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "tts_first_audio_ms",
+      "definition": "(helios_audio_playback_start - tts_synthesis_start) / 1e6 on the target clock for the first answer chunk, excluding earlier wake acknowledgement or backchannel.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Existing actual_first_audio_ms requires verified matching boundaries.",
+      "sample_unit": "One synthesized spoken response",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "tts_synthesis_ms",
+      "definition": "(tts_synthesis_end - tts_synthesis_start) / 1e6 on the target clock per answer chunk; report chunk and response totals separately without mixing sample units.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Existing MetricEvent.tts_synthesis_ms when boundaries are equivalent.",
+      "sample_unit": "One TTS answer chunk",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "interruption_ms",
+      "definition": "(pc_response_stop_or_duck - stimulus_speech_onset) / 1e6 on the PC clock. Stop/duck must meet calibrated acoustic attenuation and persistence, with matching target interruption/cancellation confirmation; timeout is a failed opportunity.",
+      "unit": "ms",
+      "artifact_source": "PC monotonic acoustic annotations from pinned synthetic stimulus and isolated response capture; pinned audio retained only in the explicit temporary artifact directory. Correlated target confirmation in events.jsonl.",
+      "sample_unit": "One genuine user-interruption opportunity",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "endpointing_ms",
+      "definition": "(endpoint_decision - target_stimulus_speech_end) / 1e6 on the target clock. Annotation excludes internal thinking pauses and marks the final intended speech end.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One intended spoken turn",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "premature_finalization_rate",
+      "definition": "Intended turns finalized before their scheduled resumed speech or correction divided by eligible multi-segment intended turns; retain numerator/denominator and per-case verdict.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Pinned segment schedule and recipe boundaries.",
+      "sample_unit": "One intended multi-segment turn",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "wer",
+      "definition": "Total word substitutions + deletions + insertions divided by reference word count, under fixtures.json normalization. Report corpus micro ratio and per-case errors; may exceed 1. Empty references are not applicable.",
+      "unit": "edits/reference_word",
+      "artifact_source": "Temporary synthetic-only final/reference comparison; publish edit counts, reference lengths and fixture/correlation IDs without recognized text.",
+      "sample_unit": "One nonempty-reference authoritative turn",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "cer",
+      "definition": "Total character substitutions + deletions + insertions divided by reference character count after normalization (including normalized single spaces). May exceed 1; empty references are not applicable.",
+      "unit": "edits/reference_character",
+      "artifact_source": "Temporary synthetic-only final/reference comparison; publish edit counts, reference lengths and fixture/correlation IDs without recognized text.",
+      "sample_unit": "One nonempty-reference authoritative turn",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "exact_final_rate",
+      "definition": "Turns with normalized final exactly matching the nonempty authoritative reference divided by intended nonempty-reference turns; missing finals count as failures.",
+      "unit": "ratio",
+      "artifact_source": "Temporary synthetic-only final/reference comparison; publish edit counts, reference lengths and fixture/correlation IDs without recognized text.",
+      "sample_unit": "One nonempty-reference intended turn",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "duplicate_dispatch_rate",
+      "definition": "Eligible intended turns with more than one authoritative model dispatch divided by eligible intended model turns. Count any dispatch from provisional/stale/duplicate final separately as a mandatory assertion failure even if no intended turn exists.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Content-free dispatch authority and segment/revision IDs.",
+      "sample_unit": "One eligible intended model turn",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "dropped_turn_rate",
+      "definition": "Confirmed intended user turns with no admitted final handling before the configured deadline divided by confirmed intended user turns; handling includes local controls without requiring model dispatch.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Fixture turn schedule and timeout verdicts.",
+      "sample_unit": "One confirmed intended user turn",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "partial_only_turn_rate",
+      "definition": "Intended speech turns producing one or more provisional events but no authoritative final before deadline divided by intended speech turns. Rejected echo/noise candidates are labelled separately from intended turns.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One intended speech turn",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "false_barge_in_rate",
+      "definition": "Noise/echo/non-user opportunities causing an unwarranted confirmed interruption divided by explicitly scheduled negative opportunities. Temporary candidate duck is recorded separately; no negative opportunities means unavailable.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Pinned negative fixture schedules and acoustic verdicts.",
+      "sample_unit": "One negative interruption opportunity",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "missed_barge_in_rate",
+      "definition": "Genuine scheduled user-interruption opportunities without confirmed timely stop/duck and accepted turn divided by genuine opportunities.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. PC acoustic interruption annotations.",
+      "sample_unit": "One genuine interruption opportunity",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "response_completeness_rate",
+      "definition": "Responses satisfying every fixture response-constraint verdict divided by responses required by those fixtures; truncated/missing required output fails. Rubrics must be declared before execution.",
+      "unit": "ratio",
+      "artifact_source": "Synthetic-only response rubric verdicts and pinned capture metadata; raw transcripts stay temporary.",
+      "sample_unit": "One fixture-required response",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "unexpected_overlap_rate",
+      "definition": "Exchanges with acoustic overlap outside their declared overlap windows divided by eligible exchanges. Intentional barge-in overlap before the configured stop deadline is measured but not silently counted as unexpected.",
+      "unit": "ratio",
+      "artifact_source": "PC monotonic acoustic annotations from pinned synthetic stimulus and isolated response capture; pinned audio retained only in the explicit temporary artifact directory. Declared recipe overlap windows.",
+      "sample_unit": "One overlap-observable exchange",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "task_transition_ms",
+      "definition": "(task_state_transition - task_transition_request) / 1e6 on the target clock for an expected legal transition. Missing/illegal transitions fail mandatory assertions.",
+      "unit": "ms",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action. Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One expected task-state transition",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "verified_completion_precision",
+      "definition": "Completion claims with matching prior successful authoritative backend acknowledgement for the same task ID/revision divided by all completion claims. A single unverified claim also increments premature_success_count and is a hard failure.",
+      "unit": "ratio",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action.",
+      "sample_unit": "One completion claim",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "verified_completion_recall",
+      "definition": "Successfully acknowledged tasks accurately reported complete within deadline divided by successfully acknowledged tasks requiring a report; failed/cancelled/superseded tasks are ineligible.",
+      "unit": "ratio",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action.",
+      "sample_unit": "One acknowledged successful task requiring a report",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "cpu_percent",
+      "definition": "Host CPU utilization in percent sampled at a declared cadence; separate PC and target streams, record source and normalize total host utilization to 0..100 rather than mixing per-core/process semantics.",
+      "unit": "percent",
+      "artifact_source": "observability.resources.ResourceSnapshot.cpu_percent or source-labelled equivalent in resources.jsonl.",
+      "sample_unit": "One host resource observation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "ram_mib",
+      "definition": "ResourceSnapshot.memory_used_bytes / 1048576, reported separately per host. Existing MetricEvent.memory_used_mb is MiB in observability.service and may be used only with that conversion verified.",
+      "unit": "MiB",
+      "artifact_source": "observability.resources.ResourceSnapshot.memory_used_bytes; observability.service memory_used_mb.",
+      "sample_unit": "One host resource observation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "temperature_c",
+      "definition": "Maximum CPU/GPU temperature among available sensors per observation; retain sensor identity and host. Missing sensors remain unavailable, never zero.",
+      "unit": "degree_C",
+      "artifact_source": "ResourceSnapshot.cpu_temperature_c / gpu_temperature_c or verified target sensor telemetry.",
+      "sample_unit": "One host thermal observation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": false
+    },
+    {
+      "id": "power_w",
+      "definition": "Input power in watts from labelled sensor; ResourceSnapshot.power_mw / 1000 or equivalent MetricEvent.power_w. Missing telemetry remains unavailable.",
+      "unit": "W",
+      "artifact_source": "ResourceSnapshot.power_mw or MetricEvent.power_w in resources.jsonl, including source and host.",
+      "sample_unit": "One power observation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": false
+    },
+    {
+      "id": "queue_depth",
+      "definition": "Number of queued items sampled and on every enqueue/dequeue; keep separate named queues and units and report each high-water maximum. No averaging across queues to hide overflow.",
+      "unit": "items",
+      "artifact_source": "Content-free capture/model/TTS/metrics queue counters with queue identity in resources.jsonl.",
+      "sample_unit": "One named-queue observation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "leaked_workers",
+      "definition": "Count of test-owned processes and threads still alive after the bounded cleanup deadline relative to the ownership baseline; baseline unrelated processes do not count.",
+      "unit": "workers",
+      "artifact_source": "Content-free before/after ownership inventory and cleanup.json with process/thread roles.",
+      "sample_unit": "One run cleanup",
+      "direction": "max",
+      "aggregation": "count",
+      "mandatory": true
+    },
+    {
+      "id": "cleanup_ms",
+      "definition": "Elapsed monotonic time between cleanup request and confirmed stop/join/device release for each host; report host maxima, never subtract timestamps across hosts.",
+      "unit": "ms",
+      "artifact_source": "Per-host cleanup_start/cleanup_complete events and explicit device-release verdicts.",
+      "sample_unit": "One host cleanup",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "unauthorized_egress_count",
+      "definition": "Observed outbound attempts crossing the selected policy boundary without authorization, including denied attempts containing speech/context; absence of network evidence cannot prove zero.",
+      "unit": "attempts",
+      "artifact_source": "Content-free network guard/transport probe verdicts with route class and policy decision, no endpoint/query/header/body.",
+      "sample_unit": "One bounded run with egress observation",
+      "direction": "max",
+      "aggregation": "count",
+      "mandatory": true
+    },
+    {
+      "id": "activation_ms",
+      "definition": "(session_activated - authoritative_final_recognition) / 1e6 on target clock for wake-only/wake-plus-command; acoustic wake acknowledgement also has separately correlated playback events.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One eligible wake activation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "followup_acceptance_rate",
+      "definition": "Valid wake-free followups admitted before configured expiry divided by scheduled valid wake-free followups; each session fixture includes at least ten.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Fixture followup schedule.",
+      "sample_unit": "One eligible wake-free followup",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "false_activation_rate",
+      "definition": "Idle/noise/expired-session opportunities causing unauthorized activation divided by explicitly scheduled negative activation opportunities.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Negative opportunity manifest.",
+      "sample_unit": "One negative activation opportunity",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "session_expiry_correctness_rate",
+      "definition": "Session boundary cases matching configured before/at/after expiry and reset/reactivation policy divided by scheduled boundary cases.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Declared expiry setting and boundary schedule.",
+      "sample_unit": "One session boundary case",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "correction_retention_rate",
+      "definition": "Correction turns retaining original wording and audible correction in order in the normalized final divided by scheduled correction turns; semantic rewrite is forbidden.",
+      "unit": "ratio",
+      "artifact_source": "Temporary synthetic-only final/reference comparison; publish edit counts, reference lengths and fixture/correlation IDs without recognized text.",
+      "sample_unit": "One intended correction turn",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "capture_gap_ms",
+      "definition": "Gap beyond the expected next audio-frame timestamp while capture must remain live, on the target clock; publish maximum and total dropout duration separately with frame/sample rate evidence.",
+      "unit": "ms",
+      "artifact_source": "Content-free target frame sequence IDs and monotonic capture timestamps; no audio in logs.",
+      "sample_unit": "One capture continuity interval",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "resume_correctness_rate",
+      "definition": "Rejected interruption candidates whose response resumes from the exact saved PCM offset without replay/loss divided by candidates requiring resume.",
+      "unit": "ratio",
+      "artifact_source": "Saved/resumed PCM frame offsets, pinned hash identity and content-free interruption outcomes.",
+      "sample_unit": "One rejected candidate requiring resume",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "steering_ms",
+      "definition": "(task_state_transition - authoritative_final_recognition) / 1e6 on target clock for confirmed steering, including acknowledgement semantics declared in recipe.",
+      "unit": "ms",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action. Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One authoritative steering request",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "stale_result_rate",
+      "definition": "Injected stale/superseded task completions incorrectly admitted to state/history/output divided by injected stale completions.",
+      "unit": "ratio",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action.",
+      "sample_unit": "One injected stale task result",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "supersession_correctness_rate",
+      "definition": "Replacement requests preserving causal IDs, cancelling/superseding the correct predecessor and rejecting its later result divided by eligible replacements.",
+      "unit": "ratio",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action.",
+      "sample_unit": "One task replacement",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "premature_success_count",
+      "definition": "Number of success claims preceding authoritative successful backend acknowledgement or claiming success for failed/cancelled/superseded tasks; same causal task ID and revision are mandatory.",
+      "unit": "claims",
+      "artifact_source": "Content-free fake backend acknowledgements, causal task IDs, revisions, state transitions and response semantic verdicts; no external action.",
+      "sample_unit": "One completion-reporting run",
+      "direction": "max",
+      "aggregation": "count",
+      "mandatory": true
+    },
+    {
+      "id": "residual_echo_rate",
+      "definition": "Echo-only opportunities admitted as authoritative user turns after suppression divided by scheduled echo-only opportunities.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Pinned exact/fuzzy TTS echo schedules.",
+      "sample_unit": "One echo-only opportunity",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "recovery_ms",
+      "definition": "(floor_recovered - component_failure) / 1e6 on target clock for provider/TTS/capture/playback failure; recovery must reach the declared valid floor or bounded terminal shutdown.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One injected component failure",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "backchannel_delay_ms",
+      "definition": "(backchannel_playback_start - model_dispatch) / 1e6 on target clock for an admitted delayed cue; first answer audio remains a distinct metric.",
+      "unit": "ms",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags.",
+      "sample_unit": "One admitted backchannel",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "backchannel_cancellation_rate",
+      "definition": "Required cue cancellations that stop within configured bound and prevent later cue start divided by required cue cancellations.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Content-free cue cancellation and playback ownership verdicts.",
+      "sample_unit": "One required cue cancellation",
+      "direction": "min",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "unnecessary_backchannel_rate",
+      "definition": "Suppressed/fast-response scenarios with an unwanted cue divided by scheduled scenarios in which a cue is forbidden.",
+      "unit": "ratio",
+      "artifact_source": "Sanitized events.jsonl with exchange correlation_id, event_id, host_id, clock_id and monotonic_ns; no speech or free-form tags. Declared pacing mode and response-ready schedule.",
+      "sample_unit": "One forbidden-cue opportunity",
+      "direction": "max",
+      "aggregation": "rate",
+      "mandatory": true
+    },
+    {
+      "id": "overlap_ms",
+      "definition": "Duration of each acoustic overlap interval between stimulus, cue and answer, labelled by stream pair and whether intentionally scheduled. Never merge intentional and unexpected intervals.",
+      "unit": "ms",
+      "artifact_source": "PC monotonic acoustic annotations from pinned synthetic stimulus and isolated response capture; pinned audio retained only in the explicit temporary artifact directory.",
+      "sample_unit": "One labelled overlap interval",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "resource_growth_mib",
+      "definition": "Maximum of zero and end-minus-start test-owned process RSS after warmup and declared quiescence, bytes / 1048576; retain raw signed delta and peak separately per host.",
+      "unit": "MiB",
+      "artifact_source": "Owned-process RSS baseline/end observations in resources.jsonl.",
+      "sample_unit": "One stress run",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    },
+    {
+      "id": "thread_growth",
+      "definition": "Maximum of zero and end-minus-start count of test-owned threads after bounded quiescence; retain raw inventories and leaked_workers separately.",
+      "unit": "threads",
+      "artifact_source": "Content-free owned-thread inventories before/after stress.",
+      "sample_unit": "One stress run",
+      "direction": "max",
+      "aggregation": "count",
+      "mandatory": true
+    },
+    {
+      "id": "process_growth",
+      "definition": "Maximum of zero and end-minus-start count of test-owned child processes after bounded quiescence; retain raw ownership inventories and leaked_workers separately.",
+      "unit": "processes",
+      "artifact_source": "Content-free owned-process inventories before/after stress.",
+      "sample_unit": "One stress run",
+      "direction": "max",
+      "aggregation": "count",
+      "mandatory": true
+    },
+    {
+      "id": "microphone_owner_count",
+      "definition": "Count of concurrent owners of each declared target capture device on lifecycle events; exactly one while capturing, zero after cleanup. Ownership requirements are assertions in addition to the upper-bound metric.",
+      "unit": "owners",
+      "artifact_source": "Content-free device role and owner lifecycle counters; explicit selected device IDs remain in environment manifest.",
+      "sample_unit": "One capture ownership observation",
+      "direction": "max",
+      "aggregation": "distribution",
+      "mandatory": true
+    }
+  ]
+}

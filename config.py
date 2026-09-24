@@ -19,8 +19,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from recognizer.turn_endpoint_detector import TurnEndpointConfig
+
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_LLM_CONFIG = Path("examples/llm-routing.codex-subscription.toml")
+# Suggested hybrid profile, referenced by documentation and tooling. It is NOT
+# loaded implicitly: remote routing requires HELIOS_LLM_CONFIG to name a file.
+SUGGESTED_LLM_CONFIG = Path("examples/llm-routing.codex-subscription.toml")
+# Deprecated alias retained for callers that imported the old name.
+DEFAULT_LLM_CONFIG = SUGGESTED_LLM_CONFIG
 logger = logging.getLogger(__name__)
 
 
@@ -64,10 +70,12 @@ class KPISettings:
     batch_size: int = 64
     flush_interval_seconds: float = 0.5
     raw_retention_days: int = 14
+    background_retention_days: int = 1
     rollup_retention_days: int = 90
     maximum_database_mb: int = 256
     rollup_interval_seconds: int = 300
     resource_sample_interval_seconds: float = 5.0
+    network_probe_persist_interval_seconds: float = 60.0
     dashboard_enabled: bool = False
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8_765
@@ -94,6 +102,7 @@ class KPISettings:
             ("queue_size", self.queue_size),
             ("batch_size", self.batch_size),
             ("raw_retention_days", self.raw_retention_days),
+            ("background_retention_days", self.background_retention_days),
             ("rollup_retention_days", self.rollup_retention_days),
             ("maximum_database_mb", self.maximum_database_mb),
             ("rollup_interval_seconds", self.rollup_interval_seconds),
@@ -112,6 +121,8 @@ class KPISettings:
             raise ConfigurationError(
                 "KPI rollup retention cannot be shorter than raw-event retention"
             )
+        if self.background_retention_days > self.raw_retention_days:
+            raise ConfigurationError("KPI background retention cannot exceed raw retention")
         if self.maximum_export_rows > 100_000:
             raise ConfigurationError("KPI maximum_export_rows cannot exceed 100000")
         if self.maximum_query_days > 90:
@@ -132,6 +143,13 @@ class KPISettings:
             or self.resource_sample_interval_seconds <= 0
         ):
             raise ConfigurationError("KPI resource interval must be finite and positive")
+        if (
+            isinstance(self.network_probe_persist_interval_seconds, bool)
+            or not isinstance(self.network_probe_persist_interval_seconds, (int, float))
+            or not math.isfinite(float(self.network_probe_persist_interval_seconds))
+            or self.network_probe_persist_interval_seconds <= 0
+        ):
+            raise ConfigurationError("KPI network persistence interval must be finite and positive")
         if (
             isinstance(self.dashboard_port, bool)
             or not isinstance(self.dashboard_port, int)
@@ -162,9 +180,12 @@ class KPISettings:
 @dataclass(frozen=True)
 class LLMTimeoutSettings:
     connect_seconds: float = 2.0
-    first_token_seconds: float = 4.0
-    read_seconds: float = 12.0
-    total_seconds: float = 30.0
+    # Loading a local model after boot can take more than ten seconds on a
+    # memory-constrained Jetson.  Four seconds caused a request to be retried
+    # while Ollama was still loading the first one.
+    first_token_seconds: float = 20.0
+    read_seconds: float = 15.0
+    total_seconds: float = 45.0
 
     def __post_init__(self) -> None:
         values = (
@@ -182,6 +203,10 @@ class LLMTimeoutSettings:
 @dataclass(frozen=True)
 class LLMPrivacySettings:
     default: str = "local_only"
+    # Every field fails closed. A routing file that opts into remote inference
+    # can re-enable context sharing explicitly; the in-code default must not,
+    # or enabling remote routing via the environment alone would silently start
+    # forwarding prior conversation turns.
     allow_remote_transcripts: bool = False
     allow_remote_context: bool = False
     allow_remote_rag_context: bool = False
@@ -353,6 +378,7 @@ class LLMModeSettings:
     complexity_threshold: int = 2
     first_speech_min_chars: int = 0
     speech_chunk_max_chars: int = 0
+    speech_chunk_max_delay_seconds: float = 0.0
     first_visible_token_seconds: float | None = None
 
     def __post_init__(self) -> None:
@@ -364,6 +390,15 @@ class LLMModeSettings:
             raise ConfigurationError("first_speech_min_chars cannot be negative")
         if self.speech_chunk_max_chars < 0:
             raise ConfigurationError("speech_chunk_max_chars cannot be negative")
+        if (
+            isinstance(self.speech_chunk_max_delay_seconds, bool)
+            or not isinstance(self.speech_chunk_max_delay_seconds, (int, float))
+            or not math.isfinite(float(self.speech_chunk_max_delay_seconds))
+            or self.speech_chunk_max_delay_seconds < 0
+        ):
+            raise ConfigurationError(
+                "speech_chunk_max_delay_seconds must be finite and non-negative"
+            )
         if self.first_visible_token_seconds is not None and (
             isinstance(self.first_visible_token_seconds, bool)
             or not isinstance(self.first_visible_token_seconds, (int, float))
@@ -384,6 +419,11 @@ class LLMProviderSettings:
     api_key_env: str | None = None
     enabled: bool = True
     internal_retries: int = 0
+    # Only the Codex app-server consumes this setting. Keeping the transport
+    # choice separate from ``privacy.allow_remote_context`` means a user can
+    # authorize canonical Helios history without depending on a provider-side
+    # conversation checkpoint.
+    reuse_remote_thread: bool = True
 
     def __post_init__(self) -> None:
         if not self.name or not self.adapter or not self.endpoint:
@@ -414,6 +454,8 @@ class LLMProviderSettings:
             raise ConfigurationError("remote providers require an API-key environment name")
         if self.internal_retries != 0:
             raise ConfigurationError("provider-internal retries must be disabled")
+        if not isinstance(self.reuse_remote_thread, bool):
+            raise ConfigurationError("reuse_remote_thread must be a boolean")
 
         parsed = urlsplit(self.endpoint)
         if not parsed.hostname:
@@ -453,6 +495,7 @@ class LLMTargetSettings:
     retry_attempts: int = 1
     options: tuple[tuple[str, Any], ...] = ()
     tier: str | None = None
+    max_history_turns: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.provider:
@@ -473,6 +516,12 @@ class LLMTargetSettings:
             or self.max_output_words < 1
         ):
             raise ConfigurationError("target max_output_words must be a positive integer")
+        if self.max_history_turns is not None and (
+            isinstance(self.max_history_turns, bool)
+            or not isinstance(self.max_history_turns, int)
+            or self.max_history_turns < 1
+        ):
+            raise ConfigurationError("target max_history_turns must be a positive integer")
         if self.min_complexity_score is not None and (
             isinstance(self.min_complexity_score, bool)
             or not isinstance(self.min_complexity_score, int)
@@ -504,6 +553,8 @@ class LLMSettings:
     denylist: tuple[str, ...] = ()
     unknown_connectivity: str = "prefer_local"
     privacy: LLMPrivacySettings = field(default_factory=LLMPrivacySettings)
+    context_idle_timeout_seconds: float = 900.0
+    context_max_turns: int = 20
     timeouts: LLMTimeoutSettings = field(default_factory=LLMTimeoutSettings)
     health: LLMHealthSettings = field(default_factory=LLMHealthSettings)
     budget: LLMBudgetSettings = field(default_factory=LLMBudgetSettings)
@@ -525,6 +576,19 @@ class LLMSettings:
             raise ConfigurationError(
                 f"Unsupported unknown-connectivity policy: {self.unknown_connectivity!r}"
             )
+        if (
+            isinstance(self.context_idle_timeout_seconds, bool)
+            or not isinstance(self.context_idle_timeout_seconds, (int, float))
+            or not math.isfinite(float(self.context_idle_timeout_seconds))
+            or self.context_idle_timeout_seconds <= 0
+        ):
+            raise ConfigurationError("LLM remote-context idle timeout must be positive and finite")
+        if (
+            isinstance(self.context_max_turns, bool)
+            or not isinstance(self.context_max_turns, int)
+            or self.context_max_turns < 1
+        ):
+            raise ConfigurationError("LLM remote-context turn cap must be a positive integer")
         if len(set(self.allowlist)) != len(self.allowlist):
             raise ConfigurationError("provider allowlist entries must be unique")
         if len(set(self.denylist)) != len(self.denylist):
@@ -564,12 +628,28 @@ class LLMSettings:
             object.__setattr__(self, "routing_policy", "local_only")
 
 
+def spoken_response_instruction(language: str) -> str:
+    """Static voice style, independent of user content and provider routing."""
+    if language == "it":
+        return (
+            "Per le risposte vocali, rispondi in modo conciso e diretto per impostazione predefinita. "
+            "Approfondisci quando richiesto o necessario per la correttezza. "
+            "Mantieni dettagli essenziali, incertezze e condizioni di sicurezza; non troncare una risposta necessaria. "
+            "Non dichiarare un'azione eseguita senza conferma del servizio responsabile."
+        )
+    return (
+        "For spoken responses, answer concisely and directly by default. "
+        "Expand when requested or needed for correctness. "
+        "Preserve essential details, uncertainty and safety conditions; do not truncate a necessary answer. "
+        "Do not claim an action is complete without confirmation from the responsible service."
+    )
+
+
 @dataclass(frozen=True)
 class LanguageProfile:
     code: str
     vosk_model: Path
     tts_model: Path
-    voice: str
     wake_word: str
     wake_word_aliases: tuple[str, ...]
     think_words: tuple[str, ...]
@@ -578,8 +658,13 @@ class LanguageProfile:
     presentation_answers: tuple[str, str, str]
     talk_model: str
     welcome_message: str
+    backchannel_phrases: tuple[str, ...]
     rag_result_prefix: str
     model_error_message: str
+
+    @property
+    def wake_acknowledgement(self) -> str:
+        return "Ti ascolto." if self.code == "it" else "I'm listening."
 
 
 def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
@@ -588,7 +673,6 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             code="en",
             vosk_model=root / "recognizer/models/vosk-model-small-en-us-0.15",
             tts_model=root / "audio/models/en_GB-alba-medium.onnx",
-            voice="mb-us1",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
             think_words=("think", "reason"),
@@ -611,6 +695,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
                 "Hi! I just woke up and I'm ready to help. Just remember to call "
                 "me '{wake_word}' when you talk to me."
             ),
+            backchannel_phrases=("One moment.", "Let's see.", "I'm considering that."),
             rag_result_prefix="Here's what I found: ",
             model_error_message="I could not contact the language model.",
         ),
@@ -618,7 +703,6 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
             code="it",
             vosk_model=root / "recognizer/models/vosk-model-small-it-0.22",
             tts_model=root / "audio/models/it_IT-paola-medium.onnx",
-            voice="mb-it4",
             wake_word="emilia",
             wake_word_aliases=("emilia", "amelia", "hello"),
             think_words=("pensa", "ragiona"),
@@ -635,6 +719,7 @@ def _profile_paths(root: Path) -> Mapping[str, LanguageProfile]:
                 "Ciao! Mi sono appena svegliata e sono pronta ad aiutarti. "
                 "Ricordati solo di chiamarmi '{wake_word}' quando mi parli."
             ),
+            backchannel_phrases=("Un momento.", "Vediamo.", "Sto valutando la richiesta."),
             rag_result_prefix="Ecco cosa ho trovato: ",
             model_error_message="Non riesco a contattare il modello linguistico.",
         ),
@@ -745,6 +830,29 @@ def _float_from_env(value: str, name: str) -> float:
     return parsed
 
 
+def _audio_device_from_env(value: str | None, name: str) -> int | str | None:
+    """Parse an optional PyAudio/sounddevice device selector.
+
+    A numeric selector remains stable for fixed installations; a non-empty
+    name is resolved by the recognizer or passed to sounddevice unchanged.
+    Empty values deliberately mean "use the platform default".
+    """
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if re.fullmatch(r"[+-]?\d+", normalized):
+        parsed = _int_from_env(normalized, name)
+        if parsed < 0:
+            raise ConfigurationError(f"{name} must be a non-negative device index")
+        return parsed
+    if len(normalized) > 256:
+        raise ConfigurationError(f"{name} is not a valid device selector")
+    return normalized
+
+
 def _kpi_from_env(
     env: Mapping[str, str],
     *,
@@ -786,6 +894,12 @@ def _kpi_from_env(
             env.get("HELIOS_KPI_RAW_RETENTION_DAYS", str(defaults.raw_retention_days)),
             "HELIOS_KPI_RAW_RETENTION_DAYS",
         ),
+        background_retention_days=_int_from_env(
+            env.get(
+                "HELIOS_KPI_BACKGROUND_RETENTION_DAYS", str(defaults.background_retention_days)
+            ),
+            "HELIOS_KPI_BACKGROUND_RETENTION_DAYS",
+        ),
         rollup_retention_days=_int_from_env(
             env.get(
                 "HELIOS_KPI_ROLLUP_RETENTION_DAYS",
@@ -810,6 +924,13 @@ def _kpi_from_env(
                 str(defaults.resource_sample_interval_seconds),
             ),
             "HELIOS_KPI_RESOURCE_INTERVAL_SECONDS",
+        ),
+        network_probe_persist_interval_seconds=_float_from_env(
+            env.get(
+                "HELIOS_KPI_NETWORK_PERSIST_INTERVAL_SECONDS",
+                str(defaults.network_probe_persist_interval_seconds),
+            ),
+            "HELIOS_KPI_NETWORK_PERSIST_INTERVAL_SECONDS",
         ),
         dashboard_enabled=_bool_from_env(
             env.get(
@@ -1027,15 +1148,15 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             "timeouts.connect_seconds",
         ),
         first_token_seconds=_toml_float(
-            timeout_table.get("first_token_seconds", 4.0),
+            timeout_table.get("first_token_seconds", 20.0),
             "timeouts.first_token_seconds",
         ),
         read_seconds=_toml_float(
-            timeout_table.get("read_seconds", 12.0),
+            timeout_table.get("read_seconds", 15.0),
             "timeouts.read_seconds",
         ),
         total_seconds=_toml_float(
-            timeout_table.get("total_seconds", 30.0),
+            timeout_table.get("total_seconds", 45.0),
             "timeouts.total_seconds",
         ),
     )
@@ -1240,6 +1361,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "complexity_threshold",
                 "first_speech_min_chars",
                 "speech_chunk_max_chars",
+                "speech_chunk_max_delay_seconds",
                 "first_visible_token_seconds",
             },
             f"modes.{name}",
@@ -1261,6 +1383,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
             speech_chunk_max_chars=_toml_int(
                 mode.get("speech_chunk_max_chars", 0),
                 f"modes.{name}.speech_chunk_max_chars",
+            ),
+            speech_chunk_max_delay_seconds=(
+                _toml_float(
+                    mode["speech_chunk_max_delay_seconds"],
+                    f"modes.{name}.speech_chunk_max_delay_seconds",
+                )
+                if "speech_chunk_max_delay_seconds" in mode
+                else 0.0
             ),
             first_visible_token_seconds=(
                 _toml_float(
@@ -1287,6 +1417,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "api_key_env",
                 "enabled",
                 "internal_retries",
+                "reuse_remote_thread",
             },
             f"providers.{name}",
         )
@@ -1321,6 +1452,10 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                     provider.get("internal_retries", 0),
                     f"providers.{name}.internal_retries",
                 ),
+                reuse_remote_thread=_toml_bool(
+                    provider.get("reuse_remote_thread", True),
+                    f"providers.{name}.reuse_remote_thread",
+                ),
             )
         )
 
@@ -1342,6 +1477,7 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                 "context_window",
                 "max_output_tokens",
                 "max_output_words",
+                "max_history_turns",
                 "min_complexity_score",
                 "retry_attempts",
                 "options",
@@ -1415,6 +1551,14 @@ def load_llm_settings(path: str | Path) -> LLMSettings:
                         f"targets.{name}.max_output_words",
                     )
                     if "max_output_words" in target
+                    else None
+                ),
+                max_history_turns=(
+                    _toml_int(
+                        target["max_history_turns"],
+                        f"targets.{name}.max_history_turns",
+                    )
+                    if "max_history_turns" in target
                     else None
                 ),
                 min_complexity_score=(
@@ -1558,6 +1702,20 @@ def _llm_from_env(
         remote_enabled=remote_enabled,
         emergency_local_only=emergency,
         privacy=privacy,
+        context_idle_timeout_seconds=_float_from_env(
+            environ.get(
+                "HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS",
+                str(base.context_idle_timeout_seconds),
+            ),
+            "HELIOS_LLM_CONTEXT_IDLE_TIMEOUT_SECONDS",
+        ),
+        context_max_turns=_int_from_env(
+            environ.get(
+                "HELIOS_LLM_CONTEXT_MAX_TURNS",
+                str(base.context_max_turns),
+            ),
+            "HELIOS_LLM_CONTEXT_MAX_TURNS",
+        ),
         budget=budget,
         observability=observability,
     )
@@ -1575,18 +1733,41 @@ class Settings:
     language: str = "it"
     name: str = "emilia"
     listen_timeout: float = 6.5
+    barge_in_enabled: bool = True
+    barge_in_event_energy: float = 0.08
+    barge_in_expected_echo_energy: float = 0.04
+    barge_in_minimum_interrupt_energy: float = 0.06
+    barge_in_minimum_active_seconds: float = 0.12
+    barge_in_minimum_partial_words: int = 3
+    barge_in_minimum_recognition_confidence: float = 0.5
+    barge_in_candidate_inactivity_seconds: float = 1.5
+    barge_in_candidate_maximum_seconds: float = 3.0
+    barge_in_echo_energy_ratio: float = 1.5
+    barge_in_startup_window_seconds: float = 0.4
+    barge_in_startup_energy_multiplier: float = 1.5
+    backchannel_delay_seconds: float = 0.7
     log_level: int = logging.INFO
     log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     log_file_name: str | None = "app.log"
+    audio_input_device: int | str | None = None
+    audio_output_device: int | str | None = None
+    audio_output_latency: str = "high"
     ollama_host: str = "http://localhost:11434"
     think_model: str = "qwen3:0.6b"
     top_k: int = 4
-    embedding_model: str = "mxbai-embed-large"
     llm: LLMSettings = field(default_factory=LLMSettings)
     kpi: KPISettings = field(default_factory=KPISettings)
+    endpointing: TurnEndpointConfig = field(default_factory=TurnEndpointConfig)
+    activation_timeout_seconds: float = 30.0
+    audio_input_strict: bool = False
+    audio_input_channel_mode: str = "mono"
+    audio_capture_level_min_rms: float = 0.001
+    audio_capture_stall_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).expanduser().resolve()
+        if not isinstance(self.endpointing, TurnEndpointConfig):
+            raise ConfigurationError("endpointing must be a TurnEndpointConfig")
         language = self.language.strip().lower()
         if language not in _profile_paths(root):
             supported = ", ".join(sorted(_profile_paths(root)))
@@ -1595,11 +1776,121 @@ class Settings:
             )
         if self.listen_timeout <= 0:
             raise ConfigurationError("listen_timeout must be greater than zero")
+        if (
+            isinstance(self.activation_timeout_seconds, bool)
+            or not isinstance(self.activation_timeout_seconds, (int, float))
+            or not math.isfinite(self.activation_timeout_seconds)
+            or self.activation_timeout_seconds <= 0
+        ):
+            raise ConfigurationError("activation_timeout_seconds must be finite and positive")
+        for name, value in (
+            ("barge_in_event_energy", self.barge_in_event_energy),
+            ("barge_in_expected_echo_energy", self.barge_in_expected_echo_energy),
+            ("barge_in_minimum_interrupt_energy", self.barge_in_minimum_interrupt_energy),
+            (
+                "barge_in_minimum_recognition_confidence",
+                self.barge_in_minimum_recognition_confidence,
+            ),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0 <= float(value) <= 1
+            ):
+                raise ConfigurationError(f"{name} must be finite and between zero and one")
+        for name, value, minimum, exclusive in (
+            ("barge_in_minimum_active_seconds", self.barge_in_minimum_active_seconds, 0, False),
+            (
+                "barge_in_candidate_inactivity_seconds",
+                self.barge_in_candidate_inactivity_seconds,
+                0,
+                True,
+            ),
+            (
+                "barge_in_candidate_maximum_seconds",
+                self.barge_in_candidate_maximum_seconds,
+                0,
+                True,
+            ),
+            ("barge_in_echo_energy_ratio", self.barge_in_echo_energy_ratio, 1, False),
+            ("barge_in_startup_window_seconds", self.barge_in_startup_window_seconds, 0, False),
+            (
+                "barge_in_startup_energy_multiplier",
+                self.barge_in_startup_energy_multiplier,
+                1,
+                False,
+            ),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < minimum
+                or (exclusive and value == minimum)
+            ):
+                raise ConfigurationError(f"invalid {name}")
+        if (
+            isinstance(self.barge_in_minimum_partial_words, bool)
+            or not isinstance(self.barge_in_minimum_partial_words, int)
+            or self.barge_in_minimum_partial_words < 1
+        ):
+            raise ConfigurationError("barge_in_minimum_partial_words must be a positive integer")
+        if self.barge_in_candidate_inactivity_seconds > self.barge_in_candidate_maximum_seconds:
+            raise ConfigurationError("barge-in inactivity cannot exceed maximum candidate duration")
+        if (
+            isinstance(self.backchannel_delay_seconds, bool)
+            or not isinstance(self.backchannel_delay_seconds, (int, float))
+            or not math.isfinite(float(self.backchannel_delay_seconds))
+            or self.backchannel_delay_seconds <= 0
+        ):
+            raise ConfigurationError("backchannel_delay_seconds must be positive")
         if self.top_k < 1:
             raise ConfigurationError("top_k must be at least one")
+        if not isinstance(self.audio_input_strict, bool):
+            raise ConfigurationError("audio_input_strict must be a boolean")
+        if self.audio_input_channel_mode not in {"mono", "average", "sum", "stronger"}:
+            raise ConfigurationError(
+                "audio_input_channel_mode must be mono, average, sum, or stronger"
+            )
+        if (
+            isinstance(self.audio_capture_level_min_rms, bool)
+            or not isinstance(self.audio_capture_level_min_rms, (int, float))
+            or not math.isfinite(self.audio_capture_level_min_rms)
+            or self.audio_capture_level_min_rms <= 0
+        ):
+            raise ConfigurationError("audio_capture_level_min_rms must be positive and finite")
+        if (
+            isinstance(self.audio_capture_stall_seconds, bool)
+            or not isinstance(self.audio_capture_stall_seconds, (int, float))
+            or not math.isfinite(self.audio_capture_stall_seconds)
+            or self.audio_capture_stall_seconds <= 0
+        ):
+            raise ConfigurationError("audio_capture_stall_seconds must be positive")
+
+        for name, value in (
+            ("audio_input_device", self.audio_input_device),
+            ("audio_output_device", self.audio_output_device),
+        ):
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ConfigurationError(f"{name} must be a device index or name")
+            if isinstance(value, int):
+                if value < 0:
+                    raise ConfigurationError(f"{name} must be a non-negative device index")
+                continue
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 256:
+                raise ConfigurationError(f"{name} must be a device index or name")
+            object.__setattr__(self, name, value.strip())
+
+        latency = self.audio_output_latency.strip().lower()
+        if latency not in {"low", "high"}:
+            raise ConfigurationError("audio_output_latency must be 'low' or 'high'")
 
         object.__setattr__(self, "project_root", root)
         object.__setattr__(self, "language", language)
+        object.__setattr__(self, "audio_output_latency", latency)
         object.__setattr__(self, "ollama_host", normalize_ollama_host(self.ollama_host))
         kpi_path = self.kpi.storage_path.expanduser()
         if not kpi_path.is_absolute():
@@ -1624,11 +1915,13 @@ class Settings:
         root = Path(project_root).expanduser().resolve()
         llm = LLMSettings()
         routing_override = env.get("HELIOS_LLM_CONFIG")
-        if routing_override is None:
-            default_routing_path = root / DEFAULT_LLM_CONFIG
-            routing_value = str(DEFAULT_LLM_CONFIG) if default_routing_path.is_file() else ""
-        else:
-            routing_value = routing_override.strip()
+        # Remote routing is opt-in. Files under examples/ are documentation, not
+        # active configuration: auto-selecting one meant that cloning the
+        # repository and running it sent voice transcripts to a remote provider
+        # without the operator ever choosing to. A clean checkout now stays on
+        # the local_only defaults of LLMSettings() until HELIOS_LLM_CONFIG names
+        # a routing file explicitly.
+        routing_value = "" if routing_override is None else routing_override.strip()
         configuration_valid = True
         if routing_value:
             routing_path = Path(routing_value).expanduser()
@@ -1649,20 +1942,123 @@ class Settings:
         else:
             llm = LLMSettings(emergency_local_only=True)
 
+        # Transcript egress is the single most consequential setting in an
+        # in-vehicle voice deployment, so make it visible at startup instead of
+        # leaving it implicit in a routing file.
+        if llm.remote_enabled and llm.privacy.allow_remote_transcripts:
+            logger.warning(
+                "Remote routing is enabled and voice transcripts may be sent off-device "
+                "(routing file: %s). Set HELIOS_LLM_ALLOW_REMOTE_TRANSCRIPTS=false to keep "
+                "recognized speech local.",
+                llm.routing_file,
+            )
+
         try:
             kpi = _kpi_from_env(env, project_root=root)
         except ConfigurationError:
             logger.error("Invalid KPI configuration; KPI collection and dashboard are disabled")
             kpi = KPISettings(storage_path=(root / "logs/helios-kpi.sqlite3").resolve())
 
+        endpoint_defaults = TurnEndpointConfig()
+        try:
+            endpointing = TurnEndpointConfig(
+                **{
+                    name: _float_from_env(
+                        env.get(
+                            f"HELIOS_ENDPOINT_{name.upper()}", str(getattr(endpoint_defaults, name))
+                        ),
+                        f"HELIOS_ENDPOINT_{name.upper()}",
+                    )
+                    for name in (
+                        "short_pause_seconds",
+                        "finalization_seconds",
+                        "inactivity_seconds",
+                        "maximum_utterance_seconds",
+                        "revision_stability_seconds",
+                        "final_result_timeout_seconds",
+                        "minimum_confidence",
+                        "minimum_speech_seconds",
+                    )
+                }
+            )
+        except ValueError:
+            raise ConfigurationError("invalid turn endpoint configuration") from None
+
         return cls(
             project_root=root,
             language=env.get("HELIOS_LANGUAGE", "it"),
+            activation_timeout_seconds=_float_from_env(
+                env.get("HELIOS_ACTIVATION_TIMEOUT_SECONDS", "30.0"),
+                "HELIOS_ACTIVATION_TIMEOUT_SECONDS",
+            ),
+            barge_in_enabled=_bool_from_env(
+                env.get("HELIOS_BARGE_IN_ENABLED", "true"),
+                "HELIOS_BARGE_IN_ENABLED",
+            ),
+            barge_in_event_energy=_float_from_env(
+                env.get("HELIOS_BARGE_IN_EVENT_ENERGY", "0.08"),
+                "HELIOS_BARGE_IN_EVENT_ENERGY",
+            ),
+            barge_in_expected_echo_energy=_float_from_env(
+                env.get("HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY", "0.04"),
+                "HELIOS_BARGE_IN_EXPECTED_ECHO_ENERGY",
+            ),
+            barge_in_minimum_interrupt_energy=_float_from_env(
+                env.get("HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY", "0.06"),
+                "HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY",
+            ),
+            **{
+                name: _float_from_env(
+                    env.get("HELIOS_" + name.upper(), str(default)), "HELIOS_" + name.upper()
+                )
+                for name, default in (
+                    ("barge_in_minimum_active_seconds", 0.12),
+                    ("barge_in_minimum_recognition_confidence", 0.5),
+                    ("barge_in_candidate_inactivity_seconds", 1.5),
+                    ("barge_in_candidate_maximum_seconds", 3.0),
+                    ("barge_in_echo_energy_ratio", 1.5),
+                    ("barge_in_startup_window_seconds", 0.4),
+                    ("barge_in_startup_energy_multiplier", 1.5),
+                )
+            },
+            barge_in_minimum_partial_words=_int_from_env(
+                env.get("HELIOS_BARGE_IN_MINIMUM_PARTIAL_WORDS", "3"),
+                "HELIOS_BARGE_IN_MINIMUM_PARTIAL_WORDS",
+            ),
+            backchannel_delay_seconds=_float_from_env(
+                env.get("HELIOS_BACKCHANNEL_DELAY_SECONDS", "0.7"),
+                "HELIOS_BACKCHANNEL_DELAY_SECONDS",
+            ),
             log_level=_log_level_from_env(env.get("HELIOS_LOG_LEVEL", "INFO")),
             log_file_name=_log_file_from_env(env.get("HELIOS_LOG_FILE")),
+            audio_input_device=_audio_device_from_env(
+                env.get("HELIOS_AUDIO_INPUT_DEVICE"),
+                "HELIOS_AUDIO_INPUT_DEVICE",
+            ),
+            audio_input_strict=_bool_from_env(
+                env.get("HELIOS_AUDIO_INPUT_STRICT", "false"),
+                "HELIOS_AUDIO_INPUT_STRICT",
+            ),
+            audio_input_channel_mode=env.get("HELIOS_AUDIO_INPUT_CHANNEL_MODE", "mono")
+            .strip()
+            .lower(),
+            audio_capture_level_min_rms=_float_from_env(
+                env.get("HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS", "0.001"),
+                "HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS",
+            ),
+            audio_capture_stall_seconds=_float_from_env(
+                env.get("HELIOS_AUDIO_CAPTURE_STALL_SECONDS", "5.0"),
+                "HELIOS_AUDIO_CAPTURE_STALL_SECONDS",
+            ),
+            audio_output_device=_audio_device_from_env(
+                env.get("HELIOS_AUDIO_OUTPUT_DEVICE"),
+                "HELIOS_AUDIO_OUTPUT_DEVICE",
+            ),
+            audio_output_latency=env.get("HELIOS_AUDIO_OUTPUT_LATENCY", "high"),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
             kpi=kpi,
+            endpointing=endpointing,
         )
 
     @property
@@ -1676,10 +2072,6 @@ class Settings:
     @property
     def upload_folder(self) -> Path:
         return self.project_root / "uploads"
-
-    @property
-    def tts_folder(self) -> Path:
-        return self.project_root / "tts_audio"
 
     @property
     def wake_sound(self) -> Path:
@@ -1697,10 +2089,6 @@ class Settings:
     def sentence_transformer_model(self) -> Path:
         return self.project_root / "models/all-MiniLM-L6-v2"
 
-    @property
-    def qa_json_path(self) -> Path:
-        return self.project_root / "document/q&a/IT-WSC_25.json"
-
 
 SETTINGS = Settings.from_env()
 PROFILE = SETTINGS.profile
@@ -1714,7 +2102,6 @@ LOG_FILE = str(SETTINGS.log_file) if SETTINGS.log_file else None
 
 NAME = SETTINGS.name
 LANGUAGE = SETTINGS.language
-TTS_FOLDER = str(SETTINGS.tts_folder)
 TTS_MODEL = str(PROFILE.tts_model)
 
 WAKE_WORD = PROFILE.wake_word
@@ -1728,7 +2115,6 @@ TIMEOUT_SOUND = STOP_SOUND
 UPLOAD_FOLDER = str(SETTINGS.upload_folder)
 
 VOSK_MODEL_PATH = str(PROFILE.vosk_model)
-VOICE = PROFILE.voice
 MODEL_TALK = PROFILE.talk_model
 MODEL_THINK = SETTINGS.think_model
 
@@ -1739,6 +2125,4 @@ PRES_A_SWITCH = {1: PRES_A_1, 2: PRES_A_2, 3: PRES_A_3}
 OLLAMA_HOST = SETTINGS.ollama_host
 # Legacy callers may still pass the generate endpoint; APIClient normalizes it.
 OLLAMA_API_URL = f"{OLLAMA_HOST}/api/generate"
-QA_JSON_PATH = str(SETTINGS.qa_json_path)
 TOP_K = SETTINGS.top_k
-EMBEDDING_MODEL = SETTINGS.embedding_model

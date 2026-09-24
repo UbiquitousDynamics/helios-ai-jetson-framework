@@ -849,6 +849,17 @@ class OpenAIChatSSEAdapter:
                 model=request.model,
                 transmitted=False,
             )
+        if any(
+            not message.remote_eligible
+            or origin is ContentOrigin.UNKNOWN
+            or ContentOrigin.UNKNOWN in message.source_origins
+            for message, origin in zip(request.messages, origins)
+        ):
+            raise self._error(
+                ErrorCategory.PRIVACY_BLOCKED,
+                model=request.model,
+                transmitted=False,
+            )
         if privacy is PrivacyLevel.REMOTE_REDACTED:
             unredacted = any(
                 origin is not ContentOrigin.STATIC_INSTRUCTION and message.redacted is not True

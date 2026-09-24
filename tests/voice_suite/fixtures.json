@@ -1,0 +1,2048 @@
+{
+  "schema_version": 1,
+  "catalog_version": "1.0.0",
+  "status": "static_baseline_no_audio_generated",
+  "synthesis": {
+    "entrypoint": "audio.tts.PiperTTS.synthesize_wave",
+    "reproducibility": "Piper has stochastic inference and this repository's synthesis entrypoint exposes no seed contract. Deterministic text and recipes alone do not guarantee byte-identical WAV. Future generation must pin generated PCM/WAV hashes, model/config hashes, exact Piper/ONNX Runtime versions, settings and sample rate; replay the same pinned PCM for comparisons. No stimulus audio is generated in the baseline.",
+    "speech_source": "Every speech segment, including overlap and echo, must use this entrypoint and its configured language voice. Silence/noise may be generated only as non-speech additions.",
+    "manifest_required": [
+      "fixture_id",
+      "catalog_version",
+      "model_sha256",
+      "config_sha256",
+      "piper_version",
+      "onnxruntime_version",
+      "python_version",
+      "platform",
+      "sample_rate_hz",
+      "channels",
+      "sample_width_bytes",
+      "synthesis_parameters",
+      "segment_pcm_sha256",
+      "final_pcm_sha256",
+      "wav_sha256",
+      "recipe_sha256"
+    ],
+    "mutation_policy": "Do not modify production synthesis parameters, thresholds or model files to pass."
+  },
+  "voices": {
+    "it": {
+      "model": "audio/models/it_IT-paola-medium.onnx",
+      "config": "audio/models/it_IT-paola-medium.onnx.json",
+      "sample_rate_hz": 22050
+    },
+    "en": {
+      "model": "audio/models/en_GB-alba-medium.onnx",
+      "config": "audio/models/en_GB-alba-medium.onnx.json",
+      "sample_rate_hz": 22050
+    }
+  },
+  "comparison": {
+    "normalization": "Unicode NFC, casefold, remove Unicode punctuation (P* category), collapse whitespace. Preserve accents, spoken repetitions and self-correction words. Do not translate, stem, reorder, semantically rewrite or remove fillers.",
+    "reference_policy": "These are expected synthetic transcripts, not observed Vosk output. Native and HIL validation in later tasks may fail; do not rewrite references merely to match recognizer errors.",
+    "silence_reference": "Empty expected transcript means no authoritative user turn. WER/CER have no reference denominator and are not applicable; false activation/dispatch remain measured."
+  },
+  "threshold_reference": {
+    "path": "tests/voice_suite/thresholds.json",
+    "join_key": "metric_ids",
+    "policy": "Every applicable metric must resolve to the selected versioned profile; unresolved, uncalibrated mandatory acoustic thresholds block a pass."
+  },
+  "execution_policy": {
+    "local_only": "No remote provider or external action. Deterministic fake backends may simulate task state; this is separate from acoustic evidence.",
+    "remote_allowed": "Synthetic public content is eligible only when deployment privacy, provider and network policy explicitly permit it; this field is not authorization or a runner.",
+    "artifact_directory": "Explicit ignored temporary directory selected before generation; audio and derived transcripts must remain there under bounded retention.",
+    "hil": "Requires explicit PC output/input and target input/output identifiers, calibration, isolated generated-audio environment, monitoring/loopback disabled, unique content-free exchange marker, bounded duration, runaway-level/retrigger abort and cleanup.",
+    "baseline": "Catalog recipes are specifications only; no runner, playback, capture, network call or later test task is implemented."
+  },
+  "fixtures": [
+    {
+      "id": "it-greeting",
+      "language": "it",
+      "text": "Emilia, dimmi il colore del cielo.",
+      "expected_authoritative_transcript": "emilia dimmi il colore del cielo",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "normal",
+      "response_constraints": [
+        "One authoritative transcript per declared turn; provisional revisions cannot dispatch or mutate history.",
+        "Response stays in the fixture language and preserves all requested information.",
+        "Only a valid synthetic response may satisfy acoustic response detection; wake acknowledgements and backchannels are separately labelled."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate"
+      ],
+      "execution": "remote_allowed",
+      "test_tasks": [
+        "01",
+        "02",
+        "05",
+        "06",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_speech",
+        "session": "wake_plus_command",
+        "repeat_counts": [
+          1,
+          50
+        ],
+        "sequence": "Each repeated stimulus has a fresh exchange correlation_id."
+      }
+    },
+    {
+      "id": "it-detailed-answer",
+      "language": "it",
+      "text": "Descrivi tre forme geometriche e una caratteristica di ciascuna.",
+      "expected_authoritative_transcript": "descrivi tre forme geometriche e una caratteristica di ciascuna",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "normal",
+      "response_constraints": [
+        "One authoritative transcript per declared turn; provisional revisions cannot dispatch or mutate history.",
+        "Response stays in the fixture language and preserves all requested information.",
+        "Only a valid synthetic response may satisfy acoustic response detection; wake acknowledgements and backchannels are separately labelled.",
+        "Name exactly three shapes and give a property of each; completeness is checked against the fixture rubric, not response duration."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate"
+      ],
+      "execution": "remote_allowed",
+      "test_tasks": [
+        "05",
+        "06",
+        "10",
+        "12",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_speech",
+        "session": "active",
+        "provider_delay_variants_ms": [
+          0,
+          2000
+        ],
+        "pacing_modes": [
+          "normal",
+          "dictation",
+          "sensitive_confirmation"
+        ]
+      }
+    },
+    {
+      "id": "it-wake-followups",
+      "language": "it",
+      "text": "Emilia.",
+      "expected_authoritative_transcript": "emilia",
+      "expected_intent": "wake_and_followups",
+      "privacy": "synthetic_public",
+      "category": "normal",
+      "response_constraints": [
+        "Wake-only activation yields a localized acknowledgement and no model turn.",
+        "All ten declared followups before expiry are accepted without another wake word.",
+        "Expiry, explicit termination and reset require reactivation; idle silence does not refresh expiry."
+      ],
+      "metric_ids": [
+        "activation_ms",
+        "followup_acceptance_rate",
+        "false_activation_rate",
+        "session_expiry_correctness_rate",
+        "duplicate_dispatch_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "01",
+        "05",
+        "09",
+        "16"
+      ],
+      "recipe": {
+        "kind": "session_sequence",
+        "wake_text": "Emilia.",
+        "followup_text": "Dimmi un colore.",
+        "followup_count": 10,
+        "expiry_variants": [
+          "before_configured_expiry",
+          "at_configured_expiry",
+          "after_configured_expiry"
+        ],
+        "idle_silence_ms": 1500,
+        "reset_after": true
+      }
+    },
+    {
+      "id": "it-short-thinking-pause",
+      "language": "it",
+      "text": "Descrivi il cerchio e il quadrato.",
+      "expected_authoritative_transcript": "descrivi il cerchio e il quadrato",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "pause_correction",
+      "response_constraints": [
+        "One authoritative transcript per declared turn; provisional revisions cannot dispatch or mutate history.",
+        "Response stays in the fixture language and preserves all requested information.",
+        "Only a valid synthetic response may satisfy acoustic response detection; wake acknowledgements and backchannels are separately labelled."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate",
+        "premature_finalization_rate",
+        "correction_retention_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "04",
+        "06",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_segments",
+        "segments": [
+          "Descrivi il cerchio",
+          "e il quadrato."
+        ],
+        "inter_segment_silence_ms": 250,
+        "variants_silence_ms": [
+          250,
+          900,
+          1800
+        ],
+        "boundary_policy": "Use each measured endpoint configuration for just-before, at and just-after boundary variants."
+      }
+    },
+    {
+      "id": "it-self-correction",
+      "language": "it",
+      "text": "Martedì, anzi, mercoledì.",
+      "expected_authoritative_transcript": "martedì anzi mercoledì",
+      "expected_intent": "correct_previous_words",
+      "privacy": "synthetic_public",
+      "category": "pause_correction",
+      "response_constraints": [
+        "Authoritative text preserves the spoken original and correction in order; expected intent is Wednesday.",
+        "No guessed semantic rewrite or early partial dispatch; exactly one final dispatch."
+      ],
+      "metric_ids": [
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "correction_retention_rate",
+        "duplicate_dispatch_rate",
+        "premature_finalization_rate",
+        "endpointing_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "04",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_segments",
+        "segments": [
+          "Martedì",
+          "anzi, mercoledì."
+        ],
+        "inter_segment_silence_ms": 300
+      }
+    },
+    {
+      "id": "it-repetition",
+      "language": "it",
+      "text": "Il colore, il colore è blu.",
+      "expected_authoritative_transcript": "il colore il colore è blu",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "pause_correction",
+      "response_constraints": [
+        "Preserve the audible repetition; one authoritative final dispatch."
+      ],
+      "metric_ids": [
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "premature_finalization_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "04",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_segments",
+        "segments": [
+          "Il colore",
+          "il colore è blu."
+        ],
+        "inter_segment_silence_ms": 200
+      }
+    },
+    {
+      "id": "it-genuine-interruption",
+      "language": "it",
+      "text": "Parlami invece del triangolo.",
+      "expected_authoritative_transcript": "parlami invece del triangolo",
+      "expected_intent": "replace_response",
+      "privacy": "synthetic_public",
+      "category": "barge_in",
+      "response_constraints": [
+        "Genuine synthetic user speech causes timely duck/stop and one confirmed turn.",
+        "No lost confirmed turn, deadlock or second microphone owner."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "missed_barge_in_rate",
+        "unexpected_overlap_rate",
+        "capture_gap_ms",
+        "queue_depth",
+        "resume_correctness_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "06",
+        "07",
+        "10",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "overlapping_piper_speech",
+        "assistant_text": "Il cerchio è una forma curva. Il quadrato ha quattro lati.",
+        "stimulus_offset_after_target_playback_ms": 450,
+        "phase_variants": [
+          "model_generation",
+          "tts_synthesis",
+          "playback_start",
+          "active_playback",
+          "playback_drain"
+        ],
+        "repeat_count": 3
+      }
+    },
+    {
+      "id": "it-repeated-interruption",
+      "language": "it",
+      "text": "Ora descrivi il rettangolo.",
+      "expected_authoritative_transcript": "ora descrivi il rettangolo",
+      "expected_intent": "replace_response",
+      "privacy": "synthetic_public",
+      "category": "barge_in",
+      "response_constraints": [
+        "Every confirmed interruption is correlated and bounded; earlier response audio does not restart.",
+        "All queues and owned workers drain within configured bounds."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "missed_barge_in_rate",
+        "false_barge_in_rate",
+        "queue_depth",
+        "leaked_workers",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "06",
+        "07",
+        "10",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "overlapping_piper_speech",
+        "assistant_text": "Questa è una risposta sintetica lunga per la prova.",
+        "stimulus_offset_after_target_playback_ms": 500,
+        "repeat_count": 5,
+        "wait_for_playback_between_repetitions": true
+      }
+    },
+    {
+      "id": "it-stop-speaking",
+      "language": "it",
+      "text": "smetti di parlare",
+      "expected_authoritative_transcript": "smetti di parlare",
+      "expected_intent": "STOP_SPEAKING",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "it-mute",
+      "language": "it",
+      "text": "disattiva audio",
+      "expected_authoritative_transcript": "disattiva audio",
+      "expected_intent": "MUTE",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "it-unmute",
+      "language": "it",
+      "text": "riattiva audio",
+      "expected_authoritative_transcript": "riattiva audio",
+      "expected_intent": "UNMUTE",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "muted"
+      }
+    },
+    {
+      "id": "it-suspend-session",
+      "language": "it",
+      "text": "sospendi sessione",
+      "expected_authoritative_transcript": "sospendi sessione",
+      "expected_intent": "SUSPEND_SESSION",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "it-resume-session",
+      "language": "it",
+      "text": "riprendi sessione",
+      "expected_authoritative_transcript": "riprendi sessione",
+      "expected_intent": "RESUME_SESSION",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "suspended"
+      }
+    },
+    {
+      "id": "it-end-session",
+      "language": "it",
+      "text": "termina sessione",
+      "expected_authoritative_transcript": "termina sessione",
+      "expected_intent": "END_SESSION",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "it-cancel-task",
+      "language": "it",
+      "text": "annulla compito",
+      "expected_authoritative_transcript": "annulla compito",
+      "expected_intent": "CANCEL_TASK",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "synthetic_fake_backend_task"
+      }
+    },
+    {
+      "id": "it-task-update",
+      "language": "it",
+      "text": "Cambia il colore del compito sintetico da blu a verde.",
+      "expected_authoritative_transcript": "cambia il colore del compito sintetico da blu a verde",
+      "expected_intent": "update_task",
+      "privacy": "synthetic_public",
+      "category": "task_steering",
+      "response_constraints": [
+        "Only deterministic fake backend state may change; no real external task is executed.",
+        "Causal task IDs connect updates, supersession and acknowledgements.",
+        "Late old results cannot change new state; completion is spoken only after authoritative acknowledgement."
+      ],
+      "metric_ids": [
+        "task_transition_ms",
+        "steering_ms",
+        "stale_result_rate",
+        "supersession_correctness_rate",
+        "verified_completion_precision",
+        "verified_completion_recall",
+        "premature_success_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "11",
+        "12",
+        "13",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "fake_backend_task",
+        "initial_payload": {
+          "colour": "blue"
+        },
+        "updated_payload": {
+          "colour": "green"
+        },
+        "acknowledgement": "explicit_delayed",
+        "repeat_count": 3,
+        "late_result_after_steering": true
+      }
+    },
+    {
+      "id": "it-task-replacement",
+      "language": "it",
+      "text": "Sostituisci il compito sintetico con una lista di forme.",
+      "expected_authoritative_transcript": "sostituisci il compito sintetico con una lista di forme",
+      "expected_intent": "replace_task",
+      "privacy": "synthetic_public",
+      "category": "task_steering",
+      "response_constraints": [
+        "Only deterministic fake backend state may change; no real external task is executed.",
+        "Illegal transitions, stale completions and failed confirmation cannot report success.",
+        "Ordinary conversation remains responsive and its history retains valid turns."
+      ],
+      "metric_ids": [
+        "task_transition_ms",
+        "steering_ms",
+        "stale_result_rate",
+        "supersession_correctness_rate",
+        "verified_completion_precision",
+        "verified_completion_recall",
+        "premature_success_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "11",
+        "12",
+        "13",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "fake_backend_task",
+        "initial_payload": {
+          "operation": "colours"
+        },
+        "updated_payload": {
+          "operation": "shapes"
+        },
+        "state_variants": [
+          "PENDING",
+          "EXECUTING",
+          "WAITING_FOR_USER",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED",
+          "SUPERSEDED"
+        ],
+        "race_variants": [
+          "cancel_before_ack",
+          "cancel_after_ack",
+          "late_old_result",
+          "confirmation_denied"
+        ],
+        "acknowledgement": "explicit_delayed"
+      }
+    },
+    {
+      "id": "it-silence",
+      "language": "it",
+      "text": "",
+      "expected_authoritative_transcript": "",
+      "expected_intent": "ignore",
+      "privacy": "synthetic_public",
+      "category": "noise",
+      "response_constraints": [
+        "Silence yields no authoritative turn, model dispatch, activation or interruption."
+      ],
+      "metric_ids": [
+        "false_barge_in_rate",
+        "false_activation_rate",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "03",
+        "07",
+        "09",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "silence",
+        "duration_ms": 2000,
+        "piper_synthesis": false
+      }
+    },
+    {
+      "id": "it-background-noise",
+      "language": "it",
+      "text": "Il triangolo ha tre lati.",
+      "expected_authoritative_transcript": "il triangolo ha tre lati",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "noise",
+      "response_constraints": [
+        "Speech is always Piper PCM; deterministic artificial noise is only an additive contaminant.",
+        "Noise alone must not finalize a turn or confirm interruption."
+      ],
+      "metric_ids": [
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "false_barge_in_rate",
+        "missed_barge_in_rate",
+        "premature_finalization_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "03",
+        "06",
+        "07",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_with_noise",
+        "noise": {
+          "generator": "numpy.random.Generator(PCG64)",
+          "seed": 41001,
+          "distribution": "zero_mean_gaussian",
+          "snr_db": 15
+        },
+        "peak_limit_dbfs": -3,
+        "noise_only_prefix_ms": 700
+      }
+    },
+    {
+      "id": "it-tts-echo",
+      "language": "it",
+      "text": "",
+      "expected_authoritative_transcript": "",
+      "expected_intent": "ignore_echo",
+      "privacy": "synthetic_public",
+      "category": "noise",
+      "response_constraints": [
+        "The assistant's own speech creates no user turn or confirmed interruption.",
+        "Any provisional duck rejected as echo resumes the exact buffered response without replay."
+      ],
+      "metric_ids": [
+        "false_barge_in_rate",
+        "residual_echo_rate",
+        "resume_correctness_rate",
+        "unexpected_overlap_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "06",
+        "07",
+        "10",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "target_tts_echo",
+        "assistant_text": "Questa frase sintetica descrive un cerchio blu.",
+        "user_speech": false,
+        "echo_delay_ms": 70,
+        "echo_gain_db": -12,
+        "variants": [
+          "exact_pcm",
+          "attenuated",
+          "delayed",
+          "band_limited"
+        ],
+        "source": "Capture or replay only the pinned Piper-synthesized response; never substitute arbitrary WAV speech."
+      }
+    },
+    {
+      "id": "it-privacy-denied",
+      "language": "it",
+      "text": "Elenca due colori.",
+      "expected_authoritative_transcript": "elenca due colori",
+      "expected_intent": "conversation_local_only",
+      "privacy": "synthetic_public",
+      "category": "failure",
+      "response_constraints": [
+        "No prompt, transcript or fixture content leaves the local boundary.",
+        "Allowed local fallback is accurate; no replay occurs after speech commit.",
+        "Backend failure cannot become a success claim."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate",
+        "unauthorized_egress_count",
+        "premature_success_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "12",
+        "14",
+        "16"
+      ],
+      "recipe": {
+        "kind": "policy_failure",
+        "privacy": "remote_denied",
+        "network_variants": [
+          "denied",
+          "available"
+        ],
+        "provider_failure_variants": [
+          "before_first_speech",
+          "after_speech_commit"
+        ]
+      }
+    },
+    {
+      "id": "it-provider-failure",
+      "language": "it",
+      "text": "Spiega la forma di un cerchio.",
+      "expected_authoritative_transcript": "spiega la forma di un cerchio",
+      "expected_intent": "provider_recovery",
+      "privacy": "synthetic_public",
+      "category": "failure",
+      "response_constraints": [
+        "Failing components yield accurate failure wording and bounded floor recovery.",
+        "No fallback speech replay after commit; no leaked stream, process or worker."
+      ],
+      "metric_ids": [
+        "recovery_ms",
+        "response_completeness_rate",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "leaked_workers",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "06",
+        "10",
+        "12",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "injected_failure",
+        "failure_variants": [
+          "provider_before_speech",
+          "provider_after_speech",
+          "tts_synthesis",
+          "playback_device",
+          "capture_device"
+        ],
+        "network": "denied",
+        "bounded_shutdown_required": true
+      }
+    },
+    {
+      "id": "it-short-ambiguous-candidate",
+      "language": "it",
+      "text": "Ah.",
+      "expected_authoritative_transcript": "ah",
+      "expected_intent": "reject_unconfirmed_interruption",
+      "privacy": "synthetic_public",
+      "category": "failure",
+      "response_constraints": [
+        "A short unconfirmed candidate must not cancel model/history; rejected provisional duck resumes exact buffered audio.",
+        "Partial-only recognition is reported with an explicit candidate outcome."
+      ],
+      "metric_ids": [
+        "false_barge_in_rate",
+        "resume_correctness_rate",
+        "partial_only_turn_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "07",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_speech",
+        "assistant_text": "Descrivo una forma per questa prova sintetica.",
+        "overlap_ms": 300,
+        "energy_variants_dbfs": [
+          -30,
+          -40
+        ],
+        "candidate_outcomes": [
+          "no_authoritative_final",
+          "echo_match",
+          "timeout"
+        ]
+      }
+    },
+    {
+      "id": "en-greeting",
+      "language": "en",
+      "text": "Emilia, tell me the colour of the sky.",
+      "expected_authoritative_transcript": "emilia tell me the colour of the sky",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "normal",
+      "response_constraints": [
+        "One authoritative transcript per declared turn; provisional revisions cannot dispatch or mutate history.",
+        "Response stays in the fixture language and preserves all requested information.",
+        "Only a valid synthetic response may satisfy acoustic response detection; wake acknowledgements and backchannels are separately labelled."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate"
+      ],
+      "execution": "remote_allowed",
+      "test_tasks": [
+        "01",
+        "02",
+        "05",
+        "06",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_speech",
+        "session": "wake_plus_command",
+        "repeat_counts": [
+          1,
+          50
+        ],
+        "sequence": "Each repeated stimulus has a fresh exchange correlation_id."
+      }
+    },
+    {
+      "id": "en-detailed-answer",
+      "language": "en",
+      "text": "Describe three geometric shapes and one property of each.",
+      "expected_authoritative_transcript": "describe three geometric shapes and one property of each",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "normal",
+      "response_constraints": [
+        "One authoritative transcript per declared turn; provisional revisions cannot dispatch or mutate history.",
+        "Response stays in the fixture language and preserves all requested information.",
+        "Only a valid synthetic response may satisfy acoustic response detection; wake acknowledgements and backchannels are separately labelled.",
+        "Name exactly three shapes and give a property of each; completeness is checked against the fixture rubric, not response duration."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate"
+      ],
+      "execution": "remote_allowed",
+      "test_tasks": [
+        "05",
+        "06",
+        "10",
+        "12",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_speech",
+        "session": "active",
+        "provider_delay_variants_ms": [
+          0,
+          2000
+        ],
+        "pacing_modes": [
+          "normal",
+          "dictation",
+          "sensitive_confirmation"
+        ]
+      }
+    },
+    {
+      "id": "en-wake-followups",
+      "language": "en",
+      "text": "Emilia.",
+      "expected_authoritative_transcript": "emilia",
+      "expected_intent": "wake_and_followups",
+      "privacy": "synthetic_public",
+      "category": "normal",
+      "response_constraints": [
+        "Wake-only activation yields a localized acknowledgement and no model turn.",
+        "All ten declared followups before expiry are accepted without another wake word.",
+        "Expiry, explicit termination and reset require reactivation; idle silence does not refresh expiry."
+      ],
+      "metric_ids": [
+        "activation_ms",
+        "followup_acceptance_rate",
+        "false_activation_rate",
+        "session_expiry_correctness_rate",
+        "duplicate_dispatch_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "01",
+        "05",
+        "09",
+        "16"
+      ],
+      "recipe": {
+        "kind": "session_sequence",
+        "wake_text": "Emilia.",
+        "followup_text": "Name a colour.",
+        "followup_count": 10,
+        "expiry_variants": [
+          "before_configured_expiry",
+          "at_configured_expiry",
+          "after_configured_expiry"
+        ],
+        "idle_silence_ms": 1500,
+        "reset_after": true
+      }
+    },
+    {
+      "id": "en-short-thinking-pause",
+      "language": "en",
+      "text": "Describe the circle and the square.",
+      "expected_authoritative_transcript": "describe the circle and the square",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "pause_correction",
+      "response_constraints": [
+        "One authoritative transcript per declared turn; provisional revisions cannot dispatch or mutate history.",
+        "Response stays in the fixture language and preserves all requested information.",
+        "Only a valid synthetic response may satisfy acoustic response detection; wake acknowledgements and backchannels are separately labelled."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate",
+        "premature_finalization_rate",
+        "correction_retention_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "04",
+        "06",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_segments",
+        "segments": [
+          "Describe the circle",
+          "and the square."
+        ],
+        "inter_segment_silence_ms": 250,
+        "variants_silence_ms": [
+          250,
+          900,
+          1800
+        ],
+        "boundary_policy": "Use each measured endpoint configuration for just-before, at and just-after boundary variants."
+      }
+    },
+    {
+      "id": "en-self-correction",
+      "language": "en",
+      "text": "Tuesday, actually, Wednesday.",
+      "expected_authoritative_transcript": "tuesday actually wednesday",
+      "expected_intent": "correct_previous_words",
+      "privacy": "synthetic_public",
+      "category": "pause_correction",
+      "response_constraints": [
+        "Authoritative text preserves the spoken original and correction in order; expected intent is Wednesday.",
+        "No guessed semantic rewrite or early partial dispatch; exactly one final dispatch."
+      ],
+      "metric_ids": [
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "correction_retention_rate",
+        "duplicate_dispatch_rate",
+        "premature_finalization_rate",
+        "endpointing_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "04",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_segments",
+        "segments": [
+          "Tuesday",
+          "actually, Wednesday."
+        ],
+        "inter_segment_silence_ms": 300
+      }
+    },
+    {
+      "id": "en-repetition",
+      "language": "en",
+      "text": "The colour, the colour is blue.",
+      "expected_authoritative_transcript": "the colour the colour is blue",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "pause_correction",
+      "response_constraints": [
+        "Preserve the audible repetition; one authoritative final dispatch."
+      ],
+      "metric_ids": [
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "premature_finalization_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "04",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_segments",
+        "segments": [
+          "The colour",
+          "the colour is blue."
+        ],
+        "inter_segment_silence_ms": 200
+      }
+    },
+    {
+      "id": "en-genuine-interruption",
+      "language": "en",
+      "text": "Tell me about the triangle instead.",
+      "expected_authoritative_transcript": "tell me about the triangle instead",
+      "expected_intent": "replace_response",
+      "privacy": "synthetic_public",
+      "category": "barge_in",
+      "response_constraints": [
+        "Genuine synthetic user speech causes timely duck/stop and one confirmed turn.",
+        "No lost confirmed turn, deadlock or second microphone owner."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "missed_barge_in_rate",
+        "unexpected_overlap_rate",
+        "capture_gap_ms",
+        "queue_depth",
+        "resume_correctness_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "06",
+        "07",
+        "10",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "overlapping_piper_speech",
+        "assistant_text": "A circle is a curved shape. A square has four sides.",
+        "stimulus_offset_after_target_playback_ms": 450,
+        "phase_variants": [
+          "model_generation",
+          "tts_synthesis",
+          "playback_start",
+          "active_playback",
+          "playback_drain"
+        ],
+        "repeat_count": 3
+      }
+    },
+    {
+      "id": "en-repeated-interruption",
+      "language": "en",
+      "text": "Now describe the rectangle.",
+      "expected_authoritative_transcript": "now describe the rectangle",
+      "expected_intent": "replace_response",
+      "privacy": "synthetic_public",
+      "category": "barge_in",
+      "response_constraints": [
+        "Every confirmed interruption is correlated and bounded; earlier response audio does not restart.",
+        "All queues and owned workers drain within configured bounds."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "missed_barge_in_rate",
+        "false_barge_in_rate",
+        "queue_depth",
+        "leaked_workers",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "06",
+        "07",
+        "10",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "overlapping_piper_speech",
+        "assistant_text": "This is a long synthetic response for the test.",
+        "stimulus_offset_after_target_playback_ms": 500,
+        "repeat_count": 5,
+        "wait_for_playback_between_repetitions": true
+      }
+    },
+    {
+      "id": "en-stop-speaking",
+      "language": "en",
+      "text": "stop speaking",
+      "expected_authoritative_transcript": "stop speaking",
+      "expected_intent": "STOP_SPEAKING",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "en-mute",
+      "language": "en",
+      "text": "mute audio",
+      "expected_authoritative_transcript": "mute audio",
+      "expected_intent": "MUTE",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "en-unmute",
+      "language": "en",
+      "text": "unmute audio",
+      "expected_authoritative_transcript": "unmute audio",
+      "expected_intent": "UNMUTE",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "muted"
+      }
+    },
+    {
+      "id": "en-suspend-session",
+      "language": "en",
+      "text": "suspend session",
+      "expected_authoritative_transcript": "suspend session",
+      "expected_intent": "SUSPEND_SESSION",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "en-resume-session",
+      "language": "en",
+      "text": "resume session",
+      "expected_authoritative_transcript": "resume session",
+      "expected_intent": "RESUME_SESSION",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "suspended"
+      }
+    },
+    {
+      "id": "en-end-session",
+      "language": "en",
+      "text": "end session",
+      "expected_authoritative_transcript": "end session",
+      "expected_intent": "END_SESSION",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "active_session"
+      }
+    },
+    {
+      "id": "en-cancel-task",
+      "language": "en",
+      "text": "cancel the task",
+      "expected_authoritative_transcript": "cancel the task",
+      "expected_intent": "CANCEL_TASK",
+      "privacy": "synthetic_public",
+      "category": "control",
+      "response_constraints": [
+        "Control is handled locally without LLM/tools/RAG/history or an ordinary conversation turn.",
+        "Expected control state is reached and playback behavior matches that control.",
+        "Task cancellation is verified against the fake backend when available; absence is reported, never falsely confirmed."
+      ],
+      "metric_ids": [
+        "interruption_ms",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "07",
+        "08",
+        "09",
+        "10",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "offline_control",
+        "network": "denied",
+        "state_variants": [
+          "idle",
+          "generating",
+          "synthesizing",
+          "playing"
+        ],
+        "required_setup": "synthetic_fake_backend_task"
+      }
+    },
+    {
+      "id": "en-task-update",
+      "language": "en",
+      "text": "Change the synthetic task colour from blue to green.",
+      "expected_authoritative_transcript": "change the synthetic task colour from blue to green",
+      "expected_intent": "update_task",
+      "privacy": "synthetic_public",
+      "category": "task_steering",
+      "response_constraints": [
+        "Only deterministic fake backend state may change; no real external task is executed.",
+        "Causal task IDs connect updates, supersession and acknowledgements.",
+        "Late old results cannot change new state; completion is spoken only after authoritative acknowledgement."
+      ],
+      "metric_ids": [
+        "task_transition_ms",
+        "steering_ms",
+        "stale_result_rate",
+        "supersession_correctness_rate",
+        "verified_completion_precision",
+        "verified_completion_recall",
+        "premature_success_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "11",
+        "12",
+        "13",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "fake_backend_task",
+        "initial_payload": {
+          "colour": "blue"
+        },
+        "updated_payload": {
+          "colour": "green"
+        },
+        "acknowledgement": "explicit_delayed",
+        "repeat_count": 3,
+        "late_result_after_steering": true
+      }
+    },
+    {
+      "id": "en-task-replacement",
+      "language": "en",
+      "text": "Replace the synthetic task with a list of shapes.",
+      "expected_authoritative_transcript": "replace the synthetic task with a list of shapes",
+      "expected_intent": "replace_task",
+      "privacy": "synthetic_public",
+      "category": "task_steering",
+      "response_constraints": [
+        "Only deterministic fake backend state may change; no real external task is executed.",
+        "Illegal transitions, stale completions and failed confirmation cannot report success.",
+        "Ordinary conversation remains responsive and its history retains valid turns."
+      ],
+      "metric_ids": [
+        "task_transition_ms",
+        "steering_ms",
+        "stale_result_rate",
+        "supersession_correctness_rate",
+        "verified_completion_precision",
+        "verified_completion_recall",
+        "premature_success_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "11",
+        "12",
+        "13",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "fake_backend_task",
+        "initial_payload": {
+          "operation": "colours"
+        },
+        "updated_payload": {
+          "operation": "shapes"
+        },
+        "state_variants": [
+          "PENDING",
+          "EXECUTING",
+          "WAITING_FOR_USER",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED",
+          "SUPERSEDED"
+        ],
+        "race_variants": [
+          "cancel_before_ack",
+          "cancel_after_ack",
+          "late_old_result",
+          "confirmation_denied"
+        ],
+        "acknowledgement": "explicit_delayed"
+      }
+    },
+    {
+      "id": "en-silence",
+      "language": "en",
+      "text": "",
+      "expected_authoritative_transcript": "",
+      "expected_intent": "ignore",
+      "privacy": "synthetic_public",
+      "category": "noise",
+      "response_constraints": [
+        "Silence yields no authoritative turn, model dispatch, activation or interruption."
+      ],
+      "metric_ids": [
+        "false_barge_in_rate",
+        "false_activation_rate",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "03",
+        "07",
+        "09",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "silence",
+        "duration_ms": 2000,
+        "piper_synthesis": false
+      }
+    },
+    {
+      "id": "en-background-noise",
+      "language": "en",
+      "text": "The triangle has three sides.",
+      "expected_authoritative_transcript": "the triangle has three sides",
+      "expected_intent": "conversation",
+      "privacy": "synthetic_public",
+      "category": "noise",
+      "response_constraints": [
+        "Speech is always Piper PCM; deterministic artificial noise is only an additive contaminant.",
+        "Noise alone must not finalize a turn or confirm interruption."
+      ],
+      "metric_ids": [
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "false_barge_in_rate",
+        "missed_barge_in_rate",
+        "premature_finalization_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "03",
+        "06",
+        "07",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_with_noise",
+        "noise": {
+          "generator": "numpy.random.Generator(PCG64)",
+          "seed": 41001,
+          "distribution": "zero_mean_gaussian",
+          "snr_db": 15
+        },
+        "peak_limit_dbfs": -3,
+        "noise_only_prefix_ms": 700
+      }
+    },
+    {
+      "id": "en-tts-echo",
+      "language": "en",
+      "text": "",
+      "expected_authoritative_transcript": "",
+      "expected_intent": "ignore_echo",
+      "privacy": "synthetic_public",
+      "category": "noise",
+      "response_constraints": [
+        "The assistant's own speech creates no user turn or confirmed interruption.",
+        "Any provisional duck rejected as echo resumes the exact buffered response without replay."
+      ],
+      "metric_ids": [
+        "false_barge_in_rate",
+        "residual_echo_rate",
+        "resume_correctness_rate",
+        "unexpected_overlap_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "06",
+        "07",
+        "10",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "target_tts_echo",
+        "assistant_text": "This synthetic phrase describes a blue circle.",
+        "user_speech": false,
+        "echo_delay_ms": 70,
+        "echo_gain_db": -12,
+        "variants": [
+          "exact_pcm",
+          "attenuated",
+          "delayed",
+          "band_limited"
+        ],
+        "source": "Capture or replay only the pinned Piper-synthesized response; never substitute arbitrary WAV speech."
+      }
+    },
+    {
+      "id": "en-privacy-denied",
+      "language": "en",
+      "text": "List two colours.",
+      "expected_authoritative_transcript": "list two colours",
+      "expected_intent": "conversation_local_only",
+      "privacy": "synthetic_public",
+      "category": "failure",
+      "response_constraints": [
+        "No prompt, transcript or fixture content leaves the local boundary.",
+        "Allowed local fallback is accurate; no replay occurs after speech commit.",
+        "Backend failure cannot become a success claim."
+      ],
+      "metric_ids": [
+        "end_to_end_first_audio_ms",
+        "final_answer_ms",
+        "stt_ms",
+        "model_ttft_ms",
+        "model_generation_ms",
+        "tts_first_audio_ms",
+        "tts_synthesis_ms",
+        "endpointing_ms",
+        "wer",
+        "cer",
+        "exact_final_rate",
+        "duplicate_dispatch_rate",
+        "dropped_turn_rate",
+        "partial_only_turn_rate",
+        "response_completeness_rate",
+        "unexpected_overlap_rate",
+        "unauthorized_egress_count",
+        "premature_success_count"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "12",
+        "14",
+        "16"
+      ],
+      "recipe": {
+        "kind": "policy_failure",
+        "privacy": "remote_denied",
+        "network_variants": [
+          "denied",
+          "available"
+        ],
+        "provider_failure_variants": [
+          "before_first_speech",
+          "after_speech_commit"
+        ]
+      }
+    },
+    {
+      "id": "en-provider-failure",
+      "language": "en",
+      "text": "Explain the shape of a circle.",
+      "expected_authoritative_transcript": "explain the shape of a circle",
+      "expected_intent": "provider_recovery",
+      "privacy": "synthetic_public",
+      "category": "failure",
+      "response_constraints": [
+        "Failing components yield accurate failure wording and bounded floor recovery.",
+        "No fallback speech replay after commit; no leaked stream, process or worker."
+      ],
+      "metric_ids": [
+        "recovery_ms",
+        "response_completeness_rate",
+        "duplicate_dispatch_rate",
+        "unauthorized_egress_count",
+        "leaked_workers",
+        "cleanup_ms"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "05",
+        "06",
+        "10",
+        "12",
+        "14",
+        "15",
+        "16"
+      ],
+      "recipe": {
+        "kind": "injected_failure",
+        "failure_variants": [
+          "provider_before_speech",
+          "provider_after_speech",
+          "tts_synthesis",
+          "playback_device",
+          "capture_device"
+        ],
+        "network": "denied",
+        "bounded_shutdown_required": true
+      }
+    },
+    {
+      "id": "en-short-ambiguous-candidate",
+      "language": "en",
+      "text": "Ah.",
+      "expected_authoritative_transcript": "ah",
+      "expected_intent": "reject_unconfirmed_interruption",
+      "privacy": "synthetic_public",
+      "category": "failure",
+      "response_constraints": [
+        "A short unconfirmed candidate must not cancel model/history; rejected provisional duck resumes exact buffered audio.",
+        "Partial-only recognition is reported with an explicit candidate outcome."
+      ],
+      "metric_ids": [
+        "false_barge_in_rate",
+        "resume_correctness_rate",
+        "partial_only_turn_rate"
+      ],
+      "execution": "local_only",
+      "test_tasks": [
+        "02",
+        "03",
+        "07",
+        "16"
+      ],
+      "recipe": {
+        "kind": "piper_speech",
+        "assistant_text": "I am describing a shape for this synthetic test.",
+        "overlap_ms": 300,
+        "energy_variants_dbfs": [
+          -30,
+          -40
+        ],
+        "candidate_outcomes": [
+          "no_authoritative_final",
+          "echo_match",
+          "timeout"
+        ]
+      }
+    }
+  ]
+}

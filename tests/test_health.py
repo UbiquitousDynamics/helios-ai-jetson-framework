@@ -72,6 +72,15 @@ def test_retry_after_auth_and_quota_have_independent_reset_paths():
     assert health.is_available("quota")
 
 
+def test_empty_premium_credits_do_not_clear_on_a_rate_window_timer():
+    now = [0.0]
+    health = HealthTracker(clock=lambda: now[0])
+    health.record_failure("premium", ErrorCategory.CREDIT_EXHAUSTED)
+    assert health.snapshot("premium").status is HealthStatus.QUOTA_BLOCKED
+    now[0] = 604800.0
+    assert not health.is_available("premium")
+
+
 def test_non_retryable_request_errors_do_not_poison_provider_health():
     health = HealthTracker(failures_to_open=1)
     health.record_failure("p/m", ErrorCategory.CONTEXT_OVERFLOW)

@@ -151,6 +151,8 @@ class MetricEvent:
     audio_duration_ms: float | None = None
     end_to_end_ms: float | None = None
     streaming_lead_ms: float | None = None
+    cold_load_ms: float | None = None
+    warm_first_token_ms: float | None = None
 
     # Network measurements.
     dns_ms: float | None = None
@@ -235,6 +237,8 @@ class MetricEvent:
         for name in (
             "latency_ms",
             "first_token_ms",
+            "cold_load_ms",
+            "warm_first_token_ms",
             "first_audio_ms",
             "actual_first_audio_ms",
             "speech_dispatch_ms",

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "profile_version": "1.0.0",
+  "test_task": "02",
+  "scope": "Local transcript authority only. Acoustic thresholds remain in thresholds.json and require selected devices and calibration.",
+  "profiles": {
+    "desktop": {
+      "minimum_scenarios": 10,
+      "maximum_events": 256,
+      "invariants": {
+        "authority_mismatches": {"definition": "Observed provisional/final/ignored classification differs from declared event authority.", "unit": "events", "maximum": 0, "minimum_samples": 10, "artifact_source": "Sanitized events.jsonl"},
+        "final_count_mismatches": {"definition": "Observed authoritative finals differ from the declared count for a scenario.", "unit": "scenarios", "maximum": 0, "minimum_samples": 10, "artifact_source": "Sanitized cases.jsonl"},
+        "provisional_sink_admissions": {"definition": "A provisional value is accepted by authoritative_text into an authority requiring downstream boundary.", "unit": "events", "maximum": 0, "minimum_samples": 10, "artifact_source": "Sanitized events.jsonl"}
+      }
+    },
+    "jetson": {
+      "minimum_scenarios": 10,
+      "maximum_events": 256,
+      "invariants": {
+        "authority_mismatches": {"definition": "Observed provisional/final/ignored classification differs from declared event authority.", "unit": "events", "maximum": 0, "minimum_samples": 10, "artifact_source": "Sanitized events.jsonl"},
+        "final_count_mismatches": {"definition": "Observed authoritative finals differ from the declared count for a scenario.", "unit": "scenarios", "maximum": 0, "minimum_samples": 10, "artifact_source": "Sanitized cases.jsonl"},
+        "provisional_sink_admissions": {"definition": "A provisional value is accepted by authoritative_text into an authority requiring downstream boundary.", "unit": "events", "maximum": 0, "minimum_samples": 10, "artifact_source": "Sanitized events.jsonl"}
+      }
+    }
+  }
+}

@@ -30,7 +30,10 @@ from api.providers.contracts import (
     TextDelta,
 )
 from api.routing import ProviderRegistry, ProviderTarget
+from audio.speech_pipeline import SpeechPipeline
+from audio.tts import SpeechTiming
 from api.streaming import (
+    CancellationController,
     ExecutionTarget,
     SpeechReplayUnsafeError,
     StreamingResponseCoordinator,
@@ -63,10 +66,17 @@ def request() -> ChatRequest:
 
 
 class FakeProvider:
-    def __init__(self, name: str, streams: list[object]) -> None:
+    def __init__(
+        self,
+        name: str,
+        streams: list[object],
+        *,
+        expected_cancellation: object | None = None,
+    ) -> None:
         self.name = name
         self.streams = iter(streams)
         self.calls: list[ChatRequest] = []
+        self.expected_cancellation = expected_cancellation
 
     @property
     def identity(self) -> ProviderIdentity:
@@ -82,7 +92,7 @@ class FakeProvider:
         *,
         cancellation: object | None = None,
     ) -> Iterable[object]:
-        assert cancellation is None
+        assert cancellation is self.expected_cancellation
         self.calls.append(chat_request)
         stream = next(self.streams)
         if isinstance(stream, Exception):
@@ -160,6 +170,36 @@ def test_unspoken_partial_output_is_discarded_before_fallback() -> None:
     assert spoken == ["Ready."]
 
 
+def test_target_history_limit_keeps_only_the_newest_complete_turn() -> None:
+    provider = FakeProvider("first", [[TextDelta("Ready."), completion("first")]])
+    original = replace(
+        request(),
+        messages=(
+            ChatMessage(Role.SYSTEM, "Instruction", ContentOrigin.STATIC_INSTRUCTION),
+            ChatMessage(Role.USER, "old user", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.ASSISTANT, "old answer", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.USER, "recent user", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.ASSISTANT, "recent answer", ContentOrigin.CONVERSATION_HISTORY),
+            ChatMessage(Role.USER, "current user", ContentOrigin.RAW_TRANSCRIPT),
+        ),
+        conversation_turn=3,
+    )
+
+    result = coordinator(provider).run(
+        original,
+        (ExecutionTarget(target("first"), max_history_turns=1),),
+    )
+
+    assert result.text == "Ready."
+    assert [message.content for message in provider.calls[0].messages] == [
+        "Instruction",
+        "recent user",
+        "recent answer",
+        "current user",
+    ]
+    assert len(original.messages) == 6
+
+
 def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     transient = ProviderError(
         ErrorCategory.CONNECTIVITY,
@@ -183,6 +223,32 @@ def test_retrying_same_provider_is_allowed_only_before_speech() -> None:
     assert result.text == "Recovered."
     assert result.attempts == 2
     assert sleeps == [0.25]
+
+
+def test_transmitted_request_is_not_retried_on_the_same_provider() -> None:
+    uncertain = ProviderError(
+        ErrorCategory.FIRST_TOKEN_TIMEOUT,
+        "provider may still be processing the request",
+        provider="first",
+        model="model",
+        retryable_same_provider=True,
+        transmitted=True,
+    )
+    first = FakeProvider("first", [uncertain])
+    fallback = FakeProvider("fallback", [[TextDelta("Recovered."), completion("fallback")]])
+
+    result = coordinator(first, fallback, retry_wait=0).run(
+        request(),
+        (
+            ExecutionTarget(target("first"), retry_attempts=3),
+            ExecutionTarget(target("fallback")),
+        ),
+    )
+
+    assert result.target.name == "fallback"
+    assert result.attempts == 2
+    assert len(first.calls) == 1
+    assert len(fallback.calls) == 1
 
 
 def test_exhausted_route_reports_total_attempt_count() -> None:
@@ -275,6 +341,63 @@ def test_multi_sentence_delta_is_spoken_before_remote_completion() -> None:
 
     assert result.text == "Prima frase. Seconda frase."
     assert spoken == ["Prima frase.", "Seconda frase."]
+
+
+def test_before_first_speech_runs_once_immediately_before_first_fragment() -> None:
+    provider = FakeProvider(
+        "first",
+        [[TextDelta("First sentence. Second sentence."), completion("first")]],
+    )
+    events: list[str] = []
+
+    result = coordinator(provider).run(
+        request(),
+        (ExecutionTarget(target("first")),),
+        before_first_speech=lambda: events.append("before"),
+        speak=lambda text: events.append(f"speak:{text}"),
+    )
+
+    assert result.text == "First sentence. Second sentence."
+    assert events == [
+        "before",
+        "speak:First sentence.",
+        "speak:Second sentence.",
+    ]
+
+
+def test_cancellation_after_first_fragment_discards_queued_sentence_and_is_terminal() -> None:
+    cancellation = CancellationController()
+    first = FakeProvider(
+        "first",
+        [[TextDelta("First sentence. Second sentence."), completion("first")]],
+        expected_cancellation=cancellation,
+    )
+    fallback = FakeProvider(
+        "fallback",
+        [[TextDelta("Duplicate."), completion("fallback")]],
+        expected_cancellation=cancellation,
+    )
+    spoken: list[str] = []
+
+    def cancel_after_speech(text: str) -> None:
+        spoken.append(text)
+        cancellation.cancel()
+
+    with pytest.raises(SpeechReplayUnsafeError) as captured:
+        coordinator(first, fallback, retry_wait=0).run(
+            request(),
+            (
+                ExecutionTarget(target("first"), retry_attempts=3),
+                ExecutionTarget(target("fallback")),
+            ),
+            speak=cancel_after_speech,
+            cancellation=cancellation,
+        )
+
+    assert captured.value.error.category is ErrorCategory.CANCELLED
+    assert spoken == ["First sentence."]
+    assert len(first.calls) == 1
+    assert fallback.calls == []
 
 
 def test_unpunctuated_output_uses_soft_speech_chunk_limit() -> None:
@@ -712,3 +835,129 @@ def test_exhausted_rate_limit_snapshot_cools_down_the_target() -> None:
     snapshot = health.snapshot(target("first", remote=True).health_key)
     assert not snapshot.available
     assert snapshot.retry_after_seconds is not None
+
+
+class _TwoStageSpeaker:
+    """Minimal stand-in for the two-stage PiperTTS API."""
+
+    def __init__(self, playback_seconds: float = 0.02) -> None:
+        self.playback_seconds = playback_seconds
+        self.played: list[str] = []
+
+    def synthesize_fragment(self, text: str) -> str:
+        return text
+
+    def play_fragment(self, fragment: str) -> SpeechTiming:
+        import time
+
+        started_at = time.monotonic()
+        time.sleep(self.playback_seconds)
+        self.played.append(fragment)
+        return SpeechTiming(
+            synthesis_ms=1.0,
+            playback_ms=self.playback_seconds * 1_000,
+            audio_duration_ms=self.playback_seconds * 1_000,
+            audio_started_at=started_at,
+        )
+
+
+def test_overlapped_speech_is_fully_played_before_the_result_returns() -> None:
+    """The coordinator must not report completion while audio is still queued."""
+
+    provider = FakeProvider(
+        "only",
+        [
+            [
+                TextDelta("Prima frase. "),
+                TextDelta("Seconda frase. "),
+                TextDelta("Terza frase."),
+                completion("only"),
+            ]
+        ],
+    )
+    speaker = _TwoStageSpeaker()
+    pipeline = SpeechPipeline(
+        synthesize=speaker.synthesize_fragment,
+        play=speaker.play_fragment,
+    )
+    runner = coordinator(provider, retry_wait=0)
+
+    try:
+        result = runner.run(
+            request(),
+            (ExecutionTarget(target("only")),),
+            speak=pipeline,
+        )
+    finally:
+        pipeline.close()
+
+    assert result.text == "Prima frase. Seconda frase. Terza frase."
+    # Every dispatched fragment finished playing before run() returned.
+    assert len(speaker.played) == 3
+    # Timing collected at flush still feeds the KPI fields.
+    assert result.actual_first_audio_seconds is not None
+    assert result.audio_duration_seconds > 0
+
+
+def test_overlapped_speech_reports_dispatch_before_actual_audio() -> None:
+    """speech_dispatch_ms measures handoff; actual audio is measured separately."""
+
+    provider = FakeProvider(
+        "only",
+        [[TextDelta("Una frase completa."), completion("only")]],
+    )
+    speaker = _TwoStageSpeaker(playback_seconds=0.05)
+    pipeline = SpeechPipeline(
+        synthesize=speaker.synthesize_fragment,
+        play=speaker.play_fragment,
+    )
+    runner = coordinator(provider, retry_wait=0)
+
+    try:
+        result = runner.run(
+            request(),
+            (ExecutionTarget(target("only")),),
+            speak=pipeline,
+        )
+    finally:
+        pipeline.close()
+
+    assert result.first_audio_seconds is not None
+    assert result.actual_first_audio_seconds is not None
+    # Dispatch happens no later than the audio it dispatches.
+    assert result.first_audio_seconds <= result.actual_first_audio_seconds + 1e-6
+
+
+def test_speech_failure_in_the_pipeline_surfaces_to_the_coordinator() -> None:
+    """A flush failure must behave like an inline speech failure.
+
+    The coordinator re-raises the original speech error rather than retrying,
+    because audio has already been committed to the user.
+    """
+
+    provider = FakeProvider(
+        "only",
+        [[TextDelta("Frase che non si sente."), completion("only")]],
+    )
+
+    def failing_play(_fragment: str) -> SpeechTiming:
+        raise RuntimeError("uscita audio assente")
+
+    pipeline = SpeechPipeline(
+        synthesize=lambda text: text,
+        play=failing_play,
+    )
+    runner = coordinator(provider, retry_wait=0)
+
+    try:
+        with pytest.raises(RuntimeError, match="uscita audio assente"):
+            runner.run(
+                request(),
+                (ExecutionTarget(target("only")),),
+                speak=pipeline,
+            )
+    finally:
+        pipeline.close()
+
+    # No fallback attempt was made after speech had been committed.
+    assert len(provider.calls) == 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 import uuid
@@ -54,6 +55,7 @@ class ExecutionTarget:
     max_output_words: int | None = None
     options: Mapping[str, Any] = field(default_factory=dict)
     price: ModelPrice | None = None
+    max_history_turns: int | None = None
 
     def __post_init__(self) -> None:
         if self.retry_attempts < 1:
@@ -66,6 +68,12 @@ class ExecutionTarget:
             or self.max_output_words < 1
         ):
             raise ValueError("max_output_words must be a positive integer")
+        if self.max_history_turns is not None and (
+            isinstance(self.max_history_turns, bool)
+            or not isinstance(self.max_history_turns, int)
+            or self.max_history_turns < 1
+        ):
+            raise ValueError("max_history_turns must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,17 +127,27 @@ class CancellationController:
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._commit_lock = threading.Lock()
 
     @property
     def cancelled(self) -> bool:
         return self._event.is_set()
 
     def cancel(self) -> None:
-        self._event.set()
+        with self._commit_lock:
+            self._event.set()
 
     def raise_if_cancelled(self) -> None:
         if self.cancelled:
             raise RuntimeError("request cancelled")
+
+    def commit_if_not_cancelled(self, operation: Callable[[], Any]) -> Any:
+        """Linearize logical completion against a concurrent cancellation."""
+
+        with self._commit_lock:
+            if self._event.is_set():
+                raise RuntimeError("request cancelled")
+            return operation()
 
 
 @dataclass(slots=True)
@@ -182,8 +200,11 @@ class StreamingResponseCoordinator:
         targets: tuple[ExecutionTarget, ...],
         *,
         speak: Callable[[str], Any] | None = None,
+        before_first_speech: Callable[[], Any] | None = None,
+        on_generation_completed: Callable[[], Any] | None = None,
         first_speech_min_chars: int = 0,
         speech_chunk_max_chars: int = 0,
+        speech_chunk_max_delay_seconds: float = 0.0,
         maximum_first_audio_seconds: float | None = None,
         cancellation: CancellationToken | None = None,
         route_reason: str | None = None,
@@ -206,6 +227,17 @@ class StreamingResponseCoordinator:
             raise ValueError("first_speech_min_chars cannot be negative")
         if speech_chunk_max_chars < 0:
             raise ValueError("speech_chunk_max_chars cannot be negative")
+        if (
+            isinstance(speech_chunk_max_delay_seconds, bool)
+            or not isinstance(speech_chunk_max_delay_seconds, (int, float))
+            or not math.isfinite(float(speech_chunk_max_delay_seconds))
+            or speech_chunk_max_delay_seconds < 0
+        ):
+            raise ValueError("speech_chunk_max_delay_seconds must be finite and non-negative")
+        if on_generation_completed is not None and not callable(on_generation_completed):
+            raise TypeError("on_generation_completed must be callable")
+        if before_first_speech is not None and not callable(before_first_speech):
+            raise TypeError("before_first_speech must be callable")
         if maximum_first_audio_seconds is not None and maximum_first_audio_seconds <= 0:
             raise ValueError("maximum_first_audio_seconds must be positive")
 
@@ -277,8 +309,11 @@ class StreamingResponseCoordinator:
                         execution=execution,
                         request=routed_request,
                         speak=speak,
+                        before_first_speech=before_first_speech,
+                        on_generation_completed=on_generation_completed,
                         first_speech_min_chars=first_speech_min_chars,
                         speech_chunk_max_chars=speech_chunk_max_chars,
+                        speech_chunk_max_delay_seconds=speech_chunk_max_delay_seconds,
                         cancellation=cancellation,
                         state=state,
                     )
@@ -520,8 +555,11 @@ class StreamingResponseCoordinator:
         execution: ExecutionTarget,
         request: ChatRequest,
         speak: Callable[[str], Any] | None,
+        before_first_speech: Callable[[], Any] | None,
+        on_generation_completed: Callable[[], Any] | None,
         first_speech_min_chars: int,
         speech_chunk_max_chars: int,
+        speech_chunk_max_delay_seconds: float,
         cancellation: CancellationToken | None,
         state: _AttemptState,
     ) -> StreamingResult:
@@ -531,22 +569,13 @@ class StreamingResponseCoordinator:
             SpeechChunker(
                 first_speech_min_chars=first_speech_min_chars,
                 speech_chunk_max_chars=speech_chunk_max_chars,
+                speech_chunk_max_delay_seconds=speech_chunk_max_delay_seconds,
             )
             if speak is not None
             else None
         )
 
-        def speak_fragment(sentence: str) -> None:
-            assert speak is not None
-            state.speech_committed = True
-            if state.first_audio_at is None:
-                state.first_audio_at = self._clock()
-            try:
-                timing = speak(sentence)
-            except Exception as error:
-                raise _SpeechFailure(error) from None
-            if timing is None:
-                return
+        def record_timing(timing: Any) -> None:
             try:
                 synthesis_ms = float(getattr(timing, "synthesis_ms"))
                 playback_ms = float(getattr(timing, "playback_ms"))
@@ -565,11 +594,80 @@ class StreamingResponseCoordinator:
             if state.actual_first_audio_at is None:
                 state.actual_first_audio_at = actual_started_at
 
+        def flush_speech() -> None:
+            """Wait for asynchronously dispatched audio and record its timing.
+
+            ``speak`` may be a :class:`~audio.speech_pipeline.SpeechPipeline`,
+            which returns before audio is played. ``state.first_audio_at``
+            therefore measures dispatch (it feeds ``speech_dispatch_ms``) while
+            ``state.actual_first_audio_at`` comes from the timing objects
+            collected here.
+            """
+
+            flush = getattr(speak, "flush", None)
+            if not callable(flush):
+                return
+            try:
+                timings = flush()
+            except Exception as error:
+                raise _SpeechFailure(error) from None
+            for timing in timings or ():
+                record_timing(timing)
+
+        def cancel_pending_speech() -> None:
+            """Drop audio queued for a response that is no longer wanted."""
+
+            cancel = getattr(speak, "cancel", None)
+            if not callable(cancel):
+                return
+            try:
+                cancel()
+            except Exception:
+                logger.debug("Unable to cancel pending speech", exc_info=True)
+
+        def speak_fragment(sentence: str) -> None:
+            assert speak is not None
+            self._raise_if_cancelled(
+                cancellation,
+                execution.route,
+                transmitted=True,
+            )
+            if not state.speech_committed and before_first_speech is not None:
+                try:
+                    before_first_speech()
+                except Exception as error:
+                    raise _SpeechFailure(error) from None
+                self._raise_if_cancelled(
+                    cancellation,
+                    execution.route,
+                    transmitted=True,
+                )
+            state.speech_committed = True
+            if state.first_audio_at is None:
+                state.first_audio_at = self._clock()
+            try:
+                timing = speak(sentence)
+            except Exception as error:
+                raise _SpeechFailure(error) from None
+            self._raise_if_cancelled(
+                cancellation,
+                execution.route,
+                transmitted=True,
+            )
+            if timing is None:
+                return
+            record_timing(timing)
+
         iterator: Any = None
         try:
             events = provider.stream(request, cancellation=cancellation)
             iterator = iter(events)
             for event in iterator:
+                self._raise_if_cancelled(
+                    cancellation,
+                    execution.route,
+                    transmitted=True,
+                )
                 if completed is not None:
                     raise ProviderError(
                         ErrorCategory.MALFORMED_RESPONSE,
@@ -617,10 +715,14 @@ class StreamingResponseCoordinator:
                         transmitted=True,
                     )
         except _SpeechFailure:
+            cancel_pending_speech()
             raise
         except ProviderError:
+            # Cancellation also arrives here, as ProviderError(CANCELLED).
+            cancel_pending_speech()
             raise
         except Exception:
+            cancel_pending_speech()
             raise ProviderError(
                 ErrorCategory.UNKNOWN,
                 "Language-model stream failed unexpectedly",
@@ -629,6 +731,11 @@ class StreamingResponseCoordinator:
                 retryable_same_provider=False,
                 transmitted=None,
             ) from None
+        except BaseException:
+            # KeyboardInterrupt and friends: queued fragments belong to a
+            # response nobody is waiting for and must not keep playing.
+            cancel_pending_speech()
+            raise
         finally:
             close = getattr(iterator, "close", None)
             if callable(close):
@@ -637,90 +744,130 @@ class StreamingResponseCoordinator:
                 except Exception:
                     pass
 
-        if completed is None:
-            raise ProviderError(
-                ErrorCategory.MALFORMED_RESPONSE,
-                "Provider stream ended without completion metadata",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=True,
+        try:
+            self._raise_if_cancelled(
+                cancellation,
+                execution.route,
                 transmitted=True,
             )
-        if completed.finish_reason is FinishReason.SAFETY:
-            raise ProviderError(
-                ErrorCategory.SAFETY_REFUSAL,
-                "The provider declined this request",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
-        if completed.finish_reason is FinishReason.CANCELLED:
-            raise ProviderError(
-                ErrorCategory.CANCELLED,
-                "Provider stream was cancelled",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
-        if completed.finish_reason is FinishReason.ERROR:
-            raise ProviderError(
-                ErrorCategory.UNKNOWN,
-                "Provider reported an unsuccessful completion",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
-        if completed.finish_reason is FinishReason.TOOL_CALL:
-            raise ProviderError(
-                ErrorCategory.UNSUPPORTED_FEATURE,
-                "Provider returned an unsupported tool call",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=False,
-                transmitted=True,
-                request_id=completed.request_id,
-            )
+            if completed is None:
+                raise ProviderError(
+                    ErrorCategory.MALFORMED_RESPONSE,
+                    "Provider stream ended without completion metadata",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=True,
+                    transmitted=True,
+                )
+            if completed.finish_reason is FinishReason.SAFETY:
+                raise ProviderError(
+                    ErrorCategory.SAFETY_REFUSAL,
+                    "The provider declined this request",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
+            if completed.finish_reason is FinishReason.CANCELLED:
+                raise ProviderError(
+                    ErrorCategory.CANCELLED,
+                    "Provider stream was cancelled",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
+            if completed.finish_reason is FinishReason.ERROR:
+                raise ProviderError(
+                    ErrorCategory.UNKNOWN,
+                    "Provider reported an unsuccessful completion",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
+            if completed.finish_reason is FinishReason.TOOL_CALL:
+                raise ProviderError(
+                    ErrorCategory.UNSUPPORTED_FEATURE,
+                    "Provider returned an unsupported tool call",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=False,
+                    transmitted=True,
+                    request_id=completed.request_id,
+                )
 
-        text = "".join(response_parts)
-        if not text.strip():
-            raise ProviderError(
-                ErrorCategory.EMPTY_COMPLETION,
-                "Provider returned an empty completion",
-                provider=execution.route.provider,
-                model=execution.route.model,
-                retryable_same_provider=True,
-                transmitted=True,
+            text = "".join(response_parts)
+            if not text.strip():
+                raise ProviderError(
+                    ErrorCategory.EMPTY_COMPLETION,
+                    "Provider returned an empty completion",
+                    provider=execution.route.provider,
+                    model=execution.route.model,
+                    retryable_same_provider=True,
+                    transmitted=True,
+                )
+            if on_generation_completed is not None:
+                on_generation_completed()
+            if speech_chunker is not None:
+                for sentence in speech_chunker.finish():
+                    speak_fragment(sentence)
+            # The response is not finished until its audio has actually been played,
+            # otherwise the caller returns to listening while the assistant speaks.
+            flush_speech()
+            return StreamingResult(
+                text=text,
+                metadata=completed,
+                target=execution.route,
+                attempts=1,
+                first_token_seconds=self._elapsed_seconds(
+                    state.started_at,
+                    state.first_token_at,
+                ),
+                first_audio_seconds=self._elapsed_seconds(
+                    state.started_at,
+                    state.first_audio_at,
+                ),
+                actual_first_audio_seconds=self._elapsed_seconds(
+                    state.started_at,
+                    state.actual_first_audio_at,
+                ),
+                tts_synthesis_seconds=state.tts_synthesis_seconds,
+                audio_playback_seconds=state.audio_playback_seconds,
+                audio_duration_seconds=state.audio_duration_seconds,
             )
-        if speech_chunker is not None:
-            for sentence in speech_chunker.finish():
-                speak_fragment(sentence)
-        return StreamingResult(
-            text=text,
-            metadata=completed,
-            target=execution.route,
-            attempts=1,
-            first_token_seconds=self._elapsed_seconds(
-                state.started_at,
-                state.first_token_at,
-            ),
-            first_audio_seconds=self._elapsed_seconds(
-                state.started_at,
-                state.first_audio_at,
-            ),
-            actual_first_audio_seconds=self._elapsed_seconds(
-                state.started_at,
-                state.actual_first_audio_at,
-            ),
-            tts_synthesis_seconds=state.tts_synthesis_seconds,
-            audio_playback_seconds=state.audio_playback_seconds,
-            audio_duration_seconds=state.audio_duration_seconds,
+        except BaseException:
+            # EOF validation, final chunk dispatch and audio drain still own
+            # this response's queued work. Retire it on every terminal failure.
+            cancel_pending_speech()
+            raise
+
+    @staticmethod
+    def _limit_history_turns(
+        messages: tuple[ChatMessage, ...],
+        maximum_turns: int,
+    ) -> tuple[tuple[ChatMessage, ...], int, int]:
+        """Keep only the newest complete conversation-history turns."""
+
+        history_user_positions = tuple(
+            index
+            for index, message in enumerate(messages)
+            if message.origin is ContentOrigin.CONVERSATION_HISTORY and message.role is Role.USER
         )
+        original_turns = len(history_user_positions)
+        if original_turns <= maximum_turns:
+            return messages, original_turns, 0
+
+        cutoff = history_user_positions[-maximum_turns]
+        limited = tuple(
+            message
+            for index, message in enumerate(messages)
+            if message.origin is not ContentOrigin.CONVERSATION_HISTORY or index >= cutoff
+        )
+        return limited, maximum_turns, original_turns - maximum_turns
 
     @staticmethod
     def _request_for_target(
@@ -733,6 +880,22 @@ class StreamingResponseCoordinator:
         if execution.route.max_output_tokens is not None and max_output is not None:
             max_output = min(max_output, execution.route.max_output_tokens)
         messages = request.messages
+        if execution.max_history_turns is not None:
+            messages, retained_turns, omitted_turns = (
+                StreamingResponseCoordinator._limit_history_turns(
+                    messages,
+                    execution.max_history_turns,
+                )
+            )
+            if omitted_turns:
+                logger.info(
+                    "route=%s turn=%s event=target_history_trimmed "
+                    "retained_turns=%s omitted_turns=%s",
+                    execution.route.name,
+                    request.conversation_turn,
+                    retained_turns,
+                    omitted_turns,
+                )
         if execution.max_output_words is not None:
             suffix = (
                 f" Limita la risposta a un massimo di {execution.max_output_words} parole."
@@ -813,6 +976,8 @@ class StreamingResponseCoordinator:
     def _raise_if_cancelled(
         cancellation: CancellationToken | None,
         target: ProviderTarget,
+        *,
+        transmitted: bool = False,
     ) -> None:
         if cancellation is None:
             return
@@ -830,7 +995,7 @@ class StreamingResponseCoordinator:
                 provider=target.provider,
                 model=target.model,
                 retryable_same_provider=False,
-                transmitted=False,
+                transmitted=transmitted,
             ) from None
         if cancelled:
             raise ProviderError(
@@ -839,7 +1004,7 @@ class StreamingResponseCoordinator:
                 provider=target.provider,
                 model=target.model,
                 retryable_same_provider=False,
-                transmitted=False,
+                transmitted=transmitted,
             )
 
     def _reserve(
@@ -954,6 +1119,8 @@ class StreamingResponseCoordinator:
             latency_ms=latency * 1_000,
             inference_ms=max(0.0, latency * 1_000 - synthesis_ms - playback_ms),
             first_token_ms=self._elapsed_ms(state.started_at, state.first_token_at),
+            cold_load_ms=result.metadata.cold_load_ms,
+            warm_first_token_ms=result.metadata.warm_first_token_ms,
             first_audio_ms=self._elapsed_ms(state.started_at, state.first_audio_at),
             speech_dispatch_ms=self._elapsed_ms(state.started_at, state.first_audio_at),
             actual_first_audio_ms=actual_first_audio_ms,
@@ -1227,7 +1394,14 @@ class StreamingResponseCoordinator:
         provider_attempt: int,
         execution: ExecutionTarget,
     ) -> bool:
-        return error.retryable_same_provider and provider_attempt < execution.retry_attempts
+        if not error.retryable_same_provider or provider_attempt >= execution.retry_attempts:
+            return False
+        # Once a request may have reached a provider, a local retry can run
+        # concurrently with the old worker after an HTTP timeout. Besides
+        # wasting scarce Jetson resources, that makes command-like prompts
+        # unsafe to replay. The caller can still use an explicitly configured
+        # fallback route; only the same-provider retry is suppressed.
+        return error.transmitted is not True
 
     @staticmethod
     def _elapsed_seconds(started_at: float, observed_at: float | None) -> float | None:

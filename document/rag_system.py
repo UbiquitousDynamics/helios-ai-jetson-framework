@@ -20,6 +20,8 @@ from typing import Any, Protocol, Sequence
 
 import numpy as np
 
+from api.transcripts import authoritative_text
+
 logger = logging.getLogger(__name__)
 
 INDEX_SCHEMA_VERSION = 1
@@ -624,7 +626,8 @@ class RagSystem:
         Equal scores are deterministically ordered by their corpus row.
         """
 
-        if not isinstance(query, str) or not query.strip():
+        query = authoritative_text(query)
+        if not query.strip():
             raise ValueError("query must be a non-empty string")
         if emb_matrix is None:
             self._ensure_ready()
@@ -668,6 +671,7 @@ class RagSystem:
     def retrieve(self, query: str, top_k: int = 5) -> list[RetrievedPassage]:
         """Return structured, source-aware retrieval results."""
 
+        query = authoritative_text(query)
         self._ensure_ready()
         chunks = self.read_chunks()
         return [
