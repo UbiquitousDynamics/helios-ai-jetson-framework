@@ -40,6 +40,7 @@ debug.log
 /output.wav
 /output-*.wav
 /output_*.wav
+/.voice-test-artifacts/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/

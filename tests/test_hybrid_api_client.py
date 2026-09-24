@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from threading import Lock
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +37,32 @@ class FakeTTS:
 
     def speak(self, text: str) -> None:
         self.spoken.append(text)
+
+
+def test_network_probe_persistence_preserves_state_changes_and_summarizes(monkeypatch) -> None:
+    recorded = []
+    client = APIClient.__new__(APIClient)
+    client.metrics = SimpleNamespace(record=lambda event: recorded.append(event))
+    client.kpi_settings = config.KPISettings(network_probe_persist_interval_seconds=60)
+    client._network_persist_lock = Lock()
+    client._network_last_persist_at = None
+    client._network_probes_since_persist = 0
+    clock = iter((0.0, 5.0, 10.0, 75.0))
+    monkeypatch.setattr("api.api_client.time.monotonic", lambda: next(clock))
+    online = SimpleNamespace(connectivity=SimpleNamespace(value="online"), quality_score=1.0)
+    offline = SimpleNamespace(connectivity=SimpleNamespace(value="offline"), quality_score=0.0)
+
+    client._record_network_snapshot(online, online)
+    client._record_network_snapshot(online, online)
+    client._record_network_snapshot(online, offline)
+    client._record_network_snapshot(offline, offline)
+
+    assert [item.event for item in recorded] == [
+        "network_probe_completed",
+        "network_state_changed",
+        "network_probe_completed",
+    ]
+    assert [item.count for item in recorded] == [1, 2, 1]
 
 
 class FakeOllamaClient:
@@ -118,6 +146,7 @@ def hybrid_settings(
     tmp_path: Path,
     *,
     allow_transcripts: bool = True,
+    allow_context: bool = True,
     budget_enabled: bool = False,
 ) -> config.LLMSettings:
     return config.LLMSettings(
@@ -127,6 +156,7 @@ def hybrid_settings(
         privacy=config.LLMPrivacySettings(
             default="remote_allowed",
             allow_remote_transcripts=allow_transcripts,
+            allow_remote_context=allow_context,
         ),
         budget=config.LLMBudgetSettings(enabled=budget_enabled),
         talk=config.LLMModeSettings(
@@ -262,6 +292,65 @@ def test_static_hybrid_instruction_is_reused_between_requests(tmp_path: Path) ->
     assert remote.calls[0].messages[0] is remote.calls[1].messages[0]
 
 
+def test_codex_to_local_route_change_preserves_canonical_history(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider(
+        [[TextDelta("Mercury, Venus, Earth."), completed("remote", "remote-model")]]
+    )
+    client, local, _tts = make_client(tmp_path, remote)
+
+    assert client.talk("Name three planets") == "Mercury, Venus, Earth."
+    client.connectivity = Connectivity.OFFLINE
+    assert client.talk("Only discuss the second one") == "Local."
+
+    assert local.calls[0]["messages"][-3:] == [
+        {"role": "user", "content": "Name three planets"},
+        {"role": "assistant", "content": "Mercury, Venus, Earth."},
+        {"role": "user", "content": "Only discuss the second one"},
+    ]
+
+
+def test_local_to_codex_route_change_preserves_canonical_history(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Venus."), completed("remote", "remote-model")]])
+    client, _local, _tts = make_client(tmp_path, remote)
+    client.connectivity = Connectivity.OFFLINE
+
+    assert client.talk("Name three planets") == "Local."
+    client.connectivity = Connectivity.ONLINE
+    assert client.talk("Only discuss the second one") == "Venus."
+
+    messages = remote.calls[0].messages[-3:]
+    assert [(message.role, message.content) for message in messages] == [
+        (Role.USER, "Name three planets"),
+        (Role.ASSISTANT, "Local."),
+        (Role.USER, "Only discuss the second one"),
+    ]
+
+
+def test_codex_local_codex_sequence_keeps_one_logical_history(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider(
+        [
+            [TextDelta("Mercury, Venus, Earth."), completed("remote", "remote-model")],
+            [TextDelta("About 225 days."), completed("remote", "remote-model")],
+        ]
+    )
+    client, _local, _tts = make_client(tmp_path, remote)
+
+    assert client.talk("Name three planets") == "Mercury, Venus, Earth."
+    client.connectivity = Connectivity.OFFLINE
+    assert client.talk("Only discuss the second one") == "Local."
+    client.connectivity = Connectivity.ONLINE
+    assert client.talk("How long is its year?") == "About 225 days."
+
+    messages = remote.calls[1].messages[-5:]
+    assert [(message.role, message.content) for message in messages] == [
+        (Role.USER, "Name three planets"),
+        (Role.ASSISTANT, "Mercury, Venus, Earth."),
+        (Role.USER, "Only discuss the second one"),
+        (Role.ASSISTANT, "Local."),
+        (Role.USER, "How long is its year?"),
+    ]
+
+
 def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
     remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
     client, local, tts = make_client(
@@ -275,6 +364,56 @@ def test_transcript_privacy_denial_falls_back_to_local(tmp_path: Path) -> None:
     assert remote.calls == []
     assert len(local.calls) == 1
     assert tts.spoken == ["Local."]
+
+
+def test_local_only_turn_cannot_egress_as_later_remote_history(tmp_path: Path) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, _tts = make_client(tmp_path, remote)
+
+    assert client.talk("private fact", privacy="local_only") == "Local."
+    assert client.talk("refer to that fact", privacy="remote_allowed") == "Local."
+
+    assert remote.calls == []
+    assert len(local.calls) == 2
+    assert local.calls[1]["messages"][-3:] == [
+        {"role": "user", "content": "private fact"},
+        {"role": "assistant", "content": "Local."},
+        {"role": "user", "content": "refer to that fact"},
+    ]
+
+
+def test_local_document_taint_survives_into_later_assistant_history(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, _tts = make_client(tmp_path, remote)
+
+    assert (
+        client.talk(
+            "summarize it",
+            context="local document contents",
+            context_origin=ContentOrigin.LOCAL_DOCUMENT,
+            privacy="remote_allowed",
+        )
+        == "Local."
+    )
+    assert client.talk("what was the conclusion?", privacy="remote_allowed") == "Local."
+
+    assert remote.calls == []
+    assert len(local.calls) == 2
+
+
+def test_unredacted_remote_redacted_turn_stays_ineligible_for_later_egress(
+    tmp_path: Path,
+) -> None:
+    remote = FakeRemoteProvider([[TextDelta("Remote."), completed("remote", "remote-model")]])
+    client, local, _tts = make_client(tmp_path, remote)
+
+    assert client.talk("unredacted secret", privacy="remote_redacted") == "Local."
+    assert client.talk("repeat it", privacy="remote_allowed") == "Local."
+
+    assert remote.calls == []
+    assert len(local.calls) == 2
 
 
 def test_network_monitor_blocks_remote_before_provider_execution(
@@ -364,6 +503,7 @@ def test_remote_redacted_requires_an_explicit_redaction_attestation(
         privacy=config.LLMPrivacySettings(
             default="remote_redacted",
             allow_remote_transcripts=True,
+            allow_remote_context=True,
         ),
     )
     local = FakeOllamaClient()
@@ -379,6 +519,7 @@ def test_remote_redacted_requires_an_explicit_redaction_attestation(
 
     assert client.talk("Emilia, private value") == "Local."
     assert remote.calls == []
+    client.reset_conversation(reason="privacy_boundary")
 
     assert (
         client.talk(
@@ -604,6 +745,7 @@ def test_committed_codex_profile_selects_luna_terra_and_sol() -> None:
     llm = replace(
         llm,
         observability=config.LLMObservabilitySettings(metrics_enabled=False),
+        privacy=replace(llm.privacy, allow_remote_context=True),
     )
     remote = FakeRemoteProvider(
         [

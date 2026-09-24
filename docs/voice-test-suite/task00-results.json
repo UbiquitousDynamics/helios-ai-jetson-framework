@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "task_id": "00",
+  "correlation_id": "21a7738f-fa6b-4445-9d78-e32f3fac1df6",
+  "status": "passed",
+  "local_baseline": "passed",
+  "hil": {
+    "status": "not_applicable",
+    "reason": "Task 00 is documentation/specification-only and executes no runtime audio.",
+    "deferred_to": "first_test_suite_task_that_actually_exercises_audio",
+    "exchanges": 0,
+    "devices_opened": 0
+  },
+  "historical_hil_guard": {
+    "status": "blocked",
+    "exit_code": 2,
+    "applicable_to_task00_gate": false,
+    "source": ".voice-test-artifacts/task00/21a7738f-fa6b-4445-9d78-e32f3fac1df6/results.json",
+    "reasons": [
+      "explicit_pc_and_helios_device_ids_missing",
+      "acoustic_calibration_missing",
+      "capture_isolation_unconfirmed",
+      "acoustic_runner_not_implemented_in_task00",
+      "pc_native_dependencies_missing"
+    ],
+    "missing_packages": [
+      "piper-tts",
+      "vosk",
+      "sounddevice",
+      "PyAudio"
+    ],
+    "exchanges": 0,
+    "devices_opened": 0
+  },
+  "counts": {
+    "fixtures": 46,
+    "metrics": 52,
+    "requirements": 45,
+    "timestamp_events": 38
+  },
+  "languages": [
+    "en",
+    "it"
+  ],
+  "environment": {
+    "python": "3.12.10",
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "dependencies": {
+      "pytest": "8.4.2",
+      "numpy": "2.5.3",
+      "httpx": "0.28.1",
+      "ruff": "0.16.8",
+      "piper-tts": null,
+      "vosk": null,
+      "sounddevice": null,
+      "PyAudio": null,
+      "onnxruntime": null
+    },
+    "device_versions": null,
+    "clock": "time.monotonic_ns",
+    "clock_resolution_seconds": 0.015625
+  },
+  "implementation": {
+    "commit": "d0446f0bb04ac74aaebd59f858ee0ba5170a4fb2",
+    "identity": "commit_plus_file_hashes",
+    "files": {
+      "config.py": "8e63a78921df6959fe20ed51d9abe2b18f84bd00988f698b2619bcbc651f8252",
+      "assistant.py": "7f22f01283ba9ee4da0f2da0da6f4abf53196402189e2b39a7f1cd49203d0d05",
+      "audio/tts.py": "76777041fbd68f0932fcf549dae3ea25af93d6a4e66f8e55a52a5f30629d19cb",
+      "audio/speech_pipeline.py": "a4f618fbc729ae73489755307ce319bcec017718d6d0148500daa968a3942665",
+      "audio/backchannel.py": "c691be3861c65f1c9fd8bd7100efc9bbc5ab362f741573d8459e1b870deec094",
+      "recognizer/speech_recognizer.py": "8fdccd9d96288f6eed5edef4771c117411166ccb3a2b51eede2b8dc753d44e2f",
+      "recognizer/turn_endpoint_detector.py": "efde34cab17e21cb9916090ee5928d3f832555f8b9e3fcb2459eb29f91139804",
+      "recognizer/barge_in_detector.py": "066336bc95389788e5dc6b24211e694aed31d5fc09369317c5bb5f30d30dbba9",
+      "recognizer/echo_suppression_policy.py": "f702b47939543ec3702a1b270fa9a1b59b0db8ba6ffdf94916acfb03fa2c379e",
+      "api/realtime_conversation.py": "4cbb89c4480219efbd2cce36ce124f681f551a8495581ba1cb187849b0b82fd9",
+      "api/control_intents.py": "694a6060146b4c9b3f2acebc52701222d182779fed777fc9d7c92395b412b173",
+      "api/transcripts.py": "2e4b6f974c4d87595d1cf3f1c472a4d8dbbeedbf8b07d525943f9aa26d896ad1",
+      "api/api_client.py": "5b062cd20ca4190c5afdc922c00a623abf554c033c4ec660f8d80694352f7da9",
+      "api/streaming.py": "ddb444775fd887cc26bfe59046279c53745094c48ee93f01fc3f31476c380a26",
+      "api/metrics.py": "fece184c662a8197ce6d27e95ee6186676b6193f73c0a8f693cf9db7322ec393",
+      "observability/resources.py": "7d6dd95d3d63aa4da639f24b91b99daa3cb1e9eb529d948cbb1608136c4dea57"
+    }
+  },
+  "spec_sha256": {
+    "fixtures.json": "a5faf362dd8a3807c8150e6565702b0e90d39fafa24a72094e3c0d4a2e003a18",
+    "metrics.json": "401031233188a25ea366aa2e8e376d8df593748520b807ed7e96880d51e99236",
+    "thresholds.json": "f74979c4f24619427ac59b36688d4d4f49c3af8f43e21e36d7810cb03123360f",
+    "traceability.json": "184a7064c2d18d0161ab26b52da461ada230191dbe05c32ddcf5e1b52f78b483",
+    "hardware.example.json": "4aaf46e0bb1de07196ffa0745a485d2a19aff9d96c1af63312499dac152a0c5c"
+  },
+  "harness_sha256": "1635d3e0fa77998e698fc0569006f33016d55a6c8c049eeb41e0f674385db51d",
+  "voices": {
+    "it": {
+      "model": "audio/models/it_IT-paola-medium.onnx",
+      "model_sha256": "6fc918b5a0ea6137382833dddfa567bffbe6a5060c02043c87192ee59c04210c",
+      "config_sha256": "96cb0fd8df8c46d778c0d08464ae31b46cb6453bb2857aa652fee96ea84d6e7b",
+      "sample_rate_hz": 22050,
+      "piper_version": null,
+      "audio_generated": false
+    },
+    "en": {
+      "model": "audio/models/en_GB-alba-medium.onnx",
+      "model_sha256": "401369c4a81d09fdd86c32c5c864440811dbdcc66466cde2d64f7133a66ad03b",
+      "config_sha256": "112eec71519cd797c2e83791c79ea0ee79b3bafcc9a4cb379dc63082c2716019",
+      "sample_rate_hz": 22050,
+      "piper_version": null,
+      "audio_generated": false
+    }
+  },
+  "threshold_profile": "jetson",
+  "threshold_version": "1.0.0",
+  "validation_duration_ms": 438,
+  "cleanup": {
+    "status": "passed",
+    "workers_started": 0,
+    "streams_opened": 0,
+    "audio_files_created": 0,
+    "transcripts_created": 0
+  },
+  "artifacts": [
+    "docs/voice-test-suite/task00-report.md",
+    "docs/voice-test-suite/task00-results.json",
+    ".voice-test-artifacts/task00/16e453ec-f634-4f10-8813-170703aed487/",
+    ".voice-test-artifacts/task00/60392c5a-425e-4c60-8294-a5d69d987ccb/",
+    ".voice-test-artifacts/task00/21a7738f-fa6b-4445-9d78-e32f3fac1df6/"
+  ],
+  "next_task": "01",
+  "commands": {
+    "interpreter": "$taskPython = Join-Path $env:TEMP 'helios-live-conversation-task00-20260918/Scripts/python.exe'",
+    "focused": "& $taskPython -m pytest -q tests/test_voice_suite_baseline.py --tb=short",
+    "regression": "& $taskPython -m pytest -q tests/test_voice_suite_baseline.py tests/test_doctor.py tests/test_device_voice_diagnostics.py tests/test_kpi_metrics.py tests/test_kpi_benchmark.py tests/test_kpi_resources.py tests/test_pytest_bootstrap.py tests/test_tts.py tests/test_recognizer.py tests/test_transcripts.py --tb=short",
+    "syntax": "& $taskPython -m py_compile scripts/voice_test_suite.py tests/test_voice_suite_baseline.py",
+    "lint": "& $taskPython -m ruff check scripts/voice_test_suite.py tests/test_voice_suite_baseline.py",
+    "baseline": "& $taskPython scripts/voice_test_suite.py --artifact-dir .voice-test-artifacts/task00 --profile desktop",
+    "hil_guard": "& $taskPython scripts/voice_test_suite.py --artifact-dir .voice-test-artifacts/task00 --profile jetson --require-hil"
+  },
+  "validation": {
+    "focused": {
+      "passed": 51,
+      "failed": 0,
+      "skipped": 0,
+      "duration_seconds": 1.55
+    },
+    "regression": {
+      "passed": 227,
+      "failed": 0,
+      "skipped": 0,
+      "duration_seconds": 2.63
+    },
+    "syntax": "passed",
+    "lint": "passed",
+    "diff_check": "passed",
+    "exhaustive_gate": {
+      "status": "passed",
+      "basis": "Documented 51 focused and 227 regression passes, syntax, lint, diff and reproducibility checks; original results preserved without rerun.",
+      "hil_required_for_task00": false
+    },
+    "hil_acoustic": {
+      "status": "not_applicable",
+      "passed": 0,
+      "failed": 0,
+      "blocked": 0,
+      "not_applicable": 1,
+      "exchanges": 0
+    },
+    "reproducibility": {
+      "run_count": 3,
+      "fingerprints_equal": true,
+      "metric": "baseline_validation_duration",
+      "unit": "ms",
+      "median": 359,
+      "p95": 430.1,
+      "maximum": 438,
+      "threshold": null,
+      "status": "observational_only"
+    }
+  },
+  "measurement_status": {
+    "end_to_end_first_audio_ms": "unverified",
+    "p95": "unverified",
+    "wer": "unverified",
+    "cer": "unverified",
+    "interruption_ms": "unverified",
+    "resources": "unverified",
+    "task_backend": "unverified",
+    "sample_count": 0,
+    "median": null,
+    "maximum": null,
+    "reason": "No generated speech exchange; all 52 metrics have zero samples in ignored metrics.jsonl."
+  }
+}

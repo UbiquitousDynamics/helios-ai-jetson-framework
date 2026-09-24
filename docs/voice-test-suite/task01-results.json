@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "task_id": "01",
+  "run_id": "d2e2a978-fa4a-4425-bc22-0e2b2d8e178b",
+  "status": "blocked",
+  "local_matrix": {
+    "status": "passed",
+    "sample_count": 228,
+    "legal_cases": 136,
+    "illegal_cases": 92,
+    "metrics": {
+      "transition_verdict_errors": 0,
+      "transition_state_errors": 0,
+      "revision_errors": 0,
+      "rejected_event_mutations": 0,
+      "snapshot_identity_errors": 0
+    },
+    "run_id": "d2e2a978-fa4a-4425-bc22-0e2b2d8e178b"
+  },
+  "hil": {
+    "status": "blocked",
+    "required_for_task": true,
+    "reasons": [
+      "explicit_devices_missing_or_invalid",
+      "synthetic_only_isolation_unconfirmed",
+      "acoustic_calibration_unverified",
+      "pc_native_dependencies_missing",
+      "acoustic_execution_and_event_mapping_not_verified"
+    ],
+    "missing_packages": [
+      "piper-tts",
+      "vosk",
+      "sounddevice",
+      "PyAudio",
+      "onnxruntime"
+    ],
+    "device_inventory_performed": false,
+    "devices_opened": 0,
+    "acoustic_exchanges": 0,
+    "runner_status": "pending_selected_devices_and_calibration",
+    "prohibited_inference": "Local floor events do not establish observed playback/capture mapping."
+  },
+  "environment": {
+    "python": "3.12.10",
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "dependencies": {
+      "pytest": "8.4.2",
+      "numpy": "2.5.3",
+      "httpx": "0.28.1",
+      "ruff": "0.16.8",
+      "piper-tts": null,
+      "vosk": null,
+      "sounddevice": null,
+      "PyAudio": null,
+      "onnxruntime": null
+    },
+    "device_versions": null,
+    "clock": "time.perf_counter_ns",
+    "clock_resolution_seconds": 1e-7
+  },
+  "implementation": {
+    "commit": "d0446f0bb04ac74aaebd59f858ee0ba5170a4fb2",
+    "identity": "commit_plus_file_hashes",
+    "files": {
+      "config.py": "8e63a78921df6959fe20ed51d9abe2b18f84bd00988f698b2619bcbc651f8252",
+      "assistant.py": "7f22f01283ba9ee4da0f2da0da6f4abf53196402189e2b39a7f1cd49203d0d05",
+      "audio/tts.py": "76777041fbd68f0932fcf549dae3ea25af93d6a4e66f8e55a52a5f30629d19cb",
+      "audio/speech_pipeline.py": "a4f618fbc729ae73489755307ce319bcec017718d6d0148500daa968a3942665",
+      "audio/backchannel.py": "c691be3861c65f1c9fd8bd7100efc9bbc5ab362f741573d8459e1b870deec094",
+      "recognizer/speech_recognizer.py": "8fdccd9d96288f6eed5edef4771c117411166ccb3a2b51eede2b8dc753d44e2f",
+      "recognizer/turn_endpoint_detector.py": "efde34cab17e21cb9916090ee5928d3f832555f8b9e3fcb2459eb29f91139804",
+      "recognizer/barge_in_detector.py": "066336bc95389788e5dc6b24211e694aed31d5fc09369317c5bb5f30d30dbba9",
+      "recognizer/echo_suppression_policy.py": "f702b47939543ec3702a1b270fa9a1b59b0db8ba6ffdf94916acfb03fa2c379e",
+      "api/realtime_conversation.py": "4cbb89c4480219efbd2cce36ce124f681f551a8495581ba1cb187849b0b82fd9",
+      "api/control_intents.py": "694a6060146b4c9b3f2acebc52701222d182779fed777fc9d7c92395b412b173",
+      "api/transcripts.py": "2e4b6f974c4d87595d1cf3f1c472a4d8dbbeedbf8b07d525943f9aa26d896ad1",
+      "api/api_client.py": "5b062cd20ca4190c5afdc922c00a623abf554c033c4ec660f8d80694352f7da9",
+      "api/streaming.py": "ddb444775fd887cc26bfe59046279c53745094c48ee93f01fc3f31476c380a26",
+      "api/metrics.py": "fece184c662a8197ce6d27e95ee6186676b6193f73c0a8f693cf9db7322ec393",
+      "observability/resources.py": "7d6dd95d3d63aa4da639f24b91b99daa3cb1e9eb529d948cbb1608136c4dea57",
+      "api/conversation_control.py": "ae8ee0a14b5b277424d5f89c6393dfa4e12371f7c2493706bb3bcf054a519e9a"
+    }
+  },
+  "threshold_profile": "desktop",
+  "threshold_version": "1.0.0",
+  "thresholds": {
+    "transition_verdict_errors": {
+      "definition": "Cases whose accepted/rejected outcome differs from the declared state/event contract.",
+      "unit": "cases",
+      "maximum": 0,
+      "mandatory": true,
+      "minimum_samples": 228,
+      "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+    },
+    "transition_state_errors": {
+      "definition": "Accepted cases whose resulting floor or candidate return state differs from the declared contract.",
+      "unit": "cases",
+      "maximum": 0,
+      "mandatory": true,
+      "minimum_samples": 228,
+      "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+    },
+    "revision_errors": {
+      "definition": "Accepted cases whose revision does not advance exactly once per changed immutable snapshot.",
+      "unit": "cases",
+      "maximum": 0,
+      "mandatory": true,
+      "minimum_samples": 228,
+      "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+    },
+    "rejected_event_mutations": {
+      "definition": "Rejected cases that replace or mutate the previous snapshot.",
+      "unit": "cases",
+      "maximum": 0,
+      "mandatory": true,
+      "minimum_samples": 228,
+      "artifact_source": "cases.jsonl with matching correlation_id; events.jsonl contains content-free observed snapshots."
+    },
+    "snapshot_identity_errors": {
+      "definition": "Accepted legal no-ops that replace the immutable snapshot, or changed state that retains the same object.",
+      "unit": "cases",
+      "maximum": 0,
+      "mandatory": true,
+      "minimum_samples": 228,
+      "artifact_source": "cases.jsonl failure codes from before/after object identity checks."
+    }
+  },
+  "spec_sha256": {
+    "task01-transitions.json": "f2e65567fdaa72e08c03a98befbd132fa7f49a69a27ca1bafddc5d9e9c848385",
+    "task01-profile.json": "a6fc305351b285a5cf3835ec458e86259dd01847e4bb76038df26aec13099c27",
+    "hardware_manifest": "4aaf46e0bb1de07196ffa0745a485d2a19aff9d96c1af63312499dac152a0c5c"
+  },
+  "harness_sha256": "9256752388d78dc7860896a0e40877e9e14aba89ff54d7356dfff9fa87fcd9ff",
+  "cleanup": {
+    "status": "passed",
+    "audio_streams_opened": 0,
+    "workers_started": 0,
+    "audio_files_created": 0,
+    "transcripts_created": 0
+  },
+  "acoustic_metrics": {
+    "sample_count": 0,
+    "status": "unverified",
+    "median": null,
+    "p95": null,
+    "maximum": null,
+    "wer": null,
+    "cer": null,
+    "end_to_end_first_audio_ms": null,
+    "final_answer_ms": null,
+    "interruption_ms": null,
+    "resource_metrics": null,
+    "task_metrics": null,
+    "reason": "No acoustic exchanges were performed."
+  },
+  "next_task": "02",
+  "next_task_started": false,
+  "artifacts": [
+    "docs/voice-test-suite/task01-report.md",
+    "docs/voice-test-suite/task01-results.json",
+    ".voice-test-artifacts/task01/d2e2a978-fa4a-4425-bc22-0e2b2d8e178b/",
+    ".voice-test-artifacts/task01/3ffe2ab1-45ec-4e81-9c60-b36b0b234887/"
+  ],
+  "local_tests": {
+    "focused": {
+      "passed": 603,
+      "failed": 0,
+      "skipped": 0,
+      "duration_seconds": 1.25
+    },
+    "regression": {
+      "passed": 1177,
+      "failed": 0,
+      "skipped": 0,
+      "duration_seconds": 7.59,
+      "includes_focused": true
+    },
+    "syntax": "passed",
+    "ruff": "passed",
+    "diff_check": "passed"
+  },
+  "exhaustive_gate": {
+    "status": "blocked",
+    "local": "passed",
+    "hil": "blocked",
+    "reason": "Task 01 requires observed acoustic playback/capture-to-floor mapping; typed local signals cannot provide it."
+  },
+  "fixture_scope": {
+    "local_state_event_cases": 228,
+    "language": "language_independent",
+    "acoustic_catalog_ids": [
+      "it-greeting",
+      "it-wake-followups",
+      "en-greeting",
+      "en-wake-followups"
+    ],
+    "acoustic_languages": [
+      "it",
+      "en"
+    ],
+    "audio_generated": false
+  },
+  "commands": {
+    "interpreter": "$taskPython = Join-Path $env:TEMP 'helios-live-conversation-task00-20260918/Scripts/python.exe'",
+    "syntax": "& $taskPython -m py_compile scripts/voice_suite_task01.py tests/test_voice_suite_events.py tests/test_voice_suite_floor_states.py",
+    "ruff": "& $taskPython -m ruff check scripts/voice_suite_task01.py tests/test_voice_suite_events.py tests/test_voice_suite_floor_states.py",
+    "focused": "& $taskPython -m pytest -q tests/test_voice_suite_floor_states.py tests/test_voice_suite_events.py --tb=short",
+    "regression": "& $taskPython -m pytest -q tests/test_voice_suite_floor_states.py tests/test_voice_suite_events.py tests/test_voice_suite_baseline.py tests/test_conversation_control.py tests/test_realtime_conversation.py tests/test_transcripts.py tests/test_full_duplex_capture.py tests/test_tts.py tests/test_recognizer.py tests/test_device_voice_diagnostics.py tests/test_kpi_metrics.py tests/test_assistant.py tests/test_barge_in_integration.py --tb=short",
+    "desktop": "& $taskPython scripts/voice_suite_task01.py --artifact-dir .voice-test-artifacts/task01 --profile desktop --hardware-manifest tests/voice_suite/hardware.example.json",
+    "jetson_profile_on_pc": "& $taskPython scripts/voice_suite_task01.py --artifact-dir .voice-test-artifacts/task01 --profile jetson --hardware-manifest tests/voice_suite/hardware.example.json"
+  },
+  "runs": [
+    {
+      "run_id": "d2e2a978-fa4a-4425-bc22-0e2b2d8e178b",
+      "profile": "desktop",
+      "local": "passed",
+      "hil": "blocked",
+      "exit_code": 2,
+      "artifacts": ".voice-test-artifacts/task01/d2e2a978-fa4a-4425-bc22-0e2b2d8e178b/"
+    },
+    {
+      "run_id": "3ffe2ab1-45ec-4e81-9c60-b36b0b234887",
+      "profile": "jetson",
+      "local": "passed",
+      "hil": "blocked",
+      "exit_code": 2,
+      "artifacts": ".voice-test-artifacts/task01/3ffe2ab1-45ec-4e81-9c60-b36b0b234887/"
+    }
+  ],
+  "metric_summaries": [
+    {
+      "metric_id": "transition_verdict_errors",
+      "unit": "cases",
+      "sample_count": 228,
+      "median": 0,
+      "p95": 0,
+      "maximum": 0,
+      "failure_count": 0,
+      "total": 0,
+      "threshold": 0,
+      "source": "cases.jsonl",
+      "status": "passed"
+    },
+    {
+      "metric_id": "transition_state_errors",
+      "unit": "cases",
+      "sample_count": 228,
+      "median": 0,
+      "p95": 0,
+      "maximum": 0,
+      "failure_count": 0,
+      "total": 0,
+      "threshold": 0,
+      "source": "cases.jsonl",
+      "status": "passed"
+    },
+    {
+      "metric_id": "revision_errors",
+      "unit": "cases",
+      "sample_count": 228,
+      "median": 0,
+      "p95": 0,
+      "maximum": 0,
+      "failure_count": 0,
+      "total": 0,
+      "threshold": 0,
+      "source": "cases.jsonl",
+      "status": "passed"
+    },
+    {
+      "metric_id": "rejected_event_mutations",
+      "unit": "cases",
+      "sample_count": 228,
+      "median": 0,
+      "p95": 0,
+      "maximum": 0,
+      "failure_count": 0,
+      "total": 0,
+      "threshold": 0,
+      "source": "cases.jsonl",
+      "status": "passed"
+    },
+    {
+      "metric_id": "snapshot_identity_errors",
+      "unit": "cases",
+      "sample_count": 228,
+      "median": 0,
+      "p95": 0,
+      "maximum": 0,
+      "failure_count": 0,
+      "total": 0,
+      "threshold": 0,
+      "source": "cases.jsonl",
+      "status": "passed"
+    }
+  ]
+}

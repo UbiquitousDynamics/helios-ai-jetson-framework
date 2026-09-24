@@ -56,6 +56,7 @@ _TRANSIENT_FAILURES = frozenset(
         ErrorCategory.DNS,
         ErrorCategory.CONNECT_TIMEOUT,
         ErrorCategory.FIRST_TOKEN_TIMEOUT,
+        ErrorCategory.COLD_LOAD_TIMEOUT,
         ErrorCategory.READ_TIMEOUT,
         ErrorCategory.PROVIDER_UNAVAILABLE,
         ErrorCategory.MALFORMED_RESPONSE,
@@ -181,7 +182,7 @@ class HealthTracker:
 
             if category in {ErrorCategory.AUTHENTICATION, ErrorCategory.PERMISSION}:
                 state.auth_blocked = True
-            elif category is ErrorCategory.QUOTA_EXHAUSTED:
+            elif category in {ErrorCategory.QUOTA_EXHAUSTED, ErrorCategory.CREDIT_EXHAUSTED}:
                 state.quota_until = (
                     now + quota_reset_after_seconds
                     if quota_reset_after_seconds is not None

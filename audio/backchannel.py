@@ -1,0 +1,230 @@
+"""Low-latency playback of already-synthesized conversational acknowledgments."""
+
+from __future__ import annotations
+
+import logging
+import inspect
+import math
+import re
+import threading
+import time
+from concurrent.futures import CancelledError, Future, TimeoutError as FutureTimeoutError
+from typing import Any, Callable
+from enum import Enum
+
+from api.realtime_conversation import SpeechStopSignal
+from api.transcripts import authoritative_text
+
+logger = logging.getLogger(__name__)
+
+BACKCHANNEL_STOP_TIMEOUT_SECONDS = 2.0
+
+
+class BackchannelMode(Enum):
+    NORMAL = "normal"
+    DICTATION = "dictation"
+    SENSITIVE_CONFIRMATION = "sensitive_confirmation"
+
+
+def suppress_backchannel_for(text: str, *, language: str) -> bool:
+    """Conservative local cue suppression; never authorize an action or a mode."""
+    words = tuple(re.findall(r"\w+", authoritative_text(text).casefold()))
+    prefixes = {
+        "en": (
+            "dictation",
+            "dictate",
+            "take dictation",
+            "i will dictate",
+            "i am dictating",
+            "transcribe",
+            "write exactly",
+            "confirm",
+            "i confirm",
+            "yes",
+            "proceed",
+            "go ahead",
+            "do it",
+        ),
+        "it": (
+            "dettatura",
+            "detto",
+            "ti detto",
+            "sto dettando",
+            "trascrivi",
+            "scrivi esattamente",
+            "conferma",
+            "confermo",
+            "sì",
+            "si",
+            "procedi",
+            "fallo",
+        ),
+    }
+    return any(
+        words[: len(prefix.split())] == tuple(prefix.split())
+        for prefix in prefixes.get(language, ())
+    )
+
+
+class BackchannelSession:
+    """Schedule one cached acknowledgment and supersede it before real speech.
+
+    The supplied executor owns all concurrent work. The session never asks the
+    TTS engine to synthesize at trigger time: it only calls ``speak_preloaded``.
+    """
+
+    def __init__(
+        self,
+        *,
+        tts: Any,
+        phrase: str,
+        delay_seconds: float,
+        executor: Any,
+        clock: Callable[[], float] = time.monotonic,
+        allowed: Callable[[], bool] | None = None,
+        cancellation: Any | None = None,
+    ) -> None:
+        if not phrase.strip():
+            raise ValueError("backchannel phrase cannot be empty")
+        if (
+            isinstance(delay_seconds, bool)
+            or not isinstance(delay_seconds, (int, float))
+            or not math.isfinite(delay_seconds)
+            or delay_seconds <= 0
+        ):
+            raise ValueError("backchannel delay must be finite and positive")
+        if allowed is not None and not callable(allowed):
+            raise TypeError("allowed must be callable")
+        self.tts = tts
+        self.phrase = phrase
+        self.delay_seconds = float(delay_seconds)
+        self._clock = clock
+        self._deadline = clock() + self.delay_seconds
+        self._cancelled = threading.Event()
+        self._allowed = allowed
+        self._request_cancellation = cancellation
+        self._stop = SpeechStopSignal(self._should_stop)
+        self._lock = threading.Lock()
+        self._triggered = False
+        self._played = False
+        self._playing = False
+        self._future: Future[Any] = executor.submit(self._run)
+
+    @property
+    def future(self) -> Future[Any]:
+        return self._future
+
+    @property
+    def triggered(self) -> bool:
+        with self._lock:
+            return self._triggered
+
+    @property
+    def played(self) -> bool:
+        with self._lock:
+            return self._played
+
+    @property
+    def is_playing(self) -> bool:
+        with self._lock:
+            return self._playing
+
+    def _should_stop(self) -> bool:
+        if self._cancelled.is_set():
+            return True
+        try:
+            stopped = (
+                self._request_cancellation is not None and self._request_cancellation.cancelled
+            )
+            stopped = stopped or (self._allowed is not None and not self._allowed())
+        except Exception:
+            stopped = True
+        if stopped:
+            # Suppression is terminal for this cue, even if the floor reopens.
+            self._cancelled.set()
+        return self._cancelled.is_set()
+
+    def _run(self) -> None:
+        remaining = max(0.0, self._deadline - self._clock())
+        if self._stop.wait(remaining):
+            return
+        player = getattr(self.tts, "speak_preloaded", None)
+        if not callable(player):
+            logger.debug("TTS backend has no preloaded backchannel support")
+            return
+        try:
+            parameters = inspect.signature(player).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+        supports_cancellation = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            or (
+                parameter.name == "cancellation"
+                and parameter.kind
+                in {
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                }
+            )
+            for parameter in parameters
+        )
+        if not supports_cancellation:
+            # A global interrupt can stop an unrelated buffer while this cue is
+            # merely queued, then still let the cue start afterward. Skip legacy
+            # players rather than violate the no-overlap guarantee.
+            logger.debug("TTS backend lacks scoped backchannel cancellation")
+            return
+        with self._lock:
+            if self._stop.is_set():
+                return
+            self._triggered = True
+            self._playing = True
+        try:
+            result = player(self.phrase, cancellation=self._stop)
+            with self._lock:
+                self._played = result is not False
+        except Exception:
+            # A filler cue must never turn a valid model response into a failure.
+            logger.warning("event=backchannel_playback_failed")
+        finally:
+            with self._lock:
+                self._playing = False
+
+    def supersede(self, timeout: float | None = None) -> bool:
+        """Prevent/interrupt the cue and optionally bound the playback barrier.
+
+        Return true only after the worker has stopped. A finite timeout is used
+        during process shutdown so a native audio call cannot prevent the CLI's
+        hard-exit fallback from running.
+        """
+
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout < 0
+        ):
+            raise ValueError("timeout must be finite and non-negative")
+
+        self._cancelled.set()
+        if self._future.cancel():
+            return True
+        try:
+            self._future.result(timeout=timeout)
+        except CancelledError:
+            return True
+        except FutureTimeoutError:
+            return False
+        except Exception:
+            # ``_run`` contains its own safety boundary; retain this guard for
+            # unusual executor implementations.
+            logger.warning("Backchannel worker failed", exc_info=True)
+        return self._future.done()
+
+    def before_first_speech(self) -> None:
+        """Fail closed if cached playback cannot release the speaker in time."""
+        if not self.supersede(timeout=BACKCHANNEL_STOP_TIMEOUT_SECONDS):
+            raise TimeoutError("backchannel playback did not stop")
+
+
+__all__ = ["BackchannelMode", "BackchannelSession", "suppress_backchannel_for"]

@@ -1,0 +1,970 @@
+{
+  "schema_version": 1,
+  "profile_version": "1.0.0",
+  "review_status": "proposed_for_review",
+  "policy": {
+    "acceptance": "All applicable mandatory assertions and metrics must pass for the declared sample count. Calibration and hardware evidence are separate prerequisites.",
+    "provisional_first_audio": "5000 ms p95 is a planning budget only, not a measured Emilia limit. Edit this versioned profile after deployment calibration; provisional values never establish a HIL pass.",
+    "missing": "Null limits and zero samples are unverified. Missing hardware yields blocked HIL. Unavailable optional resources require an explicit reason.",
+    "hard_failures": [
+      "p95 above configured limit",
+      "false barge-in above configured limit",
+      "any unauthorized egress",
+      "any duplicate authoritative dispatch",
+      "any leaked worker",
+      "any unverified completion claim"
+    ],
+    "counts": "Counts are nonnegative per-run counts summed for evaluation; rates retain numerator/denominator and cannot average away weighting or failures.",
+    "calibration": "Desktop and Jetson require independent calibration against explicit device identities. Calibration evidence hash must accompany every calibrated limit. Production thresholds are never modified by this suite."
+  },
+  "profiles": {
+    "desktop": {
+      "calibration_status": "unverified",
+      "calibration_artifact_sha256": null,
+      "metrics": {
+        "end_to_end_first_audio_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": 5000,
+          "status": "provisional",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "final_answer_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "stt_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "model_ttft_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "model_generation_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "tts_first_audio_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "tts_synthesis_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "interruption_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "endpointing_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "premature_finalization_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "wer": {
+          "unit": "edits/reference_word",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "cer": {
+          "unit": "edits/reference_character",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "exact_final_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "duplicate_dispatch_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "dropped_turn_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "partial_only_turn_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "false_barge_in_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "missed_barge_in_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "response_completeness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "unexpected_overlap_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "task_transition_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "verified_completion_precision": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "verified_completion_recall": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "cpu_percent": {
+          "unit": "percent",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "ram_mib": {
+          "unit": "MiB",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "temperature_c": {
+          "unit": "degree_C",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": false
+        },
+        "power_w": {
+          "unit": "W",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": false
+        },
+        "queue_depth": {
+          "unit": "items",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "leaked_workers": {
+          "unit": "workers",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "cleanup_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "unauthorized_egress_count": {
+          "unit": "attempts",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "activation_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "followup_acceptance_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "false_activation_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "session_expiry_correctness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "correction_retention_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "capture_gap_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "resume_correctness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "steering_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "stale_result_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "supersession_correctness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "premature_success_count": {
+          "unit": "claims",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "residual_echo_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "recovery_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "backchannel_delay_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "backchannel_cancellation_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "unnecessary_backchannel_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "overlap_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "resource_growth_mib": {
+          "unit": "MiB",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "thread_growth": {
+          "unit": "threads",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "process_growth": {
+          "unit": "processes",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "microphone_owner_count": {
+          "unit": "owners",
+          "direction": "max",
+          "statistic": "maximum",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        }
+      }
+    },
+    "jetson": {
+      "calibration_status": "unverified",
+      "calibration_artifact_sha256": null,
+      "metrics": {
+        "end_to_end_first_audio_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": 5000,
+          "status": "provisional",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "final_answer_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "stt_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "model_ttft_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "model_generation_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "tts_first_audio_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "tts_synthesis_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "interruption_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "endpointing_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "premature_finalization_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "wer": {
+          "unit": "edits/reference_word",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "cer": {
+          "unit": "edits/reference_character",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "exact_final_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "duplicate_dispatch_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "dropped_turn_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "partial_only_turn_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "false_barge_in_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "missed_barge_in_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "response_completeness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "unexpected_overlap_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "task_transition_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "verified_completion_precision": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "verified_completion_recall": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "cpu_percent": {
+          "unit": "percent",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "ram_mib": {
+          "unit": "MiB",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "temperature_c": {
+          "unit": "degree_C",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": false
+        },
+        "power_w": {
+          "unit": "W",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": false
+        },
+        "queue_depth": {
+          "unit": "items",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "leaked_workers": {
+          "unit": "workers",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "cleanup_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "unauthorized_egress_count": {
+          "unit": "attempts",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "activation_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "followup_acceptance_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "false_activation_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "session_expiry_correctness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "correction_retention_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "capture_gap_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "resume_correctness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "steering_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "stale_result_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "supersession_correctness_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "premature_success_count": {
+          "unit": "claims",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "residual_echo_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "recovery_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "backchannel_delay_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "backchannel_cancellation_rate": {
+          "unit": "ratio",
+          "direction": "min",
+          "statistic": "rate",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "unnecessary_backchannel_rate": {
+          "unit": "ratio",
+          "direction": "max",
+          "statistic": "rate",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "overlap_ms": {
+          "unit": "ms",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "resource_growth_mib": {
+          "unit": "MiB",
+          "direction": "max",
+          "statistic": "p95",
+          "value": null,
+          "status": "uncalibrated",
+          "minimum_samples": 20,
+          "mandatory": true
+        },
+        "thread_growth": {
+          "unit": "threads",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "process_growth": {
+          "unit": "processes",
+          "direction": "max",
+          "statistic": "count",
+          "value": 0,
+          "status": "invariant",
+          "minimum_samples": 1,
+          "mandatory": true
+        },
+        "microphone_owner_count": {
+          "unit": "owners",
+          "direction": "max",
+          "statistic": "maximum",
+          "value": 1,
+          "status": "invariant",
+          "minimum_samples": 20,
+          "mandatory": true
+        }
+      }
+    }
+  }
+}

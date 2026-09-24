@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,8 +18,10 @@ from api.providers.contracts import (
     ReasoningDelta,
     Role,
     TextDelta,
+    Timeouts,
 )
 from api.providers.ollama import OllamaAdapter
+from api.streaming import CancellationController
 
 
 def request(
@@ -59,6 +63,193 @@ class FakeClient:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+def test_cancellation_aborts_blocked_first_token_and_recreates_owned_client() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingChunks:
+        def __iter__(self):
+            return self
+
+        def __next__(self) -> object:
+            entered.set()
+            release.wait(timeout=2)
+            raise StopIteration
+
+        def close(self) -> None:
+            release.set()
+
+    class BlockingClient(FakeClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            return BlockingChunks()
+
+        def close(self) -> None:
+            super().close()
+            release.set()
+
+    first = BlockingClient()
+    second = FakeClient([{"message": {"content": "Recovered"}, "done": True}])
+    clients = iter([first, second])
+    adapter = OllamaAdapter(
+        "127.0.0.1:11434",
+        client_factory=lambda _host: next(clients),
+        cancellation_ack_timeout_seconds=0.1,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(adapter.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    assert entered.wait(timeout=1)
+    cancellation.cancel()
+    consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    assert first.close_calls == 1
+
+    events = list(adapter.stream(request()))
+    assert events[0] == TextDelta("Recovered")
+    assert isinstance(events[1], Completed)
+
+
+def test_cancellation_leaves_generator_cleanup_to_stream_worker(caplog) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    cleanup_threads: list[str] = []
+
+    def blocking_chunks():
+        try:
+            entered.set()
+            release.wait(timeout=2)
+            yield {"message": {"content": "stale"}, "done": True}
+        finally:
+            cleanup_threads.append(threading.current_thread().name)
+
+    class BlockingClient(FakeClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            return blocking_chunks()
+
+        def close(self) -> None:
+            super().close()
+            release.set()
+
+    raw_client = BlockingClient()
+    adapter = OllamaAdapter(
+        "127.0.0.1:11434",
+        client_factory=lambda _host: raw_client,
+        cancellation_ack_timeout_seconds=0.5,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(adapter.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume, name="test-ollama-consumer")
+    with caplog.at_level(logging.WARNING, logger="api.providers.ollama"):
+        consumer.start()
+        assert entered.wait(timeout=1)
+        cancellation.cancel()
+        consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+    assert raw_client.close_calls == 1
+    assert cleanup_threads == ["helios-ollama-stream"]
+    assert not any("stream_close_failed" in record.message for record in caplog.records)
+
+
+def test_unacknowledged_worker_blocks_a_second_stream_until_it_exits() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class StubbornChunks:
+        def __iter__(self) -> StubbornChunks:
+            return self
+
+        def __next__(self) -> object:
+            entered.set()
+            release.wait(timeout=2)
+            raise StopIteration
+
+        def close(self) -> None:
+            # Simulate a transport whose generator close cannot interrupt a
+            # blocked network read. The adapter must keep its admission slot.
+            return None
+
+    class StubbornClient(FakeClient):
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            return StubbornChunks()
+
+    first = StubbornClient()
+    second = FakeClient([{"message": {"content": "Recovered"}, "done": True}])
+    clients = iter([first, second])
+    adapter = OllamaAdapter(
+        "127.0.0.1:11434",
+        client_factory=lambda _host: next(clients),
+        cancellation_ack_timeout_seconds=0.05,
+    )
+    cancellation = CancellationController()
+    errors: list[BaseException] = []
+
+    def consume_first() -> None:
+        try:
+            list(adapter.stream(request(), cancellation=cancellation))
+        except BaseException as error:
+            errors.append(error)
+
+    consumer = threading.Thread(target=consume_first)
+    consumer.start()
+    assert entered.wait(timeout=1)
+    cancellation.cancel()
+    consumer.join(timeout=1)
+
+    assert not consumer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ProviderError)
+    assert errors[0].category is ErrorCategory.CANCELLED
+
+    second_started = threading.Event()
+    second_done = threading.Event()
+    second_events: list[object] = []
+
+    def consume_second() -> None:
+        second_started.set()
+        try:
+            second_events.extend(adapter.stream(request()))
+        finally:
+            second_done.set()
+
+    successor = threading.Thread(target=consume_second)
+    successor.start()
+    assert second_started.wait(timeout=1)
+    assert not second_done.wait(timeout=0.05)
+
+    release.set()
+    successor.join(timeout=1)
+
+    assert not successor.is_alive()
+    assert isinstance(second_events[0], TextDelta)
+    assert isinstance(second_events[1], Completed)
 
 
 def test_constructor_is_lazy_and_normalizes_legacy_endpoint() -> None:
@@ -201,6 +392,66 @@ def test_warm_up_uses_non_streaming_empty_user_message() -> None:
     ]
 
 
+def test_cold_model_load_is_measured_before_first_token() -> None:
+    class ColdClient(FakeClient):
+        def ps(self) -> dict[str, object]:
+            return {"models": []}
+
+        def chat(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            if kwargs["stream"] is False:
+                return {"done": True}
+            return [{"message": {"content": "Ready"}, "done": True}]
+
+    raw_client = ColdClient()
+    adapter = OllamaAdapter("127.0.0.1:11434", client=raw_client)
+    events = list(adapter.stream(request()))
+
+    assert [call["stream"] for call in raw_client.calls] == [False, True]
+    assert events[0] == TextDelta("Ready")
+    metadata = events[1].metadata
+    assert metadata.cold_load_ms is not None
+    assert metadata.warm_first_token_ms is not None
+    assert metadata.cold_load_ms >= 0
+    assert metadata.warm_first_token_ms >= 0
+
+
+def test_cold_load_timeout_has_distinct_category() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    class ColdClient(FakeClient):
+        def ps(self) -> dict[str, object]:
+            return {"models": []}
+
+        def chat(self, **kwargs: object) -> object:
+            if kwargs["stream"] is False:
+                entered.set()
+                release.wait(timeout=2)
+            return {"done": True}
+
+        def close(self) -> None:
+            release.set()
+
+    raw_client = ColdClient()
+    adapter = OllamaAdapter("127.0.0.1:11434", client=raw_client)
+    cold_request = request()
+    cold_request = ChatRequest(
+        model=cold_request.model,
+        messages=cold_request.messages,
+        mode=cold_request.mode,
+        language=cold_request.language,
+        timeouts=Timeouts(connect_seconds=0.01, first_token_seconds=0.01, total_seconds=0.05),
+    )
+
+    with pytest.raises(ProviderError) as captured:
+        list(adapter.stream(cold_request))
+
+    assert entered.is_set()
+    assert captured.value.category is ErrorCategory.COLD_LOAD_TIMEOUT
+    release.set()
+
+
 def test_call_time_transport_error_is_sanitized_and_retryable() -> None:
     class FailingClient(FakeClient):
         def chat(self, **kwargs: object) -> object:
@@ -210,7 +461,7 @@ def test_call_time_transport_error_is_sanitized_and_retryable() -> None:
     adapter = OllamaAdapter("127.0.0.1:11434", client=FailingClient())
 
     with pytest.raises(ProviderError) as captured:
-        adapter.stream(request())
+        list(adapter.stream(request()))
 
     error = captured.value
     assert error.category is ErrorCategory.CONNECTIVITY
@@ -277,7 +528,7 @@ def test_http_status_classification(
     adapter = OllamaAdapter("127.0.0.1:11434", client=FailingClient())
 
     with pytest.raises(ProviderError) as captured:
-        adapter.stream(request())
+        list(adapter.stream(request()))
 
     error = captured.value
     assert error.category is category

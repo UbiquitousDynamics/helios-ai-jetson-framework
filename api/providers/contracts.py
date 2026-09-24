@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, Union
 
+from api.transcripts import authoritative_text
+
 
 class Role(str, Enum):
     SYSTEM = "system"
@@ -46,11 +48,13 @@ class ErrorCategory(str, Enum):
     TLS = "tls"
     CONNECT_TIMEOUT = "connect_timeout"
     FIRST_TOKEN_TIMEOUT = "first_token_timeout"
+    COLD_LOAD_TIMEOUT = "cold_load_timeout"
     READ_TIMEOUT = "read_timeout"
     RATE_LIMITED = "rate_limited"
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
     QUOTA_EXHAUSTED = "quota_exhausted"
+    CREDIT_EXHAUSTED = "credit_exhausted"
     CONTEXT_OVERFLOW = "context_overflow"
     SAFETY_REFUSAL = "safety_refusal"
     UNSUPPORTED_FEATURE = "unsupported_feature"
@@ -69,18 +73,28 @@ class ChatMessage:
     content: str
     origin: ContentOrigin = ContentOrigin.UNKNOWN
     redacted: bool = False
+    remote_eligible: bool = True
+    source_origins: frozenset[ContentOrigin] = frozenset()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "content", authoritative_text(self.content))
         if not self.content:
             raise ValueError("message content cannot be empty")
+        if not isinstance(self.remote_eligible, bool):
+            raise TypeError("remote_eligible must be a boolean")
+        try:
+            normalized_origins = frozenset(ContentOrigin(origin) for origin in self.source_origins)
+        except (TypeError, ValueError):
+            raise ValueError("source_origins contains an invalid provenance") from None
+        object.__setattr__(self, "source_origins", normalized_origins)
 
 
 @dataclass(frozen=True, slots=True)
 class Timeouts:
     connect_seconds: float = 2.0
-    first_token_seconds: float = 4.0
-    read_seconds: float = 12.0
-    total_seconds: float = 30.0
+    first_token_seconds: float = 20.0
+    read_seconds: float = 15.0
+    total_seconds: float = 45.0
 
     def __post_init__(self) -> None:
         values = (
@@ -107,6 +121,8 @@ class ChatRequest:
     required_features: frozenset[str] = frozenset()
     options: Mapping[str, Any] = field(default_factory=dict)
     remote_authorized: bool = False
+    conversation_id: str | None = None
+    conversation_turn: int | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -117,6 +133,14 @@ class ChatRequest:
             raise ValueError(f"unsupported request mode: {self.mode!r}")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be at least one")
+        if self.conversation_id is not None and not self.conversation_id.strip():
+            raise ValueError("conversation_id cannot be empty")
+        if self.conversation_turn is not None and (
+            isinstance(self.conversation_turn, bool)
+            or not isinstance(self.conversation_turn, int)
+            or self.conversation_turn < 1
+        ):
+            raise ValueError("conversation_turn must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +189,8 @@ class CompletionMetadata:
     usage: Usage = field(default_factory=Usage)
     request_id: str | None = None
     rate_limits: RateLimitSnapshot | None = None
+    cold_load_ms: float | None = None
+    warm_first_token_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

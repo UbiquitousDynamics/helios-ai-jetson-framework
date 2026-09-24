@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "manifest_version": "1.0.0",
+  "status": "unconfigured",
+  "devices": {
+    "pc_output": null,
+    "pc_input": null,
+    "helios_input": null,
+    "helios_output": null
+  },
+  "device_identity_contract": "Each device requires host API, explicit index, exact name, sample rate and channels. Re-enumerate and match before opening; never use defaults.",
+  "calibration": {
+    "status": "unverified",
+    "artifact_sha256": null,
+    "profile_version": null,
+    "device_manifest_sha256": null,
+    "response_energy_dbfs": null,
+    "runaway_peak_dbfs": null,
+    "maximum_clock_uncertainty_ms": null
+  },
+  "isolation": {
+    "generated_speech_only": false,
+    "isolated_speakers_or_headphones": false,
+    "monitoring_and_loopback_disabled": false,
+    "no_people_in_capture_area": false
+  },
+  "limits": {
+    "exchange_timeout_seconds": 30,
+    "session_timeout_seconds": 180,
+    "shutdown_timeout_seconds": 5,
+    "maximum_self_triggers": 2
+  },
+  "artifacts": {
+    "directory": null,
+    "audio_retention": "delete",
+    "retention_hours": 0
+  },
+  "marker": "Unique nonspoken run ID plus calibrated acoustic marker; exclude marker from recognition scores."
+}

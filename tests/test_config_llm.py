@@ -51,6 +51,7 @@ languages = ["it", "en"]
 [targets.local-talk]
 provider = "ollama"
 model_by_language = { it = "emilia-gemma3:1b", en = "emilia-en-gemma3:1b" }
+max_history_turns = 1
 
 [targets.local-think]
 provider = "ollama"
@@ -72,6 +73,19 @@ def test_load_llm_settings_resolves_paths_and_keeps_key_names_only(
     assert settings.budget.catalog_path == tmp_path / "model-catalog.json"
     assert settings.budget.ledger_path == tmp_path / "usage.jsonl"
     assert settings.targets[1].model_for_language("en") == "emilia-en-gemma3:1b"
+    assert settings.targets[1].max_history_turns == 1
+
+
+def test_remote_context_requires_an_explicit_privacy_opt_in(tmp_path: Path) -> None:
+    routing_path = tmp_path / "routing.toml"
+    routing_path.write_text(
+        'schema_version = 1\n[privacy]\ndefault = "remote_allowed"\n',
+        encoding="utf-8",
+    )
+
+    settings = config.load_llm_settings(routing_path)
+
+    assert settings.privacy.allow_remote_context is False
 
 
 def test_environment_can_disable_but_not_create_remote_routing(tmp_path: Path) -> None:
@@ -105,11 +119,87 @@ def test_environment_controls_log_level_and_destination(tmp_path: Path) -> None:
     assert file_logging.log_file == tmp_path / "logs/helios.log"
 
 
+def test_environment_configures_explicit_audio_devices(tmp_path: Path) -> None:
+    settings = config.Settings.from_env(
+        tmp_path,
+        environ={
+            "HELIOS_AUDIO_INPUT_DEVICE": "USB PnP Audio Device",
+            "HELIOS_AUDIO_OUTPUT_DEVICE": "3",
+            "HELIOS_AUDIO_OUTPUT_LATENCY": "low",
+            "HELIOS_AUDIO_INPUT_STRICT": "true",
+            "HELIOS_AUDIO_INPUT_CHANNEL_MODE": "stronger",
+        },
+    )
+
+    assert settings.audio_input_device == "USB PnP Audio Device"
+    assert settings.audio_output_device == 3
+    assert settings.audio_output_latency == "low"
+    assert settings.audio_input_strict is True
+    assert settings.audio_input_channel_mode == "stronger"
+
+
+def test_invalid_capture_selector_policy_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(config.ConfigurationError, match="audio_input_channel_mode"):
+        config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_INPUT_CHANNEL_MODE": "magic"})
+    with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_INPUT_STRICT"):
+        config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_INPUT_STRICT": "maybe"})
+
+
+def test_capture_health_floor_has_independent_validated_configuration(tmp_path: Path) -> None:
+    defaults = config.Settings.from_env(tmp_path, environ={})
+    adjusted = config.Settings.from_env(
+        tmp_path,
+        environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": "0.0005"},
+    )
+    assert defaults.audio_capture_level_min_rms == 0.001
+    assert adjusted.audio_capture_level_min_rms == 0.0005
+    assert adjusted.barge_in_minimum_interrupt_energy == defaults.barge_in_minimum_interrupt_energy
+
+
+@pytest.mark.parametrize("value", ["0", "-0.1", "nan", "inf", "bad"])
+def test_invalid_capture_health_floor_is_rejected(tmp_path: Path, value: str) -> None:
+    with pytest.raises(
+        config.ConfigurationError,
+        match="HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS|audio_capture_level_min_rms",
+    ):
+        config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": value})
+
+
+def test_non_numeric_capture_health_floor_is_rejected_directly() -> None:
+    with pytest.raises(config.ConfigurationError, match="audio_capture_level_min_rms"):
+        config.Settings(audio_capture_level_min_rms=True)
+
+
+def test_invalid_audio_device_configuration_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_INPUT_DEVICE"):
+        config.Settings.from_env(
+            tmp_path,
+            environ={"HELIOS_AUDIO_INPUT_DEVICE": "-1"},
+        )
+
+
 def test_invalid_environment_log_level_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(config.ConfigurationError, match="HELIOS_LOG_LEVEL"):
         config.Settings.from_env(
             tmp_path,
             environ={"HELIOS_LOG_LEVEL": "verbose"},
+        )
+
+
+def test_barge_in_is_enabled_by_default_and_strictly_parsed(tmp_path: Path) -> None:
+    defaults = config.Settings.from_env(tmp_path, environ={})
+    disabled = config.Settings.from_env(
+        tmp_path,
+        environ={"HELIOS_BARGE_IN_ENABLED": "false"},
+    )
+
+    assert defaults.barge_in_enabled
+    assert not disabled.barge_in_enabled
+
+    with pytest.raises(config.ConfigurationError, match="HELIOS_BARGE_IN_ENABLED"):
+        config.Settings.from_env(
+            tmp_path,
+            environ={"HELIOS_BARGE_IN_ENABLED": "sometimes"},
         )
 
 
@@ -137,10 +227,25 @@ def test_remote_file_uses_its_enabled_default_and_environment_can_disable_it(
     assert disabled.llm.routing_policy == "local_only"
 
 
-def test_repository_defaults_to_codex_remote_first_with_local_fallback() -> None:
+def test_clean_checkout_is_local_only_without_explicit_routing_file() -> None:
+    """A clone must not send transcripts off-device before anyone opts in."""
+
     settings = config.Settings.from_env(PROJECT_ROOT, environ={})
 
-    assert settings.llm.routing_file == (PROJECT_ROOT / config.DEFAULT_LLM_CONFIG).resolve()
+    assert settings.llm.routing_file is None
+    assert not settings.llm.remote_enabled
+    assert settings.llm.routing_policy == "local_only"
+    assert not settings.llm.privacy.allow_remote_transcripts
+    assert not settings.llm.privacy.allow_remote_context
+
+
+def test_suggested_codex_profile_enables_remote_first_when_named_explicitly() -> None:
+    settings = config.Settings.from_env(
+        PROJECT_ROOT,
+        environ={"HELIOS_LLM_CONFIG": str(config.SUGGESTED_LLM_CONFIG)},
+    )
+
+    assert settings.llm.routing_file == (PROJECT_ROOT / config.SUGGESTED_LLM_CONFIG).resolve()
     assert settings.llm.remote_enabled
     assert settings.llm.routing_policy == "remote_first"
     assert settings.llm.talk.candidates[-1] == "local-talk"
@@ -224,6 +329,29 @@ def test_codex_subscription_uses_a_realistic_first_audio_health_objective() -> N
     assert settings.health.maximum_talk_first_audio_ms == 30_000
 
 
+def test_codex_subscription_uses_low_latency_speech_chunks_and_bounded_remote_history() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.talk.speech_chunk_max_chars == 64
+    assert settings.talk.speech_chunk_max_delay_seconds == pytest.approx(0.75)
+    remote_targets = {
+        target.name: target for target in settings.targets if target.name.startswith("codex-talk-")
+    }
+    assert {target.max_history_turns for target in remote_targets.values()} == {6}
+
+
+def test_codex_subscription_enables_remote_context_for_natural_conversation() -> None:
+    settings = config.load_llm_settings(
+        PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
+    )
+
+    assert settings.privacy.allow_remote_context is True
+    providers = {provider.name: provider for provider in settings.providers}
+    assert providers["openai-codex"].reuse_remote_thread is False
+
+
 def test_codex_subscription_has_target_specific_talk_limits() -> None:
     settings = config.load_llm_settings(
         PROJECT_ROOT / "examples" / "llm-routing.codex-subscription.toml"
@@ -235,6 +363,8 @@ def test_codex_subscription_has_target_specific_talk_limits() -> None:
         assert targets[name].max_output_tokens == 128
     assert targets["local-talk"].max_output_words == 20
     assert targets["local-talk"].max_output_tokens == 40
+    assert targets["local-talk"].max_history_turns == 1
+    assert targets["local-think"].max_history_turns == 1
     assert targets["codex-think-sol"].max_output_words is None
 
 
@@ -252,8 +382,9 @@ def test_codex_subscription_has_adaptive_remote_tiers_and_fast_speech() -> None:
         for name in ("codex-talk-luna", "codex-talk-terra", "codex-talk-sol")
     ] == [0, 3, 5]
     assert settings.talk.first_speech_min_chars == 0
-    assert settings.talk.speech_chunk_max_chars == 80
-    assert settings.talk.first_visible_token_seconds == 15.0
+    assert settings.talk.speech_chunk_max_chars == 64
+    assert settings.talk.speech_chunk_max_delay_seconds == pytest.approx(0.75)
+    assert settings.talk.first_visible_token_seconds == 30.0
 
 
 def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> None:
@@ -266,7 +397,7 @@ def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> No
     assert settings.network.probe_url == "https://chatgpt.com/"
     assert settings.network.probe_interval_seconds == 3.0
     assert settings.network.result_max_age_seconds == 6.0
-    assert settings.network.probe_timeout_seconds == 1.2
+    assert settings.network.probe_timeout_seconds == 3.0
     assert settings.network.probe_bytes == 32_768
     assert settings.network.goodput_probe_interval_seconds == 60.0
 
@@ -290,6 +421,10 @@ def test_codex_subscription_fails_closed_on_stale_or_unvalidated_network() -> No
         (
             'schema_version = 1\n[targets.local]\nprovider = "ollama"\n'
             'model = "test"\nmax_output_words = true\n'
+        ),
+        (
+            'schema_version = 1\n[targets.local]\nprovider = "ollama"\n'
+            'model = "test"\nmax_history_turns = true\n'
         ),
         (
             'schema_version = 1\n[targets.remote]\nprovider = "ollama"\n'
@@ -353,6 +488,15 @@ def test_codex_provider_requires_stdio_and_forbids_api_key_configuration() -> No
     )
 
     assert provider.api_key_env is None
+
+    with pytest.raises(config.ConfigurationError, match="reuse_remote_thread"):
+        config.LLMProviderSettings(
+            name="openai-codex",
+            adapter="codex_app_server",
+            endpoint="stdio://codex",
+            locality="remote",
+            reuse_remote_thread="false",  # type: ignore[arg-type]
+        )
 
     with pytest.raises(config.ConfigurationError, match="local ChatGPT sign-in"):
         config.LLMProviderSettings(

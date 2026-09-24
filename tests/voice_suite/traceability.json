@@ -1,0 +1,660 @@
+{
+  "schema_version": 1,
+  "coverage_status": "planned_only",
+  "requirement_source_sha256": "255c8ec167bb92b7ae644046dc07aedeb4fdcfd8f5db70e9cc89fa3b4d1faaa5",
+  "requirement_source_hash_definition": "UTF-8 bytes of the 45 source Markdown table rows beginning | FR-, in source order, separated by LF and ending with LF.",
+  "source_document_sha256": "45fd1cc0dcd8d5374b640b5121c07c755230086ee41d69675d2b62fbb4c54d9b",
+  "source_document_hash_definition": "UTF-8 source document with CRLF normalized to LF.",
+  "original_attachment_sha256": "47efa3a717d277c6326c57b41483994f3797e9ae4f348125c55c423f590d2da5",
+  "requirements": [
+    {
+      "id": "FR-01",
+      "requirement": "Continuous voice conversation without push-to-talk for every turn.",
+      "canonical_requirement": "The system shall support continuous voice conversations without requiring a push-to-talk interaction for each user turn.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 710,
+      "test_tasks": [
+        "00",
+        "05",
+        "06",
+        "09",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-02",
+      "requirement": "Listen and process user audio while generating speech and during the spoken response.",
+      "canonical_requirement": "The system shall be able to listen to the user while generating speech and shall process incoming user audio during its own spoken response.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 711,
+      "test_tasks": [
+        "00",
+        "05",
+        "06",
+        "15",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-03",
+      "requirement": "Detect intentional user turn-taking and stop or attenuate the response.",
+      "canonical_requirement": "The system shall detect when the user intentionally takes the conversational turn and shall stop or attenuate its ongoing response accordingly.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 712,
+      "test_tasks": [
+        "00",
+        "07",
+        "15",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-04",
+      "requirement": "Distinguish thinking pauses from actual end-of-turn when possible.",
+      "canonical_requirement": "The system shall distinguish, when possible, between a thinking pause and the actual end of the user's conversational turn.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 713,
+      "test_tasks": [
+        "00",
+        "03",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-05",
+      "requirement": "Short acknowledgements without unnecessarily taking the conversational floor.",
+      "canonical_requirement": "The system shall be able to generate short conversational acknowledgements such as \"mhm\", \"yes\", or equivalent signals without unnecessarily taking control of the conversation.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 714,
+      "test_tasks": [
+        "00",
+        "10",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-06",
+      "requirement": "Estimate user speech, assistant speech, another speaker, silence, and ambiguous speech continuously.",
+      "canonical_requirement": "The system shall continuously estimate the current conversational state, including at least: user speaking, assistant speaking, another person speaking, silence, and ambiguous speech.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 715,
+      "test_tasks": [
+        "00",
+        "01",
+        "05",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-07",
+      "requirement": "Initiate interaction through a wake word or another explicit activation mechanism.",
+      "canonical_requirement": "The system shall allow a conversation to be initiated through a wake word, physical control, software trigger, or equivalent explicit activation mechanism.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 716,
+      "test_tasks": [
+        "00",
+        "09",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-08",
+      "requirement": "Issue later requests without repeating the wake word after activation.",
+      "canonical_requirement": "Once a conversation has been initiated, the user shall be able to issue subsequent requests without repeating the wake word.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 717,
+      "test_tasks": [
+        "00",
+        "09",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-09",
+      "requirement": "Let the user immediately terminate or suspend interaction through an explicit control.",
+      "canonical_requirement": "The user shall be able to immediately terminate or suspend the interaction through a voice command, gesture, button, or equivalent interaction mechanism.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 718,
+      "test_tasks": [
+        "00",
+        "08",
+        "09",
+        "15",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-10",
+      "requirement": "Estimate whether active-session speech addresses the assistant or another person.",
+      "canonical_requirement": "During an active session, the system shall estimate whether detected speech is directed toward the assistant or toward another person.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 719,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-11",
+      "requirement": "Retain sufficient context for references, confirmations, and later corrections.",
+      "canonical_requirement": "The system shall preserve sufficient conversational context to correctly interpret references such as \"that one\", \"the previous one\", \"yes\", \"no\", \"tomorrow instead\", or equivalent contextual expressions.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 720,
+      "test_tasks": [
+        "00",
+        "09",
+        "14",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-12",
+      "requirement": "Incorporate self-corrections within one utterance into the request.",
+      "canonical_requirement": "The system shall recognize and incorporate user self-corrections within the same utterance, such as \"Tuesday... actually, Wednesday.\"",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 721,
+      "test_tasks": [
+        "00",
+        "02",
+        "03",
+        "04",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-13",
+      "requirement": "Modify, refine, or redirect a request while its backend task runs.",
+      "canonical_requirement": "The user shall be able to modify, refine, or redirect an ongoing request while the associated backend task is still being executed.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 722,
+      "test_tasks": [
+        "00",
+        "11",
+        "12",
+        "13",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-14",
+      "requirement": "Delegate reasoning, search, tool calls, and long operations without blocking conversation.",
+      "canonical_requirement": "The realtime conversational layer shall be able to delegate reasoning, searches, tool calls, and long-running operations to external components without blocking the conversation.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 723,
+      "test_tasks": [
+        "00",
+        "11",
+        "12",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-15",
+      "requirement": "Track pending, executing, waiting-for-user, completed, failed, cancelled, and superseded task states.",
+      "canonical_requirement": "The system shall explicitly maintain the execution state of delegated tasks. Supported states should include at least:\n\n* Pending\n* Executing\n* Waiting for user input\n* Completed\n* Failed\n* Cancelled\n* Superseded",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 724,
+      "test_tasks": [
+        "00",
+        "11",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-16",
+      "requirement": "Report completion only after confirmation from the responsible backend or tool.",
+      "canonical_requirement": "The assistant shall not report an operation as completed until it has received confirmation from the responsible backend service or tool.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 725,
+      "test_tasks": [
+        "00",
+        "12",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-17",
+      "requirement": "Infer that a request needs visual or other sensor information without an explicit sensor request.",
+      "canonical_requirement": "The system shall automatically determine when a user request requires visual or other sensor information without requiring the user to explicitly request a specific sensor.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 726,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-18",
+      "requirement": "Convert device/user-view images or video into semantic environment representations.",
+      "canonical_requirement": "The system shall be able to process images or video captured from the user's or device's point of view and convert them into a usable semantic representation of the environment.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 727,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-19",
+      "requirement": "Resolve references to visible objects or positions using current visual context.",
+      "canonical_requirement": "The system shall resolve expressions such as \"this\", \"that\", \"the object in front of me\", or \"the one on the left\" using the current visual context.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 728,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-20",
+      "requirement": "Optionally maintain visual context across turns without requesting each capture.",
+      "canonical_requirement": "The system shall support an optional mode in which visual context is continuously maintained across multiple conversational turns without requiring a new image capture request for every question.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 729,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-21",
+      "requirement": "Prioritize meaningful scene changes over full semantic processing of every frame.",
+      "canonical_requirement": "The system shall identify meaningful changes in the visual scene and prioritize the processing of relevant changes rather than continuously processing every video frame at full semantic depth.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 730,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-22",
+      "requirement": "Maintain conversation and task context for the active session.",
+      "canonical_requirement": "The system shall maintain the conversational and task context required for the duration of the active session.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 731,
+      "test_tasks": [
+        "00",
+        "09",
+        "11",
+        "13",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-23",
+      "requirement": "Store relevant user information across sessions under configurable policy and permissions.",
+      "canonical_requirement": "The system shall support persistent storage of relevant user information across sessions, subject to configurable policies and user permissions.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 732,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-24",
+      "requirement": "Associate remembered events with temporal, spatial, conversational, and perceptual context, including unfinished work.",
+      "canonical_requirement": "The system shall be able to associate remembered events with temporal, spatial, conversational, and perceptual context.\n\nExample use cases include:\n\n* Remembering where the user parked a vehicle.\n* Remembering an object previously observed.\n* Recalling a previous interaction associated with a specific place.\n* Remembering an unfinished task.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 733,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-25",
+      "requirement": "Automatically retrieve relevant memories instead of loading all persistent memory into context.",
+      "canonical_requirement": "The system shall automatically retrieve only the memories relevant to the current interaction rather than loading the entire persistent memory into the active model context.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 734,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-26",
+      "requirement": "Let users govern persistent storage and inspect, restrict, or delete stored information.",
+      "canonical_requirement": "The user shall be able to control whether information is stored persistently and shall be able to inspect, restrict, or request deletion of stored information.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 735,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-27",
+      "requirement": "Standard invocation of external tools/services, including web, messaging, calendar, navigation, media, smart home, robot, enterprise APIs, and user apps.",
+      "canonical_requirement": "The system shall expose a standardized mechanism for invoking external tools and services, including but not limited to:\n\n* Web search\n* Messaging\n* Calendar\n* Navigation\n* Media services\n* Smart-home devices\n* Robot control\n* Enterprise APIs\n* User applications",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 736,
+      "test_tasks": [
+        "00",
+        "11",
+        "12",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-28",
+      "requirement": "Require explicit user confirmation for appropriate sensitive, high-impact, or irreversible operations.",
+      "canonical_requirement": "The system shall require explicit user confirmation before performing sensitive, high-impact, or irreversible operations when appropriate.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 737,
+      "test_tasks": [
+        "00",
+        "12",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-29",
+      "requirement": "When explicitly enabled, initiate useful interactions based on environment, tasks, reminders, or memory.",
+      "canonical_requirement": "When explicitly enabled by the user, the system shall be able to proactively provide information or initiate interactions based on environmental context, active tasks, reminders, or stored information.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 738,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-30",
+      "requirement": "Consider urgency, relevance, user activity, floor state, and interruption cost before initiating an interaction.",
+      "canonical_requirement": "Before initiating a proactive interaction, the system shall consider contextual factors including urgency, relevance, user activity, conversational state, and likelihood of interrupting the user unnecessarily.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 739,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-31",
+      "requirement": "Distinguish the primary user, assistant speech, background speech, and nearby speakers.",
+      "canonical_requirement": "The system shall distinguish, at minimum, between:\n\n* The primary user\n* The assistant's own speech\n* Background speech\n* Other nearby speakers",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 740,
+      "test_tasks": [
+        "00",
+        "07",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-32",
+      "requirement": "Maintain usable performance with traffic, wind, music, reverberation, and nearby conversation.",
+      "canonical_requirement": "The system shall maintain usable conversational performance in the presence of common environmental disturbances including traffic, wind, music, reverberation, and nearby conversations.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 741,
+      "test_tasks": [
+        "00",
+        "07",
+        "15",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-33",
+      "requirement": "Transfer conversation or task context between supported devices.",
+      "canonical_requirement": "The system shall allow an active conversation or task to transition between supported devices while preserving relevant conversational and task context.\n\nExamples may include transitions between:\n\n* Smart glasses\n* Smartphone\n* Desktop\n* Vehicle\n* Robot\n* Smart speaker",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 742,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-34",
+      "requirement": "Preserve local capabilities and clearly identify unavailable cloud-dependent functions when connectivity degrades.",
+      "canonical_requirement": "When network connectivity is degraded or unavailable, the system shall preserve locally available capabilities and clearly communicate which cloud-dependent functions are temporarily unavailable.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 743,
+      "test_tasks": [
+        "00",
+        "14",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-35",
+      "requirement": "Keep stop, cancel, mute, volume, wake, session termination, and privacy controls local where technically possible.",
+      "canonical_requirement": "Essential interaction commands should remain available locally whenever technically possible.\n\nThese should include at least:\n\n* Stop\n* Cancel\n* Mute\n* Volume control\n* Wake-word detection\n* Session termination\n* Privacy controls",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 744,
+      "test_tasks": [
+        "00",
+        "08",
+        "09",
+        "14",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-36",
+      "requirement": "Keep frontend conversation, delegated tasks, and backend tool results synchronized.",
+      "canonical_requirement": "Conversational state, delegated task state, and tool results shall remain synchronized across the conversational frontend and backend agent services.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 745,
+      "test_tasks": [
+        "00",
+        "05",
+        "11",
+        "12",
+        "13",
+        "14",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-37",
+      "requirement": "Support revisable realtime speech and finalized text suitable for history, tasks, memory, and audit.",
+      "canonical_requirement": "The system shall support both:\n\n* A provisional realtime representation of incoming speech that may still change.\n* An authoritative finalized representation suitable for history, task execution, memory, and audit purposes.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 746,
+      "test_tasks": [
+        "00",
+        "02",
+        "04",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-38",
+      "requirement": "Summarize, compress, retrieve, or otherwise manage long histories without restarting the active session.",
+      "canonical_requirement": "The system shall be able to summarize, compress, retrieve, or otherwise manage long conversational histories without requiring the active session to be restarted.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 747,
+      "test_tasks": [
+        "00",
+        "09",
+        "14",
+        "15",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-39",
+      "requirement": "Converse in multiple languages and switch language during an active conversation.",
+      "canonical_requirement": "The system shall support conversations in multiple languages and shall allow the user to switch languages during an active conversation.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 748,
+      "test_tasks": [
+        "00",
+        "10",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-40",
+      "requirement": "Bidirectional live translation between speakers with conversational context.",
+      "canonical_requirement": "The system shall support bidirectional live translation between speakers while maintaining conversational context.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 749,
+      "test_tasks": [
+        "00",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-41",
+      "requirement": "Keep voice, style, tone, verbosity, behavior, and preferences consistent within and, when configured, across sessions.",
+      "canonical_requirement": "The assistant shall maintain consistent voice, style, tone, response verbosity, conversational behavior, and interaction preferences throughout a session and, when configured, across multiple sessions.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 750,
+      "test_tasks": [
+        "00",
+        "10",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-42",
+      "requirement": "Prefer concise spoken answers and expand when requested or needed.",
+      "canonical_requirement": "The system shall optimize spoken responses for natural conversational interaction by providing concise answers by default and expanding when additional detail is requested or required.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 751,
+      "test_tasks": [
+        "00",
+        "10",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-43",
+      "requirement": "Communicate relevant task-state changes without chain-of-thought or unnecessary interruption.",
+      "canonical_requirement": "For operations requiring significant execution time, the system shall communicate relevant task-state changes without exposing internal chain-of-thought or unnecessarily interrupting the user.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 752,
+      "test_tasks": [
+        "00",
+        "11",
+        "12",
+        "13",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-44",
+      "requirement": "Provide clear understanding and control of active microphones, cameras, and privacy-sensitive sensors.",
+      "canonical_requirement": "The system shall provide clear mechanisms for the user to understand and control the active state of microphones, cameras, and other privacy-sensitive sensors.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 753,
+      "test_tasks": [
+        "00",
+        "05",
+        "08",
+        "14",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    },
+    {
+      "id": "FR-45",
+      "requirement": "Activate expensive or sensitive sensing/processing only for the task, mode, or explicitly enabled continuous assistance.",
+      "canonical_requirement": "The system shall activate computationally expensive or privacy-sensitive sensors and processing pipelines only when required by the active task, interaction mode, or explicitly enabled continuous-assistance mode.",
+      "source": "docs/live-conversation-progress.md",
+      "source_line": 754,
+      "test_tasks": [
+        "00",
+        "05",
+        "06",
+        "14",
+        "16"
+      ],
+      "local_evidence": "not_run",
+      "hil_evidence": "blocked"
+    }
+  ]
+}

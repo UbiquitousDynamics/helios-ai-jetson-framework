@@ -143,6 +143,8 @@ _FLOAT_FIELDS = frozenset(
     {
         "latency_ms",
         "first_token_ms",
+        "cold_load_ms",
+        "warm_first_token_ms",
         "first_audio_ms",
         "actual_first_audio_ms",
         "listening_ms",
@@ -691,6 +693,7 @@ class SQLiteKPIStore:
         path: str | Path,
         *,
         raw_retention_days: int = 7,
+        background_retention_days: int = 1,
         rollup_retention_days: int = 90,
         max_size_bytes: int = 256 * 1024 * 1024,
         rollup_interval_seconds: int = 60,
@@ -700,6 +703,7 @@ class SQLiteKPIStore:
     ) -> None:
         for name, value in (
             ("raw_retention_days", raw_retention_days),
+            ("background_retention_days", background_retention_days),
             ("rollup_retention_days", rollup_retention_days),
             ("rollup_interval_seconds", rollup_interval_seconds),
             ("max_size_bytes", max_size_bytes),
@@ -716,6 +720,9 @@ class SQLiteKPIStore:
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.raw_retention_days = raw_retention_days
+        if background_retention_days > raw_retention_days:
+            raise ValueError("background retention cannot exceed raw retention")
+        self.background_retention_days = background_retention_days
         self.rollup_retention_days = rollup_retention_days
         self.max_size_bytes = max_size_bytes
         self.rollup_interval_seconds = rollup_interval_seconds
@@ -1045,8 +1052,15 @@ class SQLiteKPIStore:
         finally:
             connection.close()
 
-    def _rollup_locked(self, cutoff_ms: int, *, inclusive: bool = False) -> int:
+    def _rollup_locked(
+        self, cutoff_ms: int, *, inclusive: bool = False, background_only: bool = False
+    ) -> int:
         operator = "<=" if inclusive else "<"
+        event_filter = (
+            " AND event IN ('network_probe_completed', 'resource_sample')"
+            if background_only
+            else ""
+        )
         interval_ms = self.rollup_interval_seconds * 1_000
         coalesced = ", ".join(f"COALESCE({name}, '')" for name in _DIMENSION_FIELDS)
         group_positions = ", ".join(str(index) for index in range(1, 4 + len(_DIMENSION_FIELDS)))
@@ -1054,7 +1068,7 @@ class SQLiteKPIStore:
             f"""
             SELECT (timestamp_ms / ?) * ?, ?, event, {coalesced}, SUM(weight)
             FROM kpi_events
-            WHERE timestamp_ms {operator} ?
+            WHERE timestamp_ms {operator} ?{event_filter}
             GROUP BY {group_positions}
             """,
             (interval_ms, interval_ms, self.rollup_interval_seconds, cutoff_ms),
@@ -1083,7 +1097,7 @@ class SQLiteKPIStore:
                 ((row[-1], *row[:-1]) for row in row_values),
             )
         cursor = self._writer.execute(
-            f"DELETE FROM kpi_events WHERE timestamp_ms {operator} ?", (cutoff_ms,)
+            f"DELETE FROM kpi_events WHERE timestamp_ms {operator} ?{event_filter}", (cutoff_ms,)
         )
         return max(0, cursor.rowcount)
 
@@ -1102,7 +1116,11 @@ class SQLiteKPIStore:
         removed_rollups = 0
         try:
             self._writer.execute("BEGIN IMMEDIATE")
-            removed_raw = self._rollup_locked(raw_cutoff)
+            removed_raw += self._rollup_locked(
+                now_ms - self.background_retention_days * _DAY_MS,
+                background_only=True,
+            )
+            removed_raw += self._rollup_locked(raw_cutoff)
             cursor = self._writer.execute(
                 "DELETE FROM kpi_rollup_counts WHERE bucket_ms < ?", (rollup_cutoff,)
             )

@@ -190,6 +190,16 @@ class ProviderRegistry:
                 registration.instance = registration.factory()
             return registration.instance
 
+    def instantiated(self) -> tuple[ChatProvider, ...]:
+        """Return already-created providers without triggering lazy factories."""
+
+        with self._lock:
+            return tuple(
+                registration.instance
+                for registration in self._registrations.values()
+                if registration.instance is not None
+            )
+
     def close(self) -> None:
         first_error: BaseException | None = None
         with self._lock:

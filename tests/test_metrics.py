@@ -120,6 +120,58 @@ def test_jsonl_metric_sink_prunes_records_older_than_retention(tmp_path):
     assert records == [{"event": "new", "timestamp": "2026-07-27T12:00:00Z"}]
 
 
+@pytest.mark.parametrize(
+    "damaged_tail",
+    (
+        b'{"event":"interrupted","timestamp":"2026-07-27T12:',
+        b"not-json\n",
+    ),
+)
+def test_jsonl_metric_sink_repairs_only_a_damaged_final_tail(tmp_path, damaged_tail):
+    path = tmp_path / "metrics.jsonl"
+    preserved = {"event": "preserved", "timestamp": "2026-07-27T11:00:00Z"}
+    path.write_bytes((json.dumps(preserved) + "\n").encode() + damaged_tail)
+    sink = _content_safe_jsonl_sink(path, retention_days=14)
+
+    sink({"event": "new", "timestamp": "2026-07-27T12:00:00Z"})
+
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert records == [
+        preserved,
+        {"event": "new", "timestamp": "2026-07-27T12:00:00Z"},
+    ]
+    assert path.read_bytes().endswith(b"\n")
+
+
+def test_jsonl_metric_sink_preserves_valid_final_record_without_newline(tmp_path):
+    path = tmp_path / "metrics.jsonl"
+    preserved = {"event": "preserved", "timestamp": "2026-07-27T11:00:00Z"}
+    path.write_text(json.dumps(preserved), encoding="utf-8")
+    sink = _content_safe_jsonl_sink(path, retention_days=14)
+
+    sink({"event": "new", "timestamp": "2026-07-27T12:00:00Z"})
+
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert records == [
+        preserved,
+        {"event": "new", "timestamp": "2026-07-27T12:00:00Z"},
+    ]
+
+
+def test_jsonl_metric_sink_rejects_corrupt_interior_record_without_rewriting(tmp_path):
+    path = tmp_path / "metrics.jsonl"
+    first = json.dumps({"event": "first", "timestamp": "2026-07-27T10:00:00Z"})
+    last = json.dumps({"event": "last", "timestamp": "2026-07-27T11:00:00Z"})
+    original = f"{first}\nnot-json\n{last}\n"
+    path.write_text(original, encoding="utf-8")
+    sink = _content_safe_jsonl_sink(path, retention_days=14)
+
+    with pytest.raises(ValueError, match="malformed interior"):
+        sink({"event": "new", "timestamp": "2026-07-27T12:00:00Z"})
+
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_async_recorder_keeps_sink_io_off_the_calling_thread_and_flushes():
     entered = threading.Event()
     release = threading.Event()

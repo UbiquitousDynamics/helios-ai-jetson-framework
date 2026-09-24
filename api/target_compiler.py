@@ -96,6 +96,7 @@ class TargetCompiler:
                     retry_attempts=target.retry_attempts,
                     max_output_tokens=maximum_output,
                     max_output_words=target.max_output_words,
+                    max_history_turns=target.max_history_turns,
                     options=dict(target.options),
                     price=price,
                 )

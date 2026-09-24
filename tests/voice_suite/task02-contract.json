@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0.0",
+  "test_task": "02",
+  "scope": "Synthetic typed recognizer events for the local authority gate. Acoustic Piper playback and capture require separate HIL evidence.",
+  "scenarios": [
+    {
+      "id": "en_revised_final",
+      "language": "en",
+      "expected_final_count": 1,
+      "events": [
+        {"text": "Emilia open the door", "is_final": false, "capture_id": 1, "segment_id": 1, "revision": 1, "expected": "provisional"},
+        {"text": "Emilia open the calendar", "is_final": false, "capture_id": 1, "segment_id": 1, "revision": 2, "expected": "provisional"},
+        {"text": "Emilia open the calendar tomorrow", "is_final": true, "capture_id": 1, "segment_id": 1, "revision": 3, "expected": "final"},
+        {"text": "Emilia duplicate command", "is_final": true, "capture_id": 1, "segment_id": 1, "revision": 4, "expected": "ignored"},
+        {"text": "Emilia late hypothesis", "is_final": false, "capture_id": 1, "segment_id": 1, "revision": 5, "expected": "ignored"}
+      ]
+    },
+    {
+      "id": "it_revised_final",
+      "language": "it",
+      "expected_final_count": 1,
+      "events": [
+        {"text": "Emilia apri la porta", "is_final": false, "capture_id": 1, "segment_id": 1, "revision": 1, "expected": "provisional"},
+        {"text": "Emilia apri il calendario", "is_final": false, "capture_id": 1, "segment_id": 1, "revision": 2, "expected": "provisional"},
+        {"text": "Emilia apri il calendario domani", "is_final": true, "capture_id": 1, "segment_id": 1, "revision": 3, "expected": "final"},
+        {"text": "Emilia comando duplicato", "is_final": true, "capture_id": 1, "segment_id": 1, "revision": 4, "expected": "ignored"},
+        {"text": "Emilia ipotesi tardiva", "is_final": false, "capture_id": 1, "segment_id": 1, "revision": 5, "expected": "ignored"}
+      ]
+    },
+    {
+      "id": "stale_capture_and_segment",
+      "language": "en",
+      "expected_final_count": 2,
+      "events": [
+        {"text": "Emilia first final", "is_final": true, "capture_id": 2, "segment_id": 3, "revision": 1, "expected": "final"},
+        {"text": "Emilia older capture", "is_final": true, "capture_id": 1, "segment_id": 99, "revision": 20, "expected": "ignored"},
+        {"text": "Emilia older segment", "is_final": true, "capture_id": 2, "segment_id": 2, "revision": 20, "expected": "ignored"},
+        {"text": "Emilia next capture", "is_final": true, "capture_id": 3, "segment_id": 1, "revision": 1, "expected": "final"},
+        {"text": "Emilia late old capture", "is_final": true, "capture_id": 2, "segment_id": 99, "revision": 20, "expected": "ignored"}
+      ]
+    },
+    {
+      "id": "stale_revision_and_empty_final",
+      "language": "it",
+      "expected_final_count": 1,
+      "events": [
+        {"text": "Emilia frase provvisoria", "is_final": false, "capture_id": 4, "segment_id": 1, "revision": 3, "expected": "provisional"},
+        {"text": "Emilia revisione vecchia", "is_final": false, "capture_id": 4, "segment_id": 1, "revision": 2, "expected": "ignored"},
+        {"text": "Emilia finale vecchio", "is_final": true, "capture_id": 4, "segment_id": 1, "revision": 3, "expected": "ignored"},
+        {"text": "   ", "is_final": true, "capture_id": 4, "segment_id": 1, "revision": 4, "expected": "ignored"},
+        {"text": "Emilia finale corretto", "is_final": true, "capture_id": 4, "segment_id": 1, "revision": 4, "expected": "final"},
+        {"text": "Emilia finale ripetuto", "is_final": true, "capture_id": 4, "segment_id": 1, "revision": 5, "expected": "ignored"}
+      ]
+    },
+    {
+      "id": "provisional_only_timeout",
+      "language": "en",
+      "expected_final_count": 0,
+      "events": [
+        {"text": "Emilia unfinished", "is_final": false, "capture_id": 5, "segment_id": 1, "revision": 1, "expected": "provisional"},
+        {"text": "Emilia still unfinished", "is_final": false, "capture_id": 5, "segment_id": 1, "revision": 2, "expected": "provisional"}
+      ]
+    },
+    {
+      "id": "en_identical_distinct_segments",
+      "language": "en",
+      "expected_final_count": 2,
+      "events": [
+        {"text": "Emilia repeat", "is_final": false, "capture_id": 10, "segment_id": 1, "revision": 1, "expected": "provisional"},
+        {"text": "Emilia repeat deliberately", "is_final": true, "capture_id": 10, "segment_id": 1, "revision": 2, "expected": "final"},
+        {"text": "Emilia repeat deliberately", "is_final": true, "capture_id": 10, "segment_id": 2, "revision": 1, "expected": "final"}
+      ]
+    },
+    {
+      "id": "it_identical_distinct_captures",
+      "language": "it",
+      "expected_final_count": 2,
+      "events": [
+        {"text": "Emilia ripeti", "is_final": false, "capture_id": 11, "segment_id": 1, "revision": 1, "expected": "provisional"},
+        {"text": "Emilia ripeti la domanda", "is_final": true, "capture_id": 11, "segment_id": 1, "revision": 2, "expected": "final"},
+        {"text": "Emilia ripeti la domanda", "is_final": true, "capture_id": 12, "segment_id": 1, "revision": 1, "expected": "final"}
+      ]
+    },
+    {
+      "id": "capture_restart_resets_segment_revision",
+      "language": "en",
+      "expected_final_count": 2,
+      "events": [
+        {"text": "Emilia previous partial", "is_final": false, "capture_id": 20, "segment_id": 5, "revision": 1, "expected": "provisional"},
+        {"text": "Emilia previous final", "is_final": true, "capture_id": 20, "segment_id": 5, "revision": 2, "expected": "final"},
+        {"text": "Emilia new capture final", "is_final": true, "capture_id": 21, "segment_id": 1, "revision": 1, "expected": "final"}
+      ]
+    },
+    {
+      "id": "stale_partial_after_new_capture",
+      "language": "it",
+      "expected_final_count": 2,
+      "events": [
+        {"text": "Emilia primo finale", "is_final": true, "capture_id": 30, "segment_id": 1, "revision": 1, "expected": "final"},
+        {"text": "Emilia vecchia ipotesi", "is_final": false, "capture_id": 29, "segment_id": 99, "revision": 50, "expected": "ignored"},
+        {"text": "Emilia nuovo finale", "is_final": true, "capture_id": 31, "segment_id": 1, "revision": 1, "expected": "final"}
+      ]
+    },
+    {
+      "id": "final_without_prior_partial",
+      "language": "en",
+      "expected_final_count": 1,
+      "events": [
+        {"text": "Emilia a direct final", "is_final": true, "capture_id": 40, "segment_id": 1, "revision": 1, "expected": "final"}
+      ]
+    }
+  ]
+}

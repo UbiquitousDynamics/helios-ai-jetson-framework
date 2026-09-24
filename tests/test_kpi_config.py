@@ -50,6 +50,8 @@ def test_kpi_environment_overrides_are_typed_and_project_rooted(tmp_path: Path) 
             "HELIOS_KPI_ROLLUP_RETENTION_DAYS": "30",
             "HELIOS_KPI_MAX_DATABASE_MB": "64",
             "HELIOS_KPI_RESOURCE_INTERVAL_SECONDS": "2.5",
+            "HELIOS_KPI_NETWORK_PERSIST_INTERVAL_SECONDS": "90",
+            "HELIOS_KPI_BACKGROUND_RETENTION_DAYS": "2",
             "HELIOS_KPI_DASHBOARD_ENABLED": "true",
             "HELIOS_KPI_DASHBOARD_PORT": "9000",
         },
@@ -61,6 +63,8 @@ def test_kpi_environment_overrides_are_typed_and_project_rooted(tmp_path: Path) 
     assert settings.kpi.batch_size == 32
     assert settings.kpi.flush_interval_seconds == pytest.approx(0.2)
     assert settings.kpi.resource_sample_interval_seconds == pytest.approx(2.5)
+    assert settings.kpi.network_probe_persist_interval_seconds == pytest.approx(90)
+    assert settings.kpi.background_retention_days == 2
     assert settings.kpi.dashboard_port == 9000
 
 
