@@ -17,6 +17,14 @@ from audio.tts import (
 )
 
 
+def test_legacy_tts_imports_use_the_canonical_implementation() -> None:
+    import tts
+    from audio import tts as canonical
+
+    for name in tts.__all__:
+        assert getattr(tts, name) is getattr(canonical, name)
+
+
 class FakeVoice:
     def synthesize(self, text: str, wav_file: wave.Wave_write) -> None:
         assert text == "hello"
@@ -62,8 +70,12 @@ def test_synchronous_piper_emits_content_free_stages():
     tts = PiperTTS(voice=FakeVoice(), audio_backend=CapturingBackend())
     try:
         tts.speak_with_timing("hello", on_lifecycle=events.append)
-        assert events == [ResponseEvent.SYNTHESIS_STARTED, ResponseEvent.SYNTHESIS_COMPLETED,
-                          ResponseEvent.PLAYBACK_STARTED, ResponseEvent.PLAYBACK_COMPLETED]
+        assert events == [
+            ResponseEvent.SYNTHESIS_STARTED,
+            ResponseEvent.SYNTHESIS_COMPLETED,
+            ResponseEvent.PLAYBACK_STARTED,
+            ResponseEvent.PLAYBACK_COMPLETED,
+        ]
     finally:
         tts.close()
 

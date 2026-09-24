@@ -1191,6 +1191,7 @@ Audio environment overrides are independent of routing:
 | `HELIOS_AUDIO_INPUT_DEVICE` | PyAudio index, input-device name, or `pulse:<exact source>`; blank uses the platform default |
 | `HELIOS_AUDIO_INPUT_STRICT` | Fail if the requested input cannot be resolved; default `false` falls back with a warning |
 | `HELIOS_AUDIO_INPUT_CHANNEL_MODE` | `mono` (default), `average`, `sum`, or `stronger` for stereo capture |
+| `HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS` | Positive RMS floor for the dead-input warning; default `0.001`, calibrated on Emilia's USB microphone. Does not change speech or barge-in detection |
 | `HELIOS_AUDIO_CAPTURE_STALL_SECONDS` | Log a stalled capture if no frame arrives within this interval; default `5`; does not reopen the stream |
 | `HELIOS_AUDIO_OUTPUT_DEVICE` | sounddevice output index or name; blank uses the platform default |
 | `HELIOS_AUDIO_OUTPUT_LATENCY` | `high` (default, robust) or `low` (only after device-specific validation) |

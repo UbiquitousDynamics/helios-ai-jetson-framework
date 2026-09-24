@@ -95,6 +95,19 @@ class FakeRecognizer:
         self.closed = True
 
 
+def test_capture_health_floor_reaches_real_recognizer_without_changing_barge_in() -> None:
+    settings = config.Settings(audio_capture_level_min_rms=0.0005, barge_in_enabled=False)
+    assistant = VoiceAssistant(
+        settings=settings, api_client=FakeAPI(), tts=FakeTTS(),
+        sound_player=FakeSoundPlayer(), sound_executor=ImmediateExecutor(),
+    )
+    try:
+        assert assistant.speech_recognizer.sanity_rms_threshold == 0.0005
+        assert settings.barge_in_minimum_interrupt_energy == 0.06
+    finally:
+        assistant.close()
+
+
 def test_cancellation_before_legacy_response_worker_starts_prevents_dispatch():
     assistant, tts, api, _sounds, _recognizer = make_assistant([])
     token = CancellationController()

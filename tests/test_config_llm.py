@@ -145,6 +145,27 @@ def test_invalid_capture_selector_policy_is_rejected(tmp_path: Path) -> None:
         config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_INPUT_STRICT": "maybe"})
 
 
+def test_capture_health_floor_has_independent_validated_configuration(tmp_path: Path) -> None:
+    defaults = config.Settings.from_env(tmp_path, environ={})
+    adjusted = config.Settings.from_env(
+        tmp_path, environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": "0.0005"},
+    )
+    assert defaults.audio_capture_level_min_rms == 0.001
+    assert adjusted.audio_capture_level_min_rms == 0.0005
+    assert adjusted.barge_in_minimum_interrupt_energy == defaults.barge_in_minimum_interrupt_energy
+
+
+@pytest.mark.parametrize("value", ["0", "-0.1", "nan", "inf", "bad"])
+def test_invalid_capture_health_floor_is_rejected(tmp_path: Path, value: str) -> None:
+    with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS|audio_capture_level_min_rms"):
+        config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": value})
+
+
+def test_non_numeric_capture_health_floor_is_rejected_directly() -> None:
+    with pytest.raises(config.ConfigurationError, match="audio_capture_level_min_rms"):
+        config.Settings(audio_capture_level_min_rms=True)
+
+
 def test_invalid_audio_device_configuration_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_INPUT_DEVICE"):
         config.Settings.from_env(

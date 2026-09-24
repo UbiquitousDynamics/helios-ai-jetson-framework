@@ -1,5 +1,71 @@
 # Voice test suite progress
 
+## Repository baseline repair — requirement source, 2026-09-25
+
+Root cause: commit `0759dd4` deleted `docs/live-conversation-progress.md` without
+changing the 45 `source` paths in `tests/voice_suite/traceability.json`. The
+current voice-suite checkpoint is this file; the final implementation audit
+also still links to the deleted source. No replacement containing the original
+requirement rows was found. The deletion was committed, not an unstaged
+working-tree deletion; its intent cannot be inferred from the commit message.
+The historical Git blob has all 45 rows, and their SHA-256 matches the
+traceability catalog's `requirement_source_sha256`. Its full-document digest
+does not match the catalog's older `source_document_sha256`; the validator
+uses the row digest and checks every requirement against those rows.
+
+Changed in this repair: restored `docs/live-conversation-progress.md` byte for
+byte from `0759dd4^` and updated only this checkpoint. No test, runtime,
+configuration, or deployment file changed. The directly affected test failed
+before restoration with `repository_file_missing` and passed afterward (1/1).
+Active TTS tests passed (25/25). The earlier full-suite baseline was 2,083
+passed, 13 failed, 2 skipped with pytest's temporary directory forced inside
+the repository. After restoration, that invocation had 2,091 passed, 6 failed,
+2 skipped: all six remaining failures were the voice-suite guard requiring
+artifacts under the system temporary directory. With pytest's default system
+temporary directory, the complete suite passed: **2,097 passed, 2 skipped**.
+The two skips were unavailable Windows symlink privilege and a live remote
+test lacking explicit enablement. Remaining baseline test failures under the
+supported invocation: **none**. The missing documentation was restored from
+Git history; the traceability test reference was not changed.
+
+## A2 deployment preflight — read-only evidence, 2026-09-25
+
+After the public-key-only attempt recorded below failed, the operator explicitly authorized interactive password SSH for this read-only preflight. The credential was not placed in a command argument, file, report, or checkpoint. No device write or deployment occurred.
+
+- Live checkout: `/home/emilia/helios-ai-jetson-framework`, branch `feature/natural-voice-conversation`, commit `b86781c7c424ce3a9972198b3a8f0470025461f1`. Git status: 32 untracked entries (`??`), zero tracked changes; only status metadata was read, not their contents. The separate A2 validation tree exists but is not a Git repository.
+- Unit: `/etc/systemd/system/emilia.service`; `WorkingDirectory=/home/emilia/helios-ai-jetson-framework`; `ExecStart=/home/emilia/helios-ai-jetson-framework/venv/bin/python3 /home/emilia/helios-ai-jetson-framework/main.py`. Drop-ins: `20-online-routing.conf` and `30-capture-source.conf`. The service remains `disabled` / `inactive`. Effective audio environment contains the explicit USB PulseAudio source, strict=true, capture floor=0.001, and channel mode=mono.
+- Disk: root filesystem `/dev/mmcblk1p1`, 116 GiB total, 80 GiB used, 31 GiB available (73%); 6,935,026 free inodes. Live checkout apparent size 2.1 GiB. This does not remove the previously recorded SD CRC/timeout risk.
+- Live SHA-256: `config.py` `c0a78960f26b02a31136b04531c046b1135c8ef1e2f68b4e562583f21e5cb7cb`; `assistant.py` `837eae89a370cad0669297ec05c643c831584f5b28277cb732b21ee999bc072b`; `recognizer/speech_recognizer.py` `c2aeaf8df35f00b503460a07ce659b9a189a7f0c842477bd2b0f6f525f058fca`; `main.py` `9d46b21f64a924360d93dd8bf0bbf27812a4f5b6b34c71c176bf83ed43159186`.
+- Drop-in SHA-256: current `30-capture-source.conf` `bebe2720a9c0062fb51171a4fac3a38075d00a9019610b0641516eb4d7ce86ad`; retained `30-capture-source.conf.a2-before` `5953060b1dad12ae4b12d2531ec97b5ed754f22b068c4224615d29d2405d2f81`.
+- Proposed paths: `/home/emilia/helios-a2-release-47776cb-20260925` **absent**; `/home/emilia/helios-ai-jetson-framework.a2-before-20260925` **absent**. Existing `/home/emilia/helios-a2-validation-20260924` is present.
+- Validation environment: `/home/emilia/helios-ai-jetson-framework/venv/bin/python` 3.10.0; pytest 8.4.2; Ruff 0.16.0; PyAudio 0.2.14; Vosk 0.3.45; piper-tts 1.6.0; ONNX Runtime 1.23.2; NumPy 2.2.6; httpx 0.28.1. Version metadata only was queried; no inference or provider call ran.
+
+Preflight is complete. The older live recognizer lacks the newer `input_device` constructor argument, so overwriting only `config.py` and `assistant.py` would be incompatible. A full compatible, explicitly scoped release and rollback plan is required before deployment. No transfer, staging, promotion, backup, service action, reboot, A3 work, user-audio/credential/log read, or provider call occurred. **A2 deployment awaits separate approval; STOP.**
+
+## A2 deployment preflight — public-key authentication blocked
+
+On the operator's read-only, public-key-only authorization, one connection probe was attempted: `ssh -o BatchMode=yes -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=6 emilia@192.168.1.100 true`. It exited 1 with sanitized error: `emilia@192.168.1.100: Permission denied (publickey,password).` The parenthesized methods are the server's advertised methods; password fallback was disabled on the client and no password was requested or used. No further target command was run. Thus live commit/status, service details, disk space, live file hashes, drop-in hashes, staging/rollback path existence, service state, and dependency versions could not be freshly inspected. Prior A2 checkpoint evidence remains historical and is not presented as this preflight's result. No write, transfer, staging, service action, reboot, provider call, or audio/credential/log read occurred. **A2 deployment remains blocked on authorized public-key SSH access; separate approval is required before deployment. STOP.**
+
+## Phase A — A2: Calibrate the capture level threshold (2026-09-24)
+
+Status: **A2 calibration and repository gate passed; separately approved drop-in values staged; compatible live-code deployment not authorized**. Selected diagnostic floor: **0.001 normalized PCM16 RMS**, independently configured by `HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS` with positive finite validation. Selected channel mode: **`mono`**, retaining the existing default. This is calibration of the `capture_level_low` dead-input warning against measured quiet levels, not weakening a speech or barge-in detection threshold. No detection threshold changed. Exact per-trial scalar measurements, definitions, source/sink identities, cleanup and limitations are in the [A2 calibration report](voice-test-suite/a2-calibration.md).
+
+Emilia on boot `8c01da32-a045-45e9-94b5-300373784a83`: 5 paired Piper trials per mode, 10 successful bounded playbacks/captures, 501 100 ms RMS frames total; no recorded PCM or transcript. Lowest quiet median was 0.002329; earlier dead input was 0.000000. Across five trials per mode, median quiet RMS was 0.002925 (`mono`) and 0.003228 (`stronger`); `stronger` increased quiet p95 in 3/5 pairs and improved the stimulus/quiet p95 ratio in only 2/5. Hence `mono` is retained. The generated WAV was removed, no audio streams remained, and the service stayed disabled/inactive. No reboot, service start, drop-in edit, routing edit, or provider request occurred.
+
+Changed: `config.py` adds `audio_capture_level_min_rms` and environment parsing/validation; `assistant.py` passes it to `SpeechRecognizer` instead of deriving it from barge-in energy; `README.md` documents it; focused tests in `tests/test_config_llm.py`, `tests/test_recognizer.py`, and `tests/test_assistant.py` cover default/override/invalid values, boundary warning behavior, and the settings-to-recognizer boundary. Syntax parsing of all five changed Python files, Ruff, and `git diff --check` passed. In a dedicated A2 validation tree on Emilia, `PYTHONDONTWRITEBYTECODE=1 /home/emilia/helios-ai-jetson-framework/venv/bin/python -m pytest -q tests/test_config_llm.py tests/test_recognizer.py tests/test_assistant.py -p no:cacheprovider -m 'not remote_live'` passed **195**; full `PYTHONDONTWRITEBYTECODE=1 timeout 600 /home/emilia/helios-ai-jetson-framework/venv/bin/python -m pytest -q -m 'not remote_live' -p no:cacheprovider` passed **2097**, 1 remote test deselected. Both exited 0. With separate operator approval, the drop-in was backed up byte-for-byte as `30-capture-source.conf.a2-before`, then only the selected floor and `mono` mode were appended and `systemctl daemon-reload` exited 0. Backup SHA-256 `5953060b1dad12ae4b12d2531ec97b5ed754f22b068c4224615d29d2405d2f81`; new drop-in SHA-256 `bebe2720a9c0062fb51171a4fac3a38075d00a9019610b0641516eb4d7ce86ad`. Effective environment reports both new values plus the A1 USB source and strict=true. Service remains `disabled/inactive`; no reboot, service start/enable, live-code deployment, A3 work, or provider call occurred. The service still points to an older development checkout and does not yet consume the new threshold binding. **Next item: A2 — compatible live-code deployment requires separate authorization before A3. STOP.**
+
+## Phase A — A1: Persist the capture configuration (2026-09-24)
+
+Status: **A1 completed after approved reboot and generated-only acoustic capture probe**. The existing repository implementation already binds `HELIOS_AUDIO_INPUT_STRICT` through strict boolean parsing in `config.py`; `Settings.audio_input_strict` reaches `SpeechRecognizer`, whose strict `pulse:` path raises when the named source is unavailable. Existing tests cover true and invalid values. No threshold was changed.
+
+Read-only inspection over interactive SSH succeeded after the operator supplied access. `emilia.service` is disabled/inactive and lacks the explicit input selector. The USB source is present, at 100% volume, with the desired duplex profile and 496/496 capture gain. PulseAudio card/device restore modules and databases are present. The ALSA boot state is stale: `/var/lib/alsa/asound.state` stores USB `Mic Capture Volume` 464/496, while the live control is 496/496. No reboot or post-reboot capture check occurred.
+
+The [A1 device change record](voice-test-suite/a1-device-change-plan.md) contains the approved commands, rollback, verification, risks and SHA-256 evidence. Both backups were absent before creation. Backup of `emilia.service`, backup of `asound.state`, drop-in creation, `systemctl daemon-reload`, and `alsactl store 2` all exited 0. Service and backup hashes match: `61341d7d71a0161e5fc0557104cf9d8cba8513066fabbe6cae07306c729f224d`. ALSA backup hash is `c0623618ee3c276a0123f10f16bd600c039b57c2d79c6449593e0103d84cec8b`; new ALSA state hash is `136266d16d442ae52664bda50f2d5e3b846c2a1fd7ca759ceef6ebc8c5055a9d`; drop-in hash is `5953060b1dad12ae4b12d2531ec97b5ed754f22b068c4224615d29d2405d2f81`. Sanitized read-only output: service `disabled/inactive`; effective `HELIOS_AUDIO_INPUT_DEVICE=pulse:alsa_input.usb-Solid_State_System_Co._Ltd._USB_PnP_Audio_Device_000000000000-00.analog-stereo`; `HELIOS_AUDIO_INPUT_STRICT=true`; live Mic capture 496/496 (+31 dB); stored Mic Capture Volume 496; USB source at 100% and duplex profile active. No audio stream, service start, reboot, routing change, or remote provider request occurred. PulseAudio restore across reboot remains unverified. Repository interfaces and source were unchanged; local pytest was unavailable (`python -m pytest` reported no pytest), so the full validation gate and target post-reboot verification remain pending.
+
+With separate operator approval, Emilia rebooted. Boot ID changed from `19d561b0-2beb-42ca-a828-b17b3755caa9` to `8c01da32-a045-45e9-94b5-300373784a83`; post-boot uptime was about 78 seconds. Without manual audio setup, `emilia.service` remained `disabled/inactive`, its USB PulseAudio selector and strict setting persisted, USB duplex profile and 100% source volume persisted, and live/saved Mic capture both read 496/496. Backup and drop-in hashes were unchanged; details are in the A1 device change record.
+
+With approval for generated-only acoustic verification, a 1.916 s Piper fixture played once through the explicit USB sink and the deployed recognizer captured through the explicit USB source in strict mode. Both `capture_pulse_source_selected` and `capture_device_resolved` identified the USB source and `analog-input-mic`. In 50 100 ms frames, initial-eight-frame median RMS was 0.014027 and maximum RMS was 0.081973; playback and probe exited 0. An empty decoder produced no transcript; no audio samples were retained, the temporary WAV was deleted, and the audio streams closed. The older development checkout rejected the probe's constructor argument before audio opened; the successful run used the current validation deployment. A1 acoustic evidence is one bounded sample and does not calibrate recognition thresholds or prove Phase B HIL metrics. The complete target suite command `PYTHONDONTWRITEBYTECODE=1 timeout 600 /home/emilia/helios-ai-jetson-framework/venv/bin/python -m pytest -q -m 'not remote_live' -p no:cacheprovider` passed **2086 tests, 1 deselected**, exit 0. No Python source, threshold, service running state, routing, or remote provider was changed. The preexisting test-suite checkpoint below records Task 02 local work despite this work order identifying Task 01 as the Phase B resume point. Phase B has not started under this work order. **Next item: A2 — Calibrate the capture level threshold. STOP.**
+
 ## Current execution
 
 Current test task: **02 — Provisional versus authoritative transcripts**.
