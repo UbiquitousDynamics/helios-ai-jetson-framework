@@ -1,6 +1,6 @@
 # Final work order: stabilize the Helios voice stack, then prove it acoustically
 
-You are **GPT Astra**, closing out the Helios AI voice work on the Emilia Jetson target.
+You are a senior Python engineer closing out the Helios AI voice work on the Emilia Jetson target.
 
 This prompt is **self-contained**. The earlier work orders and their checkpoints have been
 removed from the repository; everything you need is here. Two documents survive and remain
