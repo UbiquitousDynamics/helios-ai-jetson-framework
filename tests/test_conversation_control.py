@@ -146,9 +146,16 @@ def test_confirmed_interruption_accepts_a_final_follow_up() -> None:
 @pytest.mark.parametrize(
     "kind",
     [
-        E.GENERATION_COMPLETED, E.GENERATION_CANCELLED, E.GENERATION_FAILED,
-        E.PLAYBACK_COMPLETED, E.PLAYBACK_CANCELLED, E.PLAYBACK_FAILED,
-        E.RESPONSE_FINISHED, E.INTERRUPTION_CONFIRMED, E.SUSPEND, E.END_SESSION,
+        E.GENERATION_COMPLETED,
+        E.GENERATION_CANCELLED,
+        E.GENERATION_FAILED,
+        E.PLAYBACK_COMPLETED,
+        E.PLAYBACK_CANCELLED,
+        E.PLAYBACK_FAILED,
+        E.RESPONSE_FINISHED,
+        E.INTERRUPTION_CONFIRMED,
+        E.SUSPEND,
+        E.END_SESSION,
     ],
 )
 def test_repeated_terminal_signals_are_idempotent(kind: E) -> None:
@@ -163,10 +170,17 @@ def test_repeated_terminal_signals_are_idempotent(kind: E) -> None:
 def test_late_worker_terminals_do_not_reactivate_a_terminal_floor(kind: E) -> None:
     floor = ConversationFloor()
     terminal = signal(floor, *_SPEAKING, kind)
-    assert signal(
-        floor, E.GENERATION_CANCELLED, E.PLAYBACK_FAILED,
-        E.GENERATION_COMPLETED, E.PLAYBACK_COMPLETED, E.RESPONSE_FINISHED,
-    ) is terminal
+    assert (
+        signal(
+            floor,
+            E.GENERATION_CANCELLED,
+            E.PLAYBACK_FAILED,
+            E.GENERATION_COMPLETED,
+            E.PLAYBACK_COMPLETED,
+            E.RESPONSE_FINISHED,
+        )
+        is terminal
+    )
     if kind is not E.RESPONSE_FINISHED:
         with pytest.raises(InvalidConversationTransition):
             signal(floor, E.FINAL_SPEECH)
@@ -312,12 +326,16 @@ def test_concurrent_readers_never_see_torn_snapshots() -> None:
             assert current.revision >= revision
             revision = current.revision
             phase = revision % 6
-            expected = (S.IDLE, S.ARMED, S.FINALIZING, S.THINKING,
-                        S.ASSISTANT_SPEAKING, S.BARGE_IN_CANDIDATE)[phase]
+            expected = (
+                S.IDLE,
+                S.ARMED,
+                S.FINALIZING,
+                S.THINKING,
+                S.ASSISTANT_SPEAKING,
+                S.BARGE_IN_CANDIDATE,
+            )[phase]
             assert current.state is expected
-            assert current.candidate_return_state is (
-                S.ASSISTANT_SPEAKING if phase == 5 else None
-            )
+            assert current.candidate_return_state is (S.ASSISTANT_SPEAKING if phase == 5 else None)
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(write), *(executor.submit(read) for _ in range(4))]

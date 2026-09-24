@@ -22,8 +22,10 @@ if TYPE_CHECKING:
 
 def _finite(value: float, name: str, *, minimum: float = 0) -> None:
     if (
-        isinstance(value, bool) or not isinstance(value, (int, float))
-        or not math.isfinite(value) or value < minimum
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < minimum
     ):
         raise ValueError(f"{name} must be finite and within bounds")
 
@@ -74,7 +76,8 @@ class EndpointObservation:
         if self.segment is not None and not isinstance(self.segment, TranscriptSegment):
             raise TypeError("segment must be a TranscriptSegment")
         if self.revision is not None and (
-            isinstance(self.revision, bool) or not isinstance(self.revision, int)
+            isinstance(self.revision, bool)
+            or not isinstance(self.revision, int)
             or self.revision < 1
         ):
             raise ValueError("revision must be a positive integer")
@@ -93,12 +96,17 @@ class EndpointObservation:
             raise TypeError("recognition text must be a string")
         segment = (
             TranscriptSegment(result.capture_id, result.segment_id)
-            if result.capture_id is not None and result.segment_id is not None else None
+            if result.capture_id is not None and result.segment_id is not None
+            else None
         )
         return cls(
-            speech_active=speech_active, has_text=bool(result.text.strip()),
-            is_final=result.is_final, segment=segment, revision=result.revision,
-            energy_reemit=result.energy_reemit, confidence=result.confidence,
+            speech_active=speech_active,
+            has_text=bool(result.text.strip()),
+            is_final=result.is_final,
+            segment=segment,
+            revision=result.revision,
+            energy_reemit=result.energy_reemit,
+            confidence=result.confidence,
             speech_duration_seconds=result.speech_duration_seconds,
         )
 
@@ -147,7 +155,10 @@ class TurnEndpointDetector:
     """
 
     def __init__(
-        self, config: TurnEndpointConfig | None = None, *, clock: Callable[[], float] = time.monotonic
+        self,
+        config: TurnEndpointConfig | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if config is not None and not isinstance(config, TurnEndpointConfig):
             raise TypeError("config must be a TurnEndpointConfig")
@@ -197,10 +208,16 @@ class TurnEndpointDetector:
             return self._end(EndpointAction.DISCARD, "final_result_timeout")
 
         # Stale metadata cannot finalize, extend activity, or reset stability.
-        stale = observed.segment is not None and self._segment is not None and (
-            observed.segment < self._segment or (
-                observed.segment == self._segment and observed.revision is not None
-                and observed.revision <= self._revision
+        stale = (
+            observed.segment is not None
+            and self._segment is not None
+            and (
+                observed.segment < self._segment
+                or (
+                    observed.segment == self._segment
+                    and observed.revision is not None
+                    and observed.revision <= self._revision
+                )
             )
         )
         if stale:
@@ -213,12 +230,19 @@ class TurnEndpointDetector:
             return EndpointDecision(EndpointAction.NONE, "awaiting_final_result")
 
         # Continuous activity cannot defeat the maximum utterance bound.
-        if self._started_at is not None and now - self._started_at >= self.config.maximum_utterance_seconds:
+        if (
+            self._started_at is not None
+            and now - self._started_at >= self.config.maximum_utterance_seconds
+        ):
             return self._flush(now, "maximum_utterance")
-        credible_text = observed.has_text and observed.confidence is not None and (
-            observed.confidence >= self.config.minimum_confidence
-            and observed.speech_duration_seconds is not None
-            and observed.speech_duration_seconds >= self.config.minimum_speech_seconds
+        credible_text = (
+            observed.has_text
+            and observed.confidence is not None
+            and (
+                observed.confidence >= self.config.minimum_confidence
+                and observed.speech_duration_seconds is not None
+                and observed.speech_duration_seconds >= self.config.minimum_speech_seconds
+            )
         )
         if self._started_at is None and (observed.speech_active or credible_text):
             self._started_at = now
@@ -246,14 +270,20 @@ class TurnEndpointDetector:
             return self._flush(now, "inactivity")
         if self._started_at is None:
             return EndpointDecision(EndpointAction.CONTINUE, "armed")
-        confidence_ok = self._confidence is None or self._confidence >= self.config.minimum_confidence
+        confidence_ok = (
+            self._confidence is None or self._confidence >= self.config.minimum_confidence
+        )
         duration_ok = self._duration is None or self._duration >= self.config.minimum_speech_seconds
         stable = self._stable_since is not None and (
             now - self._stable_since >= self.config.revision_stability_seconds
         )
         if (
-            not observed.speech_active and quiet >= self.config.finalization_seconds
-            and self._has_text and stable and confidence_ok and duration_ok
+            not observed.speech_active
+            and quiet >= self.config.finalization_seconds
+            and self._has_text
+            and stable
+            and confidence_ok
+            and duration_ok
         ):
             return self._flush(now, "stable_pause")
         if not observed.speech_active and quiet >= self.config.short_pause_seconds:

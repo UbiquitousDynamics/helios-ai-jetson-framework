@@ -35,8 +35,7 @@ try:
         for index in range(audio.get_host_api_count())
     ]
     result["pyaudio_devices"] = [
-        clean(audio.get_device_info_by_index(index))
-        for index in range(audio.get_device_count())
+        clean(audio.get_device_info_by_index(index)) for index in range(audio.get_device_count())
     ]
     for direction, getter in (
         ("input", audio.get_default_input_device_info),
@@ -45,9 +44,7 @@ try:
         try:
             result[f"pyaudio_default_{direction}"] = clean(getter())
         except Exception as exc:
-            result[f"pyaudio_default_{direction}"] = {
-                "error": f"{type(exc).__name__}: {exc}"
-            }
+            result[f"pyaudio_default_{direction}"] = {"error": f"{type(exc).__name__}: {exc}"}
 finally:
     audio.terminate()
 

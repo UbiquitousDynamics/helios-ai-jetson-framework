@@ -97,13 +97,16 @@ class TranscriptPromoter:
         if not isinstance(is_final, bool):
             raise TypeError("is_final must be a boolean")
         for value, name in (
-            (capture_id, "capture_id"), (segment_id, "segment_id"), (revision, "revision")
+            (capture_id, "capture_id"),
+            (segment_id, "segment_id"),
+            (revision, "revision"),
         ):
             if value is not None:
                 _positive_integer(value, name)
         segment = (
             TranscriptSegment(capture_id, segment_id)
-            if capture_id is not None and segment_id is not None else None
+            if capture_id is not None and segment_id is not None
+            else None
         )
         text = text.strip()
         if not text:
@@ -177,8 +180,11 @@ class TranscriptRevisionAggregator:
                 self._pending = None
                 raise TranscriptCapacityError("transcript revision exceeds the character limit")
             result = self._promoter.observe(
-                text, is_final=is_final, capture_id=capture_id,
-                segment_id=segment_id, revision=revision,
+                text,
+                is_final=is_final,
+                capture_id=capture_id,
+                segment_id=segment_id,
+                revision=revision,
             )
             if isinstance(result, ProvisionalRevision):
                 self._pending = result
@@ -200,6 +206,8 @@ class TranscriptRevisionAggregator:
         with self._lock:
             pending = self._pending
             return TranscriptRevisionSnapshot(
-                pending is not None, len(pending.text) if pending else 0,
-                pending.segment if pending else None, pending.revision if pending else None,
+                pending is not None,
+                len(pending.text) if pending else 0,
+                pending.segment if pending else None,
+                pending.revision if pending else None,
             )

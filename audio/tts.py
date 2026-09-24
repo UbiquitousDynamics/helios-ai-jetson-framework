@@ -160,11 +160,7 @@ class SoundDeviceBackend:
             # on the Jetson.  An explicit period makes playback resilient to
             # short scheduler stalls while keeping the 100 ms interruption
             # polling granularity below the device buffer size.
-            "blocksize": (
-                self._HIGH_LATENCY_BLOCKSIZE_FRAMES
-                if self._latency == "high"
-                else 0
-            ),
+            "blocksize": (self._HIGH_LATENCY_BLOCKSIZE_FRAMES if self._latency == "high" else 0),
         }
         if self._device is not None:
             arguments["device"] = self._device
@@ -200,10 +196,7 @@ class SoundDeviceBackend:
 
         stream.start()
         return bool(
-            stream.write(
-                self._startup_preroll(sample_rate, channels, sample_width)
-                + first_chunk
-            )
+            stream.write(self._startup_preroll(sample_rate, channels, sample_width) + first_chunk)
         )
 
     def play(
@@ -742,7 +735,9 @@ class PiperTTS:
             synthesis_ms=(self._clock() - started_at) * 1_000,
         )
 
-    def play_fragment(self, fragment: SynthesizedFragment, *, cancellation_event: Any = None) -> SpeechTiming:
+    def play_fragment(
+        self, fragment: SynthesizedFragment, *, cancellation_event: Any = None
+    ) -> SpeechTiming:
         """Play audio produced by :meth:`synthesize_fragment`.
 
         Stage two of the two-stage speech path. ``_speech_lock`` is held only
@@ -752,7 +747,9 @@ class PiperTTS:
 
         with self._speech_lock:
             self._ensure_open()
-            speech_interrupt = cancellation_event if cancellation_event is not None else threading.Event()
+            speech_interrupt = (
+                cancellation_event if cancellation_event is not None else threading.Event()
+            )
             with self._state_lock:
                 self._active_speech_interrupt = speech_interrupt
             try:
@@ -772,7 +769,13 @@ class PiperTTS:
                     if self._active_speech_interrupt is speech_interrupt:
                         self._active_speech_interrupt = None
 
-    def speak_with_timing(self, text: str, *, on_lifecycle: Callable[[ResponseEvent], None] | None = None, cancellation_event: Any = None) -> SpeechTiming | None:
+    def speak_with_timing(
+        self,
+        text: str,
+        *,
+        on_lifecycle: Callable[[ResponseEvent], None] | None = None,
+        cancellation_event: Any = None,
+    ) -> SpeechTiming | None:
         """Speak text and return content-free synthesis/playback timing."""
 
         if text and text.strip() and not any(character.isalnum() for character in text):
@@ -780,7 +783,9 @@ class PiperTTS:
             return
         with self._speech_lock:
             self._ensure_open()
-            speech_interrupt = cancellation_event if cancellation_event is not None else threading.Event()
+            speech_interrupt = (
+                cancellation_event if cancellation_event is not None else threading.Event()
+            )
             with self._state_lock:
                 self._active_speech_interrupt = speech_interrupt
             try:

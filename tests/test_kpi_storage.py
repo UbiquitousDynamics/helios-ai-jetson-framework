@@ -347,10 +347,19 @@ def test_committed_wal_recovers_after_unclean_process_exit(tmp_path: Path) -> No
 def test_ollama_load_phase_metrics_survive_storage_sanitization(tmp_path: Path) -> None:
     store = SQLiteKPIStore(tmp_path / "kpi.sqlite3")
     try:
-        assert store.write_batch((MetricEvent(
-            "llm_attempt_succeeded", provider="ollama", cold_load_ms=37_320.0,
-            warm_first_token_ms=12_000.0,
-        ),)) == 1
+        assert (
+            store.write_batch(
+                (
+                    MetricEvent(
+                        "llm_attempt_succeeded",
+                        provider="ollama",
+                        cold_load_ms=37_320.0,
+                        warm_first_token_ms=12_000.0,
+                    ),
+                )
+            )
+            == 1
+        )
         row = store.query_events()[0]
         assert row["cold_load_ms"] == 37_320.0
         assert row["warm_first_token_ms"] == 12_000.0

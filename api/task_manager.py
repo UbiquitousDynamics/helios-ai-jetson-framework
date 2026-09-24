@@ -22,11 +22,18 @@ class TaskState(str, Enum):
     SUPERSEDED = "superseded"
 
 
-TERMINAL = frozenset({TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.SUPERSEDED})
+TERMINAL = frozenset(
+    {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.SUPERSEDED}
+)
 _NEXT = {
     TaskState.PENDING: {TaskState.EXECUTING, TaskState.CANCELLED, TaskState.SUPERSEDED},
     TaskState.EXECUTING: {TaskState.WAITING_FOR_USER, *TERMINAL},
-    TaskState.WAITING_FOR_USER: {TaskState.EXECUTING, TaskState.FAILED, TaskState.CANCELLED, TaskState.SUPERSEDED},
+    TaskState.WAITING_FOR_USER: {
+        TaskState.EXECUTING,
+        TaskState.FAILED,
+        TaskState.CANCELLED,
+        TaskState.SUPERSEDED,
+    },
 }
 
 
@@ -42,8 +49,13 @@ class TaskSnapshot:
 class TaskManager:
     """Lock-linearized lifecycle; no transcript, tool payload, or backend result is retained."""
 
-    def __init__(self, *, max_active: int = 8, max_retained: int = 32,
-                 id_factory: Callable[[], str] = lambda: uuid.uuid4().hex) -> None:
+    def __init__(
+        self,
+        *,
+        max_active: int = 8,
+        max_retained: int = 32,
+        id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
+    ) -> None:
         if isinstance(max_active, bool) or not isinstance(max_active, int) or max_active < 1:
             raise ValueError("max_active must be a positive integer")
         if isinstance(max_retained, bool) or not isinstance(max_retained, int) or max_retained < 0:
@@ -82,7 +94,9 @@ class TaskManager:
         with self._lock:
             return (*self._active.values(), *self._retained.values())
 
-    def transition(self, task_id: str, state: TaskState, *, confirmed: bool = False) -> TaskSnapshot:
+    def transition(
+        self, task_id: str, state: TaskState, *, confirmed: bool = False
+    ) -> TaskSnapshot:
         if not isinstance(state, TaskState) or not isinstance(confirmed, bool):
             raise TypeError("invalid task transition")
         with self._lock:

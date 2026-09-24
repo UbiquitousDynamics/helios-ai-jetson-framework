@@ -25,44 +25,59 @@ def test_catalog_traceability_profiles_and_models_agree(bundle):
     assert counts["metrics"] >= 31
     assert counts["timestamp_events"] >= 18
     for language, profile in config._profile_paths(suite.ROOT).items():
-        assert suite.ROOT / bundle["fixtures.json"]["voices"][language]["model"] == profile.tts_model
+        assert (
+            suite.ROOT / bundle["fixtures.json"]["voices"][language]["model"] == profile.tts_model
+        )
 
 
 def test_all_seven_controls_exist_in_both_languages(bundle):
-    controls = {"STOP_SPEAKING", "MUTE", "UNMUTE", "SUSPEND_SESSION", "RESUME_SESSION",
-                "END_SESSION", "CANCEL_TASK"}
+    controls = {
+        "STOP_SPEAKING",
+        "MUTE",
+        "UNMUTE",
+        "SUSPEND_SESSION",
+        "RESUME_SESSION",
+        "END_SESSION",
+        "CANCEL_TASK",
+    }
     for language in ("it", "en"):
-        found = {row["expected_intent"] for row in bundle["fixtures.json"]["fixtures"]
-                 if row["language"] == language and row["category"] == "control"}
+        found = {
+            row["expected_intent"]
+            for row in bundle["fixtures.json"]["fixtures"]
+            if row["language"] == language and row["category"] == "control"
+        }
         assert controls <= found
 
 
-@pytest.mark.parametrize("mutation,reason", [
-    ("duplicate_fixture", "duplicate_record_id"),
-    ("missing_requirement", "requirement_coverage"),
-    ("unknown_metric", "fixture_unknown_metric"),
-    ("unknown_task", "fixture_unknown_task"),
-    ("real_speech", "fixture_privacy"),
-    ("wrong_rate", "voice_sample_rate"),
-    ("arbitrary_audio", "wrong_synthesis_path"),
-    ("no_category", "fixture_category_coverage"),
-    ("wrong_units", "threshold_units"),
-    ("missing_limit", "threshold_metric_coverage"),
-    ("nan_limit", "invalid_threshold_value"),
-    ("zero_samples", "threshold_samples"),
-    ("fake_calibration", "missing_calibration_evidence"),
-    ("fake_verified", "baseline_cannot_verify_requirements"),
-    ("changed_source", "requirement_source_changed"),
-    ("changed_requirement", "requirement_text_mismatch"),
-    ("path_escape", "repository_path_escape"),
-    ("default_device", "example_must_not_select_devices"),
-    ("unbounded_timeout", "hardware_unbounded_limit"),
-    ("missing_timeouts", "hardware_missing_limits"),
-    ("invalid_recipe", "fixture_recipe"),
-    ("missing_event", "required_event_missing"),
-    ("missing_metric", "required_metric_missing"),
-    ("missing_field", "malformed_specification"),
-])
+@pytest.mark.parametrize(
+    "mutation,reason",
+    [
+        ("duplicate_fixture", "duplicate_record_id"),
+        ("missing_requirement", "requirement_coverage"),
+        ("unknown_metric", "fixture_unknown_metric"),
+        ("unknown_task", "fixture_unknown_task"),
+        ("real_speech", "fixture_privacy"),
+        ("wrong_rate", "voice_sample_rate"),
+        ("arbitrary_audio", "wrong_synthesis_path"),
+        ("no_category", "fixture_category_coverage"),
+        ("wrong_units", "threshold_units"),
+        ("missing_limit", "threshold_metric_coverage"),
+        ("nan_limit", "invalid_threshold_value"),
+        ("zero_samples", "threshold_samples"),
+        ("fake_calibration", "missing_calibration_evidence"),
+        ("fake_verified", "baseline_cannot_verify_requirements"),
+        ("changed_source", "requirement_source_changed"),
+        ("changed_requirement", "requirement_text_mismatch"),
+        ("path_escape", "repository_path_escape"),
+        ("default_device", "example_must_not_select_devices"),
+        ("unbounded_timeout", "hardware_unbounded_limit"),
+        ("missing_timeouts", "hardware_missing_limits"),
+        ("invalid_recipe", "fixture_recipe"),
+        ("missing_event", "required_event_missing"),
+        ("missing_metric", "required_metric_missing"),
+        ("missing_field", "malformed_specification"),
+    ],
+)
 def test_invalid_specifications_fail_closed(bundle, mutation, reason):
     fixtures = bundle["fixtures.json"]["fixtures"]
     voice = bundle["fixtures.json"]["voices"]["it"]
@@ -114,22 +129,26 @@ def test_invalid_specifications_fail_closed(bundle, mutation, reason):
     elif mutation == "missing_event":
         bundle["metrics.json"]["events"] = bundle["metrics.json"]["events"][1:]
     elif mutation == "missing_metric":
-        bundle["metrics.json"]["metrics"] = [r for r in bundle["metrics.json"]["metrics"]
-                                              if r["id"] != "cpu_percent"]
+        bundle["metrics.json"]["metrics"] = [
+            r for r in bundle["metrics.json"]["metrics"] if r["id"] != "cpu_percent"
+        ]
     elif mutation == "missing_field":
         del fixtures[0]["expected_intent"]
     with pytest.raises(suite.SpecificationError, match=f"^{reason}$"):
         suite.validate_specs(bundle)
 
 
-@pytest.mark.parametrize("payload,code", [
-    ('{"schema_version":1,"schema_version":1}', "duplicate_json_key"),
-    ('{"schema_version":1,"limit":NaN}', "nonfinite_json"),
-    ('{"schema_version":true}', "unsupported_schema"),
-    ('{"schema_version":2}', "unsupported_schema"),
-    ('[]', "object_required"),
-    ('not json', "unreadable_json"),
-])
+@pytest.mark.parametrize(
+    "payload,code",
+    [
+        ('{"schema_version":1,"schema_version":1}', "duplicate_json_key"),
+        ('{"schema_version":1,"limit":NaN}', "nonfinite_json"),
+        ('{"schema_version":true}', "unsupported_schema"),
+        ('{"schema_version":2}', "unsupported_schema"),
+        ("[]", "object_required"),
+        ("not json", "unreadable_json"),
+    ],
+)
 def test_json_rejects_ambiguous_or_invalid_input(tmp_path, payload, code):
     path = tmp_path / "fixture.json"
     path.write_text(payload, encoding="utf-8")
@@ -138,22 +157,38 @@ def test_json_rejects_ambiguous_or_invalid_input(tmp_path, payload, code):
 
 
 def limit(**overrides):
-    return {"value": 5, "minimum_samples": 20, "status": "calibrated",
-            "statistic": "p95", "direction": "max", **overrides}
+    return {
+        "value": 5,
+        "minimum_samples": 20,
+        "status": "calibrated",
+        "statistic": "p95",
+        "direction": "max",
+        **overrides,
+    }
 
 
 def test_p95_failure_retains_outlier_and_failure_count():
     result = suite.summarize([1.0] * 18 + [100.0, 100.0], limit())
-    assert result == {"sample_count": 20, "median": 1.0, "p95": 100.0, "maximum": 100.0,
-                      "minimum": 1.0, "failure_count": 2, "status": "failed"}
+    assert result == {
+        "sample_count": 20,
+        "median": 1.0,
+        "p95": 100.0,
+        "maximum": 100.0,
+        "minimum": 1.0,
+        "failure_count": 2,
+        "status": "failed",
+    }
 
 
-@pytest.mark.parametrize("values,threshold", [
-    ([], limit()),
-    ([1], limit()),
-    ([1] * 20, limit(status="provisional")),
-    ([1] * 20, limit(status="uncalibrated", value=None)),
-])
+@pytest.mark.parametrize(
+    "values,threshold",
+    [
+        ([], limit()),
+        ([1], limit()),
+        ([1] * 20, limit(status="provisional")),
+        ([1] * 20, limit(status="uncalibrated", value=None)),
+    ],
+)
 def test_insufficient_or_uncalibrated_measurement_never_passes(values, threshold):
     assert suite.summarize(values, threshold)["status"] == "unverified"
 
@@ -162,8 +197,12 @@ def test_threshold_boundary_is_inclusive_and_hard_failure_is_not_hidden():
     assert suite.summarize([5] * 20, limit())["status"] == "passed"
     assert suite.summarize([6], limit())["status"] == "failed"
     assert suite.summarize([0] * 999 + [1], limit(value=0, statistic="rate"))["status"] == "failed"
-    assert suite.summarize([1, 1], limit(value=1, minimum_samples=2,
-                                      direction="min", statistic="minimum"))["status"] == "passed"
+    assert (
+        suite.summarize(
+            [1, 1], limit(value=1, minimum_samples=2, direction="min", statistic="minimum")
+        )["status"]
+        == "passed"
+    )
 
 
 @pytest.mark.parametrize("value", [True, None, float("nan"), float("inf"), "1"])
@@ -190,7 +229,7 @@ def test_word_error_rate_uses_reference_denominators():
 
 
 def test_numeric_overflow_cannot_emit_nonfinite_json():
-    assert not suite.finite_number(10 ** 1000)
+    assert not suite.finite_number(10**1000)
     with pytest.raises(suite.SpecificationError, match="nonfinite_metric_aggregate"):
         suite.summarize([-1e308, 1e308], limit())
 
@@ -205,7 +244,9 @@ def test_artifacts_cannot_be_written_into_source_tree(tmp_path):
 
 
 @pytest.mark.parametrize("require_hil,expected", [(False, "passed"), (True, "blocked")])
-def test_baseline_writes_content_free_evidence_without_acoustic_claims(tmp_path, require_hil, expected):
+def test_baseline_writes_content_free_evidence_without_acoustic_claims(
+    tmp_path, require_hil, expected
+):
     report = suite.run_baseline(suite.SPEC, tmp_path, "desktop", require_hil)
     assert report["status"] == expected
     assert report["local_baseline"] == "passed"
@@ -219,8 +260,10 @@ def test_baseline_writes_content_free_evidence_without_acoustic_claims(tmp_path,
     assert rows and all(row["status"] == "unverified" and row["sample_count"] == 0 for row in rows)
     assert all(row["correlation_id"] == report["correlation_id"] for row in rows)
     assert not list(folder.glob("*.wav"))
-    assert not any(word in json.dumps(report) + raw for word in
-                   ("expected_authoritative_transcript", "canonical_requirement", "USERPROFILE"))
+    assert not any(
+        word in json.dumps(report) + raw
+        for word in ("expected_authoritative_transcript", "canonical_requirement", "USERPROFILE")
+    )
     assert all(not row["audio_generated"] for row in report["voices"].values())
 
 

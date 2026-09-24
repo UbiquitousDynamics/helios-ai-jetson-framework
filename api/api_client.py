@@ -717,10 +717,20 @@ class APIClient:
         except KeyError:
             raise ValueError(f"Unknown model mode: {mode!r}") from None
 
-    def _speech_callable(self, observer: Callable[[ResponseEvent], None] | None = None, cancellation: CancellationToken | None = None) -> Callable[[str], Any]:
-        return ControlledSpeech(self._raw_speech_callable(observer, cancellation), self._output_control)
+    def _speech_callable(
+        self,
+        observer: Callable[[ResponseEvent], None] | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> Callable[[str], Any]:
+        return ControlledSpeech(
+            self._raw_speech_callable(observer, cancellation), self._output_control
+        )
 
-    def _raw_speech_callable(self, observer: Callable[[ResponseEvent], None] | None = None, cancellation: CancellationToken | None = None) -> Callable[[str], Any]:
+    def _raw_speech_callable(
+        self,
+        observer: Callable[[ResponseEvent], None] | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> Callable[[str], Any]:
         """Prefer overlapped speech, then timing-aware, then legacy TTS.
 
         When the backend exposes the two-stage API, wrap it in a SpeechPipeline
@@ -731,20 +741,36 @@ class APIClient:
 
         with self._speech_pipeline_lock:
             if self._speech_pipeline is not None:
-                return self._speech_pipeline.with_observer(observer) if observer else self._speech_pipeline
+                return (
+                    self._speech_pipeline.with_observer(observer)
+                    if observer
+                    else self._speech_pipeline
+                )
             synthesize = getattr(self.tts, "synthesize_fragment", None)
             play = getattr(self.tts, "play_fragment", None)
             if self._overlapped_speech_enabled and callable(synthesize) and callable(play):
                 self._speech_pipeline = SpeechPipeline(
-                    synthesize=synthesize, play=play, interrupt=getattr(self.tts, "interrupt", None),
+                    synthesize=synthesize,
+                    play=play,
+                    interrupt=getattr(self.tts, "interrupt", None),
                 )
                 logger.info("Overlapped speech pipeline enabled")
-                return self._speech_pipeline.with_observer(observer) if observer else self._speech_pipeline
+                return (
+                    self._speech_pipeline.with_observer(observer)
+                    if observer
+                    else self._speech_pipeline
+                )
 
         speak_with_timing = getattr(self.tts, "speak_with_timing", None)
         speak = speak_with_timing if callable(speak_with_timing) else self.tts.speak
-        stop = SpeechStopSignal(lambda: cancellation.cancelled) if cancellation is not None else None
-        return (lambda text: observed_speech_call(speak, text, observer, cancellation_event=stop)) if observer or stop else speak
+        stop = (
+            SpeechStopSignal(lambda: cancellation.cancelled) if cancellation is not None else None
+        )
+        return (
+            (lambda text: observed_speech_call(speak, text, observer, cancellation_event=stop))
+            if observer or stop
+            else speak
+        )
 
     def _compile_timeouts(self, mode_settings: config.LLMModeSettings) -> Timeouts:
         values = self.llm_settings.timeouts
@@ -809,10 +835,13 @@ class APIClient:
             [self._hybrid_system_message] if self._hybrid_system_message is not None else []
         )
         if spoken and self._spoken_response_style:
-            messages.append(ChatMessage(
-                Role.SYSTEM, config.spoken_response_instruction(self.language),
-                origin=ContentOrigin.STATIC_INSTRUCTION,
-            ))
+            messages.append(
+                ChatMessage(
+                    Role.SYSTEM,
+                    config.spoken_response_instruction(self.language),
+                    origin=ContentOrigin.STATIC_INSTRUCTION,
+                )
+            )
         if context:
             messages.append(
                 ChatMessage(
@@ -1499,7 +1528,8 @@ class APIClient:
                 speak=self._speech_callable(on_lifecycle, active_cancellation) if speak else None,
                 on_generation_completed=(
                     (lambda: on_lifecycle(ResponseEvent.GENERATION_COMPLETED))
-                    if on_lifecycle else None
+                    if on_lifecycle
+                    else None
                 ),
                 before_first_speech=before_first_speech if speak else None,
                 first_speech_min_chars=(self._mode_settings(mode).first_speech_min_chars),
@@ -1577,8 +1607,7 @@ class APIClient:
                 streaming_lead_ms=(
                     max(
                         0.0,
-                        request_latency_ms
-                        - request_relative(result.actual_first_audio_seconds),
+                        request_latency_ms - request_relative(result.actual_first_audio_seconds),
                     )
                     if result.actual_first_audio_seconds is not None
                     and request_relative(result.actual_first_audio_seconds) is not None

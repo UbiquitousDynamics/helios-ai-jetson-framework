@@ -71,12 +71,19 @@ class SpeechPipeline:
         if isinstance(max_pending, bool) or not isinstance(max_pending, int) or max_pending < 1:
             raise ValueError("max_pending must be at least one")
         for value in (operation_timeout, shutdown_timeout):
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
                 raise ValueError("speech wait bounds must be finite and positive")
         self._synthesize = synthesize
         self._play = play
         try:
-            self._play_accepts_cancellation = "cancellation_event" in inspect.signature(play).parameters
+            self._play_accepts_cancellation = (
+                "cancellation_event" in inspect.signature(play).parameters
+            )
         except (TypeError, ValueError):
             self._play_accepts_cancellation = False
         self._synthesis_queue: queue.Queue[Any] = queue.Queue(maxsize=max_pending)
@@ -133,7 +140,9 @@ class SpeechPipeline:
         for thread in threads:
             thread.join(timeout=max(0, deadline - time.monotonic()))
         if any(thread.is_alive() for thread in threads):
-            raise SpeechPipelineShutdownTimeout("speech stage did not stop before the close deadline")
+            raise SpeechPipelineShutdownTimeout(
+                "speech stage did not stop before the close deadline"
+            )
 
     def __enter__(self) -> SpeechPipeline:
         return self
@@ -171,7 +180,9 @@ class SpeechPipeline:
         with self._lock:
             generation = self._generation
             generation_stop = self._generation_stop
-        enqueued = self._put(self._synthesis_queue, (generation, text, observer, generation_stop), initial=True)
+        enqueued = self._put(
+            self._synthesis_queue, (generation, text, observer, generation_stop), initial=True
+        )
         if not enqueued and self._closed:
             raise RuntimeError("Speech pipeline is closed")
         # Surface a failure that happened while this dispatch was blocked on
@@ -308,7 +319,9 @@ class SpeechPipeline:
                     continue
                 if not self._is_current(generation):
                     continue
-                handed_off = self._put(self._playback_queue, (generation, fragment, observer, generation_stop))
+                handed_off = self._put(
+                    self._playback_queue, (generation, fragment, observer, generation_stop)
+                )
             except BaseException as error:  # noqa: BLE001 - reported to caller
                 self._record_error(error, generation)
             finally:

@@ -40,7 +40,9 @@ def load_contract() -> dict:
 
 def controller() -> RealtimeConversationController:
     return RealtimeConversationController(
-        endpointing=TurnEndpointConfig(), activity_energy=0.08, clock=lambda: 0.0,
+        endpointing=TurnEndpointConfig(),
+        activity_energy=0.08,
+        clock=lambda: 0.0,
     )
 
 
@@ -61,12 +63,22 @@ def test_task02_contract_is_versioned_and_has_independent_identity_cases() -> No
         )
         for event in case["events"]:
             assert set(event) == {
-                "text", "is_final", "capture_id", "segment_id", "revision", "expected",
+                "text",
+                "is_final",
+                "capture_id",
+                "segment_id",
+                "revision",
+                "expected",
             }
             assert type(event["is_final"]) is bool
-            assert all(type(event[key]) is int and event[key] > 0 for key in (
-                "capture_id", "segment_id", "revision",
-            ))
+            assert all(
+                type(event[key]) is int and event[key] > 0
+                for key in (
+                    "capture_id",
+                    "segment_id",
+                    "revision",
+                )
+            )
             assert isinstance(event["text"], str)
             assert event["expected"] in totals
             totals[event["expected"]] += 1
@@ -74,7 +86,9 @@ def test_task02_contract_is_versioned_and_has_independent_identity_cases() -> No
 
 
 @pytest.mark.parametrize(
-    "scenario", load_contract()["scenarios"], ids=lambda case: case["id"],
+    "scenario",
+    load_contract()["scenarios"],
+    ids=lambda case: case["id"],
 )
 def test_observed_revisions_dispatch_only_declared_authoritative_segments(scenario: dict) -> None:
     realtime = controller()
@@ -84,11 +98,15 @@ def test_observed_revisions_dispatch_only_declared_authoritative_segments(scenar
         for event in scenario["events"]:
             before = realtime.snapshot()
             pending_before = realtime.transcripts.provisional()
-            result = realtime.observe(RecognitionResult(
-                event["text"], event["is_final"],
-                capture_id=event["capture_id"], segment_id=event["segment_id"],
-                revision=event["revision"],
-            ))
+            result = realtime.observe(
+                RecognitionResult(
+                    event["text"],
+                    event["is_final"],
+                    capture_id=event["capture_id"],
+                    segment_id=event["segment_id"],
+                    revision=event["revision"],
+                )
+            )
             if event["expected"] == "ignored":
                 assert result is None
                 assert realtime.snapshot() == before
@@ -120,9 +138,15 @@ def test_observed_revisions_dispatch_only_declared_authoritative_segments(scenar
 
 def test_provisional_value_is_rejected_at_all_available_downstream_text_boundaries() -> None:
     realtime = controller()
-    provisional = realtime.observe(RecognitionResult(
-        "Emilia private provisional", False, capture_id=50, segment_id=1, revision=1,
-    ))
+    provisional = realtime.observe(
+        RecognitionResult(
+            "Emilia private provisional",
+            False,
+            capture_id=50,
+            segment_id=1,
+            revision=1,
+        )
+    )
     assert isinstance(provisional, ProvisionalRevision)
     session = ConversationSession(id_factory=lambda: "task02-boundary-session")
     original = session.snapshot()
@@ -146,8 +170,12 @@ def test_provisional_value_is_rejected_at_all_available_downstream_text_boundari
         parse_control(provisional, language="en")
     with pytest.raises(TranscriptBoundaryError):
         session.begin_turn(provisional)
-    for origin in (ContentOrigin.RAW_TRANSCRIPT, ContentOrigin.CONVERSATION_HISTORY,
-                   ContentOrigin.TOOL_RESULT, ContentOrigin.LOCAL_DOCUMENT):
+    for origin in (
+        ContentOrigin.RAW_TRANSCRIPT,
+        ContentOrigin.CONVERSATION_HISTORY,
+        ContentOrigin.TOOL_RESULT,
+        ContentOrigin.LOCAL_DOCUMENT,
+    ):
         with pytest.raises(TranscriptBoundaryError):
             ChatMessage(Role.USER, provisional, origin=origin)
     assert session.snapshot() == original
@@ -159,7 +187,11 @@ def test_concurrent_duplicate_final_has_one_history_admission() -> None:
     realtime = controller()
     barrier = threading.Barrier(6)
     final = RecognitionResult(
-        "Emilia one final", True, capture_id=70, segment_id=1, revision=1,
+        "Emilia one final",
+        True,
+        capture_id=70,
+        segment_id=1,
+        revision=1,
     )
 
     def submit() -> AuthoritativeUtterance | None:
@@ -183,22 +215,35 @@ def test_concurrent_duplicate_final_has_one_history_admission() -> None:
 def test_overflow_and_invalid_identity_do_not_create_authority_or_leak_content() -> None:
     aggregator = TranscriptRevisionAggregator(maximum_characters=16)
     pending = aggregator.observe(
-        "pending", is_final=False, capture_id=1, segment_id=1, revision=1,
+        "pending",
+        is_final=False,
+        capture_id=1,
+        segment_id=1,
+        revision=1,
     )
     with pytest.raises(ValueError) as metadata_error:
-        aggregator.observe("private text", is_final=True,
-                           capture_id=1, segment_id=1, revision=0)
+        aggregator.observe("private text", is_final=True, capture_id=1, segment_id=1, revision=0)
     assert "private text" not in str(metadata_error.value)
     assert aggregator.provisional() is pending
     with pytest.raises(TranscriptCapacityError) as capacity_error:
-        aggregator.observe("private text exceeds limit", is_final=True,
-                           capture_id=1, segment_id=1, revision=2)
+        aggregator.observe(
+            "private text exceeds limit", is_final=True, capture_id=1, segment_id=1, revision=2
+        )
     assert "private text" not in str(capacity_error.value)
     assert aggregator.provisional() is None
     assert aggregator.snapshot().characters == 0
-    assert authoritative_text(aggregator.observe(
-        "valid", is_final=True, capture_id=1, segment_id=1, revision=2,
-    )) == "valid"
+    assert (
+        authoritative_text(
+            aggregator.observe(
+                "valid",
+                is_final=True,
+                capture_id=1,
+                segment_id=1,
+                revision=2,
+            )
+        )
+        == "valid"
+    )
 
 
 def test_native_partial_revisions_do_not_call_provider_or_write_history() -> None:
@@ -248,10 +293,15 @@ def test_native_partial_revisions_do_not_call_provider_or_write_history() -> Non
 
         def chat(self, **kwargs: object):
             self.calls.append(kwargs)
-            return iter([SimpleNamespace(
-                message=SimpleNamespace(content="Synthetic answer."),
-                done=True, done_reason="stop",
-            )])
+            return iter(
+                [
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="Synthetic answer."),
+                        done=True,
+                        done_reason="stop",
+                    )
+                ]
+            )
 
     class TTS:
         def __init__(self) -> None:
@@ -262,13 +312,17 @@ def test_native_partial_revisions_do_not_call_provider_or_write_history() -> Non
 
     audio = Audio()
     recognizer = SpeechRecognizer(
-        model=object(), audio_interface=audio, recognizer_factory=Native,
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=Native,
     )
     provider, tts = Provider(), TTS()
     client = APIClient(client=provider, tts=tts, retry_wait=0, language="en")
     assistant = VoiceAssistant(
         settings=config.Settings(language="en", barge_in_enabled=False),
-        speech_recognizer=recognizer, api_client=client, tts=tts,
+        speech_recognizer=recognizer,
+        api_client=client,
+        tts=tts,
     )
     observed: list[tuple[int, int, int]] = []
     original_observer = assistant._observe_transcript
@@ -300,10 +354,15 @@ def test_capture_failure_after_partial_cleans_pending_without_dispatch() -> None
     class FailingRecognizer:
         def listen_once(self, timeout: float, *, on_provisional, **_kwargs):
             assert timeout > 0
-            on_provisional(RecognitionResult(
-                "Emilia private partial", False,
-                capture_id=1, segment_id=1, revision=1,
-            ))
+            on_provisional(
+                RecognitionResult(
+                    "Emilia private partial",
+                    False,
+                    capture_id=1,
+                    segment_id=1,
+                    revision=1,
+                )
+            )
             raise SpeechRecognitionError("synthetic decoder failure")
 
         def close(self) -> None:
@@ -327,7 +386,9 @@ def test_capture_failure_after_partial_cleans_pending_without_dispatch() -> None
     api = NeverCalledAPI()
     assistant = VoiceAssistant(
         settings=config.Settings(barge_in_enabled=False),
-        speech_recognizer=FailingRecognizer(), api_client=api, tts=SilentTTS(),
+        speech_recognizer=FailingRecognizer(),
+        api_client=api,
+        tts=SilentTTS(),
     )
     try:
         with pytest.raises(SpeechRecognitionError, match="synthetic decoder failure"):

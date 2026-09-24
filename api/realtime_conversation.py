@@ -19,12 +19,22 @@ from enum import Enum
 from typing import Any
 
 from api.conversation_control import (
-    ConversationEvent, ConversationEventKind as E, ConversationFloor,
-    ConversationFloorSnapshot, ConversationFloorState as S,
+    ConversationEvent,
+    ConversationEventKind as E,
+    ConversationFloor,
+    ConversationFloorSnapshot,
+    ConversationFloorState as S,
 )
-from api.transcripts import AuthoritativeUtterance, ProvisionalRevision, TranscriptRevisionAggregator
+from api.transcripts import (
+    AuthoritativeUtterance,
+    ProvisionalRevision,
+    TranscriptRevisionAggregator,
+)
 from recognizer.turn_endpoint_detector import (
-    EndpointAction, EndpointObservation, TurnEndpointConfig, TurnEndpointDetector,
+    EndpointAction,
+    EndpointObservation,
+    TurnEndpointConfig,
+    TurnEndpointDetector,
 )
 
 
@@ -58,7 +68,9 @@ class SpeechStopSignal:
         return self._local.is_set() or self._cancelled()
 
     def wait(self, timeout: float | None = None) -> bool:
-        if timeout is not None and (not isinstance(timeout, (int, float)) or not math.isfinite(timeout)):
+        if timeout is not None and (
+            not isinstance(timeout, (int, float)) or not math.isfinite(timeout)
+        ):
             raise ValueError("speech cancellation wait must be finite")
         deadline = None if timeout is None else time.monotonic() + timeout
         while not self.is_set():
@@ -69,7 +81,13 @@ class SpeechStopSignal:
         return True
 
 
-def observed_speech_call(function: Callable[..., Any], text: str, observer: Callable[[ResponseEvent], None] | None, *, cancellation_event: Any = None) -> Any:
+def observed_speech_call(
+    function: Callable[..., Any],
+    text: str,
+    observer: Callable[[ResponseEvent], None] | None,
+    *,
+    cancellation_event: Any = None,
+) -> Any:
     """Use precise stages when supported; legacy backends expose one phase."""
     try:
         parameters = inspect.signature(function).parameters
@@ -147,7 +165,8 @@ class CaptureLease:
         active = energy is not None and energy >= self._owner.activity_energy
         observed = (
             EndpointObservation.from_recognition(result, speech_active=active)
-            if result is not None else EndpointObservation(speech_active=active)
+            if result is not None
+            else EndpointObservation(speech_active=active)
         )
         self._endpoint_active |= observed.has_text or active
         decision = self._endpoint.update(observed)
@@ -165,12 +184,20 @@ class CaptureLease:
 
 class RealtimeConversationController:
     def __init__(
-        self, *, endpointing: TurnEndpointConfig, activity_energy: float,
+        self,
+        *,
+        endpointing: TurnEndpointConfig,
+        activity_energy: float,
         clock: Callable[[], float] = time.monotonic,
     ):
         if not isinstance(endpointing, TurnEndpointConfig):
             raise TypeError("endpointing must be a TurnEndpointConfig")
-        if isinstance(activity_energy, bool) or not isinstance(activity_energy, (int, float)) or not math.isfinite(activity_energy) or not 0 <= activity_energy <= 1:
+        if (
+            isinstance(activity_energy, bool)
+            or not isinstance(activity_energy, (int, float))
+            or not math.isfinite(activity_energy)
+            or not 0 <= activity_energy <= 1
+        ):
             raise ValueError("activity energy must be finite and between zero and one")
         if not callable(clock):
             raise TypeError("clock must be callable")
@@ -190,13 +217,21 @@ class RealtimeConversationController:
     def snapshot(self) -> RealtimeSnapshot:
         with self._lock:
             return RealtimeSnapshot(
-                self._floor.snapshot(), self._capture is not None, self._response,
-                self._synthesizing, self._generation_complete, self._stopped,
+                self._floor.snapshot(),
+                self._capture is not None,
+                self._response,
+                self._synthesizing,
+                self._generation_complete,
+                self._stopped,
             )
 
     def arm(self) -> None:
         with self._lock:
-            if self._stopped or self._response is not None or self._floor.snapshot().state is S.SUSPENDED:
+            if (
+                self._stopped
+                or self._response is not None
+                or self._floor.snapshot().state is S.SUSPENDED
+            ):
                 return
             self._apply(E.END_SESSION)
             self._apply(E.ACTIVATE)
@@ -225,20 +260,34 @@ class RealtimeConversationController:
             if self._stopped:
                 return None
             value = self.transcripts.observe(
-                result.text, is_final=result.is_final, capture_id=result.capture_id,
-                segment_id=result.segment_id, revision=result.revision,
+                result.text,
+                is_final=result.is_final,
+                capture_id=result.capture_id,
+                segment_id=result.segment_id,
+                revision=result.revision,
             )
-            if self._response is None and self._floor.snapshot().state not in {S.BARGE_IN_CANDIDATE, S.SUSPENDED}:
+            if self._response is None and self._floor.snapshot().state not in {
+                S.BARGE_IN_CANDIDATE,
+                S.SUSPENDED,
+            }:
                 if isinstance(value, (ProvisionalRevision, AuthoritativeUtterance)):
                     if self._floor.snapshot().state is S.IDLE:
                         self._apply(E.ACTIVATE)
-                    self._apply(E.FINAL_SPEECH if isinstance(value, AuthoritativeUtterance) else E.PROVISIONAL_SPEECH)
+                    self._apply(
+                        E.FINAL_SPEECH
+                        if isinstance(value, AuthoritativeUtterance)
+                        else E.PROVISIONAL_SPEECH
+                    )
             return value
 
     def endpoint_event(self, lease: CaptureLease, action: EndpointAction) -> None:
         with self._lock:
-            if (self._stopped or self._capture is not lease or self._response is not None
-                    or self._floor.snapshot().state is S.SUSPENDED):
+            if (
+                self._stopped
+                or self._capture is not lease
+                or self._response is not None
+                or self._floor.snapshot().state is S.SUSPENDED
+            ):
                 return
             if action is EndpointAction.PAUSE:
                 self._apply(E.SILENCE)
@@ -325,9 +374,16 @@ class RealtimeConversationController:
             state = self._floor.snapshot().state
             if rejected and state is S.BARGE_IN_CANDIDATE:
                 self._apply(E.INTERRUPTION_REJECTED)
-            elif not rejected and self._response is not None and state in {
-                S.THINKING, S.ASSISTANT_SPEAKING, S.BARGE_IN_CANDIDATE,
-            }:
+            elif (
+                not rejected
+                and self._response is not None
+                and state
+                in {
+                    S.THINKING,
+                    S.ASSISTANT_SPEAKING,
+                    S.BARGE_IN_CANDIDATE,
+                }
+            ):
                 self._apply(E.INTERRUPTION_CANDIDATE)
 
     def interruption(self) -> None:

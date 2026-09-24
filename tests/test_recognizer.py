@@ -8,7 +8,10 @@ from array import array
 import pytest
 
 from recognizer.speech_recognizer import (
-    RecognitionResult, SpeechRecognizer, SpeechRecognitionError, downmix_stereo_pcm16,
+    RecognitionResult,
+    SpeechRecognizer,
+    SpeechRecognitionError,
+    downmix_stereo_pcm16,
 )
 from api.realtime_conversation import RealtimeConversationController
 from recognizer.turn_endpoint_detector import EndpointAction, TurnEndpointConfig
@@ -70,7 +73,9 @@ def test_capture_stall_logs_once_without_reopening_stream(caplog) -> None:
 
     audio = CountingAudio()
     recognizer = SpeechRecognizer(
-        model=object(), audio_interface=audio, recognizer_factory=FinalRecognizer,
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
         capture_stall_seconds=0.02,
     )
     finished = threading.Event()
@@ -150,18 +155,25 @@ def test_controller_endpoint_flushes_native_once_and_never_promotes_partial(mode
             return '{"text":""}' if mode == "empty" else super().FinalResult()
 
     policy = TurnEndpointConfig(inactivity_seconds=1.4, maximum_utterance_seconds=1.4)
-    control = RealtimeConversationController(endpointing=policy, activity_energy=0.08, clock=lambda: now[0])
+    control = RealtimeConversationController(
+        endpointing=policy, activity_energy=0.08, clock=lambda: now[0]
+    )
     audio = FakeAudio()
     audio.stream = ClockedStream()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native, clock=lambda: now[0])
+    recognizer = SpeechRecognizer(
+        model=object(), audio_interface=audio, recognizer_factory=Native, clock=lambda: now[0]
+    )
     actions = []
     with control.capture() as lease:
+
         def frame(result, energy):
             action = lease.on_frame(result, energy)
             actions.append(action)
             return action
 
-        recognized = recognizer.listen_once(timeout=10, stop_event=lease, on_frame=frame, on_provisional=control.observe)
+        recognized = recognizer.listen_once(
+            timeout=10, stop_event=lease, on_frame=frame, on_provisional=control.observe
+        )
     assert audio.stream.stopped and audio.stream.closed
     assert control.transcripts.provisional() is None
     if mode == "silence":
@@ -188,8 +200,12 @@ def test_decoder_reset_preserves_microphone_and_monotonic_segment_identity():
     recognizer = SpeechRecognizer(model=object(), audio_interface=audio, recognizer_factory=Native)
     stop, reset = threading.Event(), threading.Event()
     reset_callbacks = []
-    events = recognizer.listen_events(stop_event=stop, keep_open=True, reset_event=reset,
-                                      on_segment_reset=lambda: reset_callbacks.append(True))
+    events = recognizer.listen_events(
+        stop_event=stop,
+        keep_open=True,
+        reset_event=reset,
+        on_segment_reset=lambda: reset_callbacks.append(True),
+    )
     first = next(events)
     reset.set()
     second = next(events)
@@ -199,7 +215,7 @@ def test_decoder_reset_preserves_microphone_and_monotonic_segment_identity():
     assert audio.stream.started and not audio.stream.closed
     assert len(resets) == len(reset_callbacks) == 1
     stop.set()
-    final, = list(events)
+    (final,) = list(events)
     assert final.is_final and final.segment_id == 2 and final.revision == 2
     assert audio.stream.closed and audio.stream.stopped
 
@@ -294,7 +310,9 @@ def test_provisional_observer_failure_closes_capture_without_flushing() -> None:
     audio = FakeAudio()
     PendingRecognizer.instances.clear()
     recognizer = SpeechRecognizer(
-        model=object(), audio_interface=audio, recognizer_factory=PendingRecognizer,
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=PendingRecognizer,
     )
 
     def fail_observer(result: RecognitionResult) -> None:
@@ -318,7 +336,8 @@ def test_live_final_preserves_repeated_words_and_their_metadata() -> None:
             )
 
     recognizer = SpeechRecognizer(
-        model=object(), audio_interface=FakeAudio(),
+        model=object(),
+        audio_interface=FakeAudio(),
         recognizer_factory=RepeatedWordsRecognizer,
     )
     result = recognizer.listen_once(timeout=1)
@@ -354,14 +373,17 @@ def test_configured_microphone_name_is_resolved_without_default_fallback() -> No
     assert audio.open_kwargs["input_device_index"] == 1
 
 
-@pytest.mark.parametrize("selector,strict,expected", [
-    ("USB PnP Audio Device", False, 1),
-    ("usb pnp", False, 1),
-    ("missing", False, None),
-    (1, False, 1),
-    (7, False, None),
-    (0, False, None),
-])
+@pytest.mark.parametrize(
+    "selector,strict,expected",
+    [
+        ("USB PnP Audio Device", False, 1),
+        ("usb pnp", False, 1),
+        ("missing", False, None),
+        (1, False, 1),
+        (7, False, None),
+        (0, False, None),
+    ],
+)
 def test_capture_device_resolution_and_fallback(selector, strict, expected, caplog):
     class Devices(FakeAudio):
         def get_device_count(self):
@@ -375,9 +397,13 @@ def test_capture_device_resolution_and_fallback(selector, strict, expected, capl
             )[index]
 
     audio = Devices()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
-                                  recognizer_factory=FinalRecognizer,
-                                  input_device=selector, input_device_strict=strict)
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+        input_device=selector,
+        input_device_strict=strict,
+    )
     assert recognizer.listen_once(timeout=1).is_final
     assert audio.open_kwargs.get("input_device_index") == expected
     if expected is None:
@@ -393,9 +419,13 @@ def test_capture_device_strict_rejects_unavailable_or_noninput(selector):
         def get_device_info_by_index(self, index):
             return {"name": "output", "maxInputChannels": 0}
 
-    recognizer = SpeechRecognizer(model=object(), audio_interface=Devices(),
-                                  recognizer_factory=FinalRecognizer,
-                                  input_device=selector, input_device_strict=True)
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=Devices(),
+        recognizer_factory=FinalRecognizer,
+        input_device=selector,
+        input_device_strict=True,
+    )
     with pytest.raises(SpeechRecognitionError, match="Configured microphone device"):
         recognizer.listen_once(timeout=1)
 
@@ -410,10 +440,13 @@ def test_pulse_source_selector_uses_virtual_device_and_restores_environment(monk
 
     monkeypatch.delenv("PULSE_SOURCE", raising=False)
     audio = Devices()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
-                                  recognizer_factory=FinalRecognizer,
-                                  input_device="pulse:alsa_input.usb-mic.analog-stereo",
-                                  pulse_sources=lambda: ("alsa_input.usb-mic.analog-stereo",))
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+        input_device="pulse:alsa_input.usb-mic.analog-stereo",
+        pulse_sources=lambda: ("alsa_input.usb-mic.analog-stereo",),
+    )
     assert recognizer.listen_once(timeout=1).is_final
     assert audio.open_kwargs["input_device_index"] == 0
     assert os.environ["PULSE_SOURCE"] == "alsa_input.usb-mic.analog-stereo"
@@ -424,10 +457,14 @@ def test_pulse_source_selector_uses_virtual_device_and_restores_environment(monk
 def test_missing_pulse_source_strict_fails_before_open(monkeypatch, caplog):
     monkeypatch.delenv("PULSE_SOURCE", raising=False)
     audio = FakeAudio()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
-                                  recognizer_factory=FinalRecognizer,
-                                  input_device="pulse:missing", input_device_strict=True,
-                                  pulse_sources=lambda: ("alsa_input.usb-mic.analog-stereo",))
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+        input_device="pulse:missing",
+        input_device_strict=True,
+        pulse_sources=lambda: ("alsa_input.usb-mic.analog-stereo",),
+    )
     with pytest.raises(SpeechRecognitionError, match="PulseAudio source is unavailable"):
         recognizer.listen_once(timeout=1)
     assert "requested=missing" in caplog.text
@@ -457,8 +494,7 @@ def test_stereo_capture_downmixes_before_vosk_and_logs_identity(caplog):
 
     class Audio(FakeAudio):
         def get_default_input_device_info(self):
-            return {"index": 9, "name": "pulse", "maxInputChannels": 32,
-                    "defaultSampleRate": 44100}
+            return {"index": 9, "name": "pulse", "maxInputChannels": 32, "defaultSampleRate": 44100}
 
     class Native(FinalRecognizer):
         def AcceptWaveform(self, data):
@@ -467,8 +503,9 @@ def test_stereo_capture_downmixes_before_vosk_and_logs_identity(caplog):
 
     audio = Audio()
     audio.stream = Stereo()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
-                                  recognizer_factory=Native, channel_mode="stronger")
+    recognizer = SpeechRecognizer(
+        model=object(), audio_interface=audio, recognizer_factory=Native, channel_mode="stronger"
+    )
     with caplog.at_level("INFO"):
         assert recognizer.listen_once(timeout=1).is_final
     assert audio.open_kwargs["channels"] == 2
@@ -488,10 +525,14 @@ def test_low_capture_level_warning_uses_only_scalar(caplog):
 
     audio = FakeAudio()
     audio.stream = Silence()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
-                                  recognizer_factory=PendingRecognizer,
-                                  clock=lambda: now[0], sanity_rms_threshold=0.001,
-                                  sanity_window_seconds=0.5)
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=PendingRecognizer,
+        clock=lambda: now[0],
+        sanity_rms_threshold=0.001,
+        sanity_window_seconds=0.5,
+    )
     list(recognizer.listen_events(timeout=1))
     assert "event=capture_level_low peak_rms=0.000000" in caplog.text
 
@@ -509,10 +550,14 @@ def test_capture_health_floor_boundary(sample, warns, caplog):
 
     audio = FakeAudio()
     audio.stream = Constant()
-    recognizer = SpeechRecognizer(model=object(), audio_interface=audio,
-                                  recognizer_factory=PendingRecognizer,
-                                  clock=lambda: now[0], sanity_rms_threshold=0.001,
-                                  sanity_window_seconds=0.5)
+    recognizer = SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=PendingRecognizer,
+        clock=lambda: now[0],
+        sanity_rms_threshold=0.001,
+        sanity_window_seconds=0.5,
+    )
     with caplog.at_level("WARNING"):
         list(recognizer.listen_events(timeout=1))
     assert ("event=capture_level_low" in caplog.text) is warns
@@ -582,7 +627,9 @@ def test_stop_event_never_promotes_last_partial_when_vosk_flush_is_empty() -> No
 
     results = list(recognizer.listen_events(stop_event=stop_event))
 
-    assert [(result.text, result.is_final) for result in results] == [("nuova nuova domanda", False)]
+    assert [(result.text, result.is_final) for result in results] == [
+        ("nuova nuova domanda", False)
+    ]
     assert results[0].segment_id == 1
     assert results[0].segment_started_at is not None
 
@@ -602,7 +649,9 @@ def test_normal_timeout_keeps_an_empty_flush_as_partial() -> None:
 
     results = list(recognizer.listen_events(timeout=0.5))
 
-    assert [(result.text, result.is_final) for result in results] == [("nuova nuova domanda", False)]
+    assert [(result.text, result.is_final) for result in results] == [
+        ("nuova nuova domanda", False)
+    ]
     assert results[0].segment_id == 1
     assert results[0].segment_started_at == 0.0
 

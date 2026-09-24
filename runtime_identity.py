@@ -16,14 +16,22 @@ def git_identity(root: Path) -> tuple[str, bool] | None:
     try:
         sha = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True, timeout=2,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
         ).stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
             return None
-        dirty = bool(subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=normal"],
-            capture_output=True, text=True, check=True, timeout=3,
-        ).stdout.strip())
+        dirty = bool(
+            subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=normal"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=3,
+            ).stdout.strip()
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return sha, dirty
@@ -52,6 +60,7 @@ def write_stamp(source: Path, destination: Path) -> Path:
     if not destination.is_dir():
         raise ValueError("deployment directory does not exist")
     stamp = destination / STAMP_NAME
-    stamp.write_text(json.dumps({"commit": identity[0], "dirty": identity[1]}) + "\n",
-                     encoding="utf-8")
+    stamp.write_text(
+        json.dumps({"commit": identity[0], "dirty": identity[1]}) + "\n", encoding="utf-8"
+    )
     return stamp

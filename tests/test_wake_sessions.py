@@ -20,10 +20,17 @@ from test_hybrid_api_client import FakeRemoteProvider, make_client
 def runtime(results, now, *, api=None, tts=None, **settings):
     return VoiceAssistant(
         settings=config.Settings(language="en", activation_timeout_seconds=5, **settings),
-        api_client=api or FakeAPI(), tts=tts or FakeTTS(),
-        speech_recognizer=FakeRecognizer([
-            RecognitionResult(item, is_final=True) if isinstance(item, str) else item for item in results
-        ]), sound_player=FakeSoundPlayer(), sound_executor=ImmediateExecutor(), clock=lambda: now[0],
+        api_client=api or FakeAPI(),
+        tts=tts or FakeTTS(),
+        speech_recognizer=FakeRecognizer(
+            [
+                RecognitionResult(item, is_final=True) if isinstance(item, str) else item
+                for item in results
+            ]
+        ),
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: now[0],
     )
 
 
@@ -37,7 +44,9 @@ def test_one_wake_ten_followups_survive_stt_timeouts_and_keep_canonical_history(
     results = ["Emilia"]
     for number in range(10):
         results.extend([None, f"question {number}"])
-    assistant = runtime(results, now, api=api, tts=tts, listen_timeout=0.01, barge_in_enabled=barge_in)
+    assistant = runtime(
+        results, now, api=api, tts=tts, listen_timeout=0.01, barge_in_enabled=barge_in
+    )
     original = session.session_id
     try:
         assert assistant.run_once()
@@ -57,7 +66,9 @@ def test_one_wake_ten_followups_survive_stt_timeouts_and_keep_canonical_history(
 
 def test_silence_partials_empty_finals_and_mute_do_not_extend_activation():
     now = [0.0]
-    assistant = runtime(["Emilia", None, RecognitionResult("noise words", is_final=False), "", "mute", None], now)
+    assistant = runtime(
+        ["Emilia", None, RecognitionResult("noise words", is_final=False), "", "mute", None], now
+    )
     try:
         assert assistant.run_once()
         for timestamp in (1, 2, 3):
@@ -160,7 +171,9 @@ def test_final_just_before_deadline_and_successful_response_refresh_activation()
             return super().talk(message, context)
 
     api = SlowAPI()
-    assistant = runtime(["Emilia", "first question", "second question"], now, api=api, barge_in_enabled=False)
+    assistant = runtime(
+        ["Emilia", "first question", "second question"], now, api=api, barge_in_enabled=False
+    )
     try:
         assert assistant.run_once()
         now[0] = 4.999
@@ -182,7 +195,9 @@ def test_termination_clears_history_provider_bindings_and_requires_activation(en
     api = APIClient(client=source, tts=tts, conversation_session=session, retry_wait=0)
     forgotten = []
     api._forget_provider_conversations = lambda identity, **kwargs: forgotten.append(identity)
-    assistant = runtime(["Emilia first question", "orphan followup", "Emilia new question"], now, api=api, tts=tts)
+    assistant = runtime(
+        ["Emilia first question", "orphan followup", "Emilia new question"], now, api=api, tts=tts
+    )
     try:
         assert assistant.run_once()
         old_id = session.session_id
@@ -209,7 +224,20 @@ def test_suspend_resume_preserves_context_but_ended_session_cannot_resume():
     now = [0.0]
     source = FakeClient([chunk("Synthetic answer.", done=True)])
     api = APIClient(client=source, tts=FakeTTS(), retry_wait=0)
-    assistant = runtime(["Emilia first question", "pause session", "resume session", "followup", "end session", "resume session", "ignored"], now, api=api, barge_in_enabled=False)
+    assistant = runtime(
+        [
+            "Emilia first question",
+            "pause session",
+            "resume session",
+            "followup",
+            "end session",
+            "resume session",
+            "ignored",
+        ],
+        now,
+        api=api,
+        barge_in_enabled=False,
+    )
     try:
         assert assistant.run_once()
         old_id = api.conversation.session_id
@@ -229,12 +257,23 @@ def test_suspend_resume_preserves_context_but_ended_session_cannot_resume():
 
 
 def test_provider_fallback_preserves_activation_and_ten_turn_history(tmp_path):
-    unavailable = ProviderError(ErrorCategory.PROVIDER_UNAVAILABLE, "synthetic unavailable",
-                                provider="remote", model="remote-model", transmitted=False)
+    unavailable = ProviderError(
+        ErrorCategory.PROVIDER_UNAVAILABLE,
+        "synthetic unavailable",
+        provider="remote",
+        model="remote-model",
+        transmitted=False,
+    )
     remote = FakeRemoteProvider([unavailable] * 10)
     api, local, tts = make_client(tmp_path, remote)
     now = [0.0]
-    assistant = runtime(["Emilia", *[f"question {n}" for n in range(10)]], now, api=api, tts=tts, barge_in_enabled=False)
+    assistant = runtime(
+        ["Emilia", *[f"question {n}" for n in range(10)]],
+        now,
+        api=api,
+        tts=tts,
+        barge_in_enabled=False,
+    )
     try:
         assert assistant.run_once()
         for _ in range(10):
@@ -293,7 +332,9 @@ def test_reset_is_nonblocking_during_generation_and_runs_once_after_unwind(fails
 
 
 def test_failed_reset_fails_closed_then_recovers_without_sending_old_history():
-    api = APIClient(client=FakeClient([chunk("Synthetic answer.", done=True)]), tts=FakeTTS(), retry_wait=0)
+    api = APIClient(
+        client=FakeClient([chunk("Synthetic answer.", done=True)]), tts=FakeTTS(), retry_wait=0
+    )
     assistant = runtime([], [0.0], api=api, barge_in_enabled=False)
     real_reset = api.try_reset_conversation
     try:

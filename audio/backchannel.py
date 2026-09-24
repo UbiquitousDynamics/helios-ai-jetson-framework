@@ -30,12 +30,40 @@ def suppress_backchannel_for(text: str, *, language: str) -> bool:
     """Conservative local cue suppression; never authorize an action or a mode."""
     words = tuple(re.findall(r"\w+", authoritative_text(text).casefold()))
     prefixes = {
-        "en": ("dictation", "dictate", "take dictation", "i will dictate", "i am dictating",
-               "transcribe", "write exactly", "confirm", "i confirm", "yes", "proceed", "go ahead", "do it"),
-        "it": ("dettatura", "detto", "ti detto", "sto dettando", "trascrivi", "scrivi esattamente",
-               "conferma", "confermo", "sì", "si", "procedi", "fallo"),
+        "en": (
+            "dictation",
+            "dictate",
+            "take dictation",
+            "i will dictate",
+            "i am dictating",
+            "transcribe",
+            "write exactly",
+            "confirm",
+            "i confirm",
+            "yes",
+            "proceed",
+            "go ahead",
+            "do it",
+        ),
+        "it": (
+            "dettatura",
+            "detto",
+            "ti detto",
+            "sto dettando",
+            "trascrivi",
+            "scrivi esattamente",
+            "conferma",
+            "confermo",
+            "sì",
+            "si",
+            "procedi",
+            "fallo",
+        ),
     }
-    return any(words[:len(prefix.split())] == tuple(prefix.split()) for prefix in prefixes.get(language, ()))
+    return any(
+        words[: len(prefix.split())] == tuple(prefix.split())
+        for prefix in prefixes.get(language, ())
+    )
 
 
 class BackchannelSession:
@@ -58,8 +86,12 @@ class BackchannelSession:
     ) -> None:
         if not phrase.strip():
             raise ValueError("backchannel phrase cannot be empty")
-        if (isinstance(delay_seconds, bool) or not isinstance(delay_seconds, (int, float))
-                or not math.isfinite(delay_seconds) or delay_seconds <= 0):
+        if (
+            isinstance(delay_seconds, bool)
+            or not isinstance(delay_seconds, (int, float))
+            or not math.isfinite(delay_seconds)
+            or delay_seconds <= 0
+        ):
             raise ValueError("backchannel delay must be finite and positive")
         if allowed is not None and not callable(allowed):
             raise TypeError("allowed must be callable")
@@ -101,7 +133,9 @@ class BackchannelSession:
         if self._cancelled.is_set():
             return True
         try:
-            stopped = (self._request_cancellation is not None and self._request_cancellation.cancelled)
+            stopped = (
+                self._request_cancellation is not None and self._request_cancellation.cancelled
+            )
             stopped = stopped or (self._allowed is not None and not self._allowed())
         except Exception:
             stopped = True
@@ -164,8 +198,12 @@ class BackchannelSession:
         hard-exit fallback from running.
         """
 
-        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                                    or not math.isfinite(timeout) or timeout < 0):
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout < 0
+        ):
             raise ValueError("timeout must be finite and non-negative")
 
         self._cancelled.set()

@@ -139,9 +139,7 @@ def resample_int16(audio: np.ndarray, source_rate: int, target_rate: int) -> np.
     if source_rate == target_rate:
         return np.asarray(audio, dtype="<i2").copy()
     divisor = math.gcd(source_rate, target_rate)
-    output = resample_poly(
-        audio.astype(np.float64), target_rate // divisor, source_rate // divisor
-    )
+    output = resample_poly(audio.astype(np.float64), target_rate // divisor, source_rate // divisor)
     return np.clip(output, -32768, 32767).astype("<i2")
 
 
@@ -752,8 +750,7 @@ def locate_reference(
     index = low + relative
     window = region[relative : relative + len(ref)]
     denominator = math.sqrt(
-        max(float(np.dot(ref, ref)), 1e-30)
-        * max(float(np.dot(window, window)), 1e-30)
+        max(float(np.dot(ref, ref)), 1e-30) * max(float(np.dot(window, window)), 1e-30)
     )
     return index, float(abs(values[relative]) / denominator)
 
@@ -943,7 +940,9 @@ def run_trial(
         for row in capture.frame_records:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     (trial_dir / "kaldi.ndjson").write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in kaldi_records),
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in kaldi_records
+        ),
         encoding="utf-8",
     )
     (trial_dir / "recognition.ndjson").write_text(
@@ -960,9 +959,7 @@ def run_trial(
     if near is not None and near.origin is not None and near_ref16 is not None:
         raw_zero = raw_recorder.sample_zero_time
         if raw_zero is not None:
-            expected = round(
-                (near.origin + ARGS.stream_delay_ms / 1000 - raw_zero) * CAPTURE_RATE
-            )
+            expected = round((near.origin + ARGS.stream_delay_ms / 1000 - raw_zero) * CAPTURE_RATE)
             onset_index, onset_correlation = locate_reference(raw_audio, near_ref16, expected)
             if onset_index is not None:
                 onset_time = raw_zero + onset_index / CAPTURE_RATE
@@ -1005,9 +1002,7 @@ def run_trial(
         min(far.origin or started, started + 0.75),
     )
     ambient_rms = (
-        float(np.sqrt(np.mean((ambient.astype(np.float64) / 32768) ** 2)))
-        if len(ambient)
-        else 0.0
+        float(np.sqrt(np.mean((ambient.astype(np.float64) / 32768) ** 2))) if len(ambient) else 0.0
     )
     erle_values = frame_erle(raw_far, clean_far, ambient_rms)
 
@@ -1116,18 +1111,14 @@ def aggregate(results: list[dict[str, Any]], metadata: dict[str, Any]) -> dict[s
     valid = [row for row in results if row["valid"]]
     detected = [row for row in valid if row["detected"]]
     latency_interrupt = [
-        row["onset_to_interrupt_ms"]
-        for row in detected
-        if row["onset_to_interrupt_ms"] is not None
+        row["onset_to_interrupt_ms"] for row in detected if row["onset_to_interrupt_ms"] is not None
     ]
     latency_stop = [
         row["onset_to_far_stop_proxy_ms"]
         for row in detected
         if row["onset_to_far_stop_proxy_ms"] is not None
     ]
-    erle_medians = [
-        row["erle_median_db"] for row in valid if row["erle_median_db"] is not None
-    ]
+    erle_medians = [row["erle_median_db"] for row in valid if row["erle_median_db"] is not None]
     erle_p10s = [row["erle_p10_db"] for row in valid if row["erle_p10_db"] is not None]
     processing = []
     for row in valid:

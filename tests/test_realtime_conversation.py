@@ -7,14 +7,21 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from api.conversation_control import ConversationFloorState as S
-from api.realtime_conversation import RealtimeBusyError, RealtimeConversationController, ResponseEvent as R, SpeechStopSignal
+from api.realtime_conversation import (
+    RealtimeBusyError,
+    RealtimeConversationController,
+    ResponseEvent as R,
+    SpeechStopSignal,
+)
 from api.transcripts import AuthoritativeUtterance
 from recognizer.speech_recognizer import RecognitionResult
 from recognizer.turn_endpoint_detector import EndpointAction as A, TurnEndpointConfig
 
 
 def controller(clock=lambda: 0.0, **kwargs):
-    return RealtimeConversationController(endpointing=TurnEndpointConfig(), activity_energy=0.08, clock=clock, **kwargs)
+    return RealtimeConversationController(
+        endpointing=TurnEndpointConfig(), activity_energy=0.08, clock=clock, **kwargs
+    )
 
 
 def result(text="synthetic", final=False, revision=1):
@@ -79,10 +86,12 @@ def test_complete_floor_lifecycle_and_generation_eof_before_playback_drain():
 def test_capture_has_one_owner_across_threads(initial_response, competing_response):
     control = controller()
     with control.capture(response=initial_response) as lease:
+
         def contender():
             with pytest.raises(RealtimeBusyError):
                 with control.capture(response=competing_response):
                     pytest.fail("second capture acquired")
+
         with ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(contender).result(timeout=2)
         assert not lease.finished.is_set()

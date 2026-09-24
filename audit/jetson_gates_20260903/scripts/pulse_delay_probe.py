@@ -34,16 +34,16 @@ class Recorder:
 
     def start(self) -> None:
         command = [
-                "parec",
-                "--raw",
-                "--format=s16le",
-                f"--rate={CAPTURE_RATE}",
-                "--channels=1",
-                "--latency-msec=20",
-                "--process-time-msec=20",
-                f"--device={self.source}",
-                "--client-name=helios-audit-delay-probe",
-            ]
+            "parec",
+            "--raw",
+            "--format=s16le",
+            f"--rate={CAPTURE_RATE}",
+            "--channels=1",
+            "--latency-msec=20",
+            "--process-time-msec=20",
+            f"--device={self.source}",
+            "--client-name=helios-audit-delay-probe",
+        ]
         if self.channel_map:
             command.append(f"--channel-map={self.channel_map}")
         self.process = subprocess.Popen(

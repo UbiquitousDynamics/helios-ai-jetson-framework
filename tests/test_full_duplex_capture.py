@@ -31,7 +31,9 @@ class PhaseRecognizer(FakeRecognizer):
         self.observed = []
         self.owner = None
 
-    def listen_events(self, timeout, *, stop_event, keep_open, reset_event, on_frame, on_segment_reset):
+    def listen_events(
+        self, timeout, *, stop_event, keep_open, reset_event, on_frame, on_segment_reset
+    ):
         assert timeout is None and keep_open
         self.captures += 1
         deadline = time.monotonic() + 3
@@ -42,8 +44,13 @@ class PhaseRecognizer(FakeRecognizer):
             except queue.Empty:
                 continue
             assert self.owner.realtime.snapshot().floor.state is expected
-            event = RecognitionResult("synthetic hypothesis " + phase, False,
-                                      capture_id=2, segment_id=1, revision=len(self.observed) + 1)
+            event = RecognitionResult(
+                "synthetic hypothesis " + phase,
+                False,
+                capture_id=2,
+                segment_id=1,
+                revision=len(self.observed) + 1,
+            )
             on_frame(event, 0.1)
             yield event
             self.observed.append(phase)
@@ -51,9 +58,15 @@ class PhaseRecognizer(FakeRecognizer):
 
 
 def make_runtime(recognizer, api, tts=None, detector=None):
-    runtime = VoiceAssistant(settings=config.Settings(), speech_recognizer=recognizer,
-                             api_client=api, tts=tts or FakeTTS(), sound_player=FakeSoundPlayer(),
-                             sound_executor=ImmediateExecutor(), barge_in_detector=detector or NeverInterrupt())
+    runtime = VoiceAssistant(
+        settings=config.Settings(),
+        speech_recognizer=recognizer,
+        api_client=api,
+        tts=tts or FakeTTS(),
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
+        barge_in_detector=detector or NeverInterrupt(),
+    )
     recognizer.owner = runtime
     return runtime
 
@@ -91,7 +104,14 @@ def test_one_capture_processes_input_during_all_response_phases(entry):
             assert runtime.process_command("Emilia synthetic request") == "answer"
         assert api.messages == ["synthetic request"]
         assert recognizer.captures == 1
-        assert recognizer.observed == ["generation", "synthesis", "playback", "gap", "provider_eof", "last_audio"]
+        assert recognizer.observed == [
+            "generation",
+            "synthesis",
+            "playback",
+            "gap",
+            "provider_eof",
+            "last_audio",
+        ]
         assert not runtime.realtime.snapshot().capture_active
     finally:
         runtime.close()
@@ -118,7 +138,9 @@ def test_rag_retrieval_and_speech_share_response_time_capture():
 
     runtime = make_runtime(recognizer, FakeAPI(), TTS())
     try:
-        assert runtime.process_rag_command("synthetic query", Search()) == "synthetic retrieval result"
+        assert (
+            runtime.process_rag_command("synthetic query", Search()) == "synthetic retrieval result"
+        )
         assert recognizer.captures == 1
         assert recognizer.observed == ["retrieval", "playback"]
         assert not runtime.realtime.snapshot().capture_active
@@ -142,7 +164,9 @@ def test_stop_unwinds_capture_and_response_at_each_phase(phase):
                 on_lifecycle(R.PLAYBACK_COMPLETED)
             if phase == "provider_eof":
                 on_lifecycle(R.GENERATION_COMPLETED)
-            phases.put((phase, S.ASSISTANT_SPEAKING if phase == "playback" else S.THINKING), timeout=1)
+            phases.put(
+                (phase, S.ASSISTANT_SPEAKING if phase == "playback" else S.THINKING), timeout=1
+            )
             assert acknowledged.wait(timeout=1)
             ready.set()
             deadline = time.monotonic() + 2
@@ -194,16 +218,30 @@ def test_stop_during_rag_retrieval_suppresses_speech_without_cancelling_retrieva
     class Recognizer(FakeRecognizer):
         def listen_events(self, timeout, *, stop_event):
             assert retrieving.wait(timeout=1)
-            yield RecognitionResult("stop", True, frame_energy=0.5, segment_peak_energy=0.5,
-                                    confidence=0.9, speech_duration_seconds=0.5)
+            yield RecognitionResult(
+                "stop",
+                True,
+                frame_energy=0.5,
+                segment_peak_energy=0.5,
+                confidence=0.9,
+                speech_duration_seconds=0.5,
+            )
 
     # Real interruption admission must still validate this explicit final.
     tts, api, recognizer = TTS(), FakeAPI(), Recognizer([])
-    runtime = VoiceAssistant(settings=config.Settings(), speech_recognizer=recognizer,
-                             api_client=api, tts=tts, sound_player=FakeSoundPlayer(),
-                             sound_executor=ImmediateExecutor())
+    runtime = VoiceAssistant(
+        settings=config.Settings(),
+        speech_recognizer=recognizer,
+        api_client=api,
+        tts=tts,
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
+    )
     try:
-        assert runtime.process_rag_command("synthetic query", Search()) == "synthetic result after cancellation"
+        assert (
+            runtime.process_rag_command("synthetic query", Search())
+            == "synthetic result after cancellation"
+        )
         assert tts.spoken == [] and api.messages == []
         assert not api.cancelled
         assert not runtime.realtime.snapshot().capture_active

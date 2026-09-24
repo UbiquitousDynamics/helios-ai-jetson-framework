@@ -111,7 +111,9 @@ def test_correlated_generation_eof_does_not_release_floor_until_audio_finishes()
         events.append(event)
         control.response_event(token, event)
 
-    client = APIClient(client=FakeClient([chunk("Answer.", done=True)]), tts=StagedTTS(), retry_wait=0)
+    client = APIClient(
+        client=FakeClient([chunk("Answer.", done=True)]), tts=StagedTTS(), retry_wait=0
+    )
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(client.talk, "synthetic question", on_lifecycle=observe)

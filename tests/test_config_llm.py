@@ -148,7 +148,8 @@ def test_invalid_capture_selector_policy_is_rejected(tmp_path: Path) -> None:
 def test_capture_health_floor_has_independent_validated_configuration(tmp_path: Path) -> None:
     defaults = config.Settings.from_env(tmp_path, environ={})
     adjusted = config.Settings.from_env(
-        tmp_path, environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": "0.0005"},
+        tmp_path,
+        environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": "0.0005"},
     )
     assert defaults.audio_capture_level_min_rms == 0.001
     assert adjusted.audio_capture_level_min_rms == 0.0005
@@ -157,7 +158,10 @@ def test_capture_health_floor_has_independent_validated_configuration(tmp_path: 
 
 @pytest.mark.parametrize("value", ["0", "-0.1", "nan", "inf", "bad"])
 def test_invalid_capture_health_floor_is_rejected(tmp_path: Path, value: str) -> None:
-    with pytest.raises(config.ConfigurationError, match="HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS|audio_capture_level_min_rms"):
+    with pytest.raises(
+        config.ConfigurationError,
+        match="HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS|audio_capture_level_min_rms",
+    ):
         config.Settings.from_env(tmp_path, environ={"HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS": value})
 
 
@@ -333,9 +337,7 @@ def test_codex_subscription_uses_low_latency_speech_chunks_and_bounded_remote_hi
     assert settings.talk.speech_chunk_max_chars == 64
     assert settings.talk.speech_chunk_max_delay_seconds == pytest.approx(0.75)
     remote_targets = {
-        target.name: target
-        for target in settings.targets
-        if target.name.startswith("codex-talk-")
+        target.name: target for target in settings.targets if target.name.startswith("codex-talk-")
     }
     assert {target.max_history_turns for target in remote_targets.values()} == {6}
 

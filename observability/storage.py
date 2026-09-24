@@ -1058,7 +1058,8 @@ class SQLiteKPIStore:
         operator = "<=" if inclusive else "<"
         event_filter = (
             " AND event IN ('network_probe_completed', 'resource_sample')"
-            if background_only else ""
+            if background_only
+            else ""
         )
         interval_ms = self.rollup_interval_seconds * 1_000
         coalesced = ", ".join(f"COALESCE({name}, '')" for name in _DIMENSION_FIELDS)
