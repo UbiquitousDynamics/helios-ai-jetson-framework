@@ -24,16 +24,37 @@ class ControlIntent(str, Enum):
 _I = ControlIntent
 _PHRASES = {
     "it": {
-        _I.STOP_SPEAKING: ("stop", "basta", "silenzio", "fermati", "interrompi", "smetti di parlare", "cancella"),
+        _I.STOP_SPEAKING: (
+            "stop",
+            "basta",
+            "silenzio",
+            "fermati",
+            "interrompi",
+            "smetti di parlare",
+            "cancella",
+        ),
         _I.MUTE: ("mute", "silenzia audio", "disattiva audio"),
         _I.UNMUTE: ("unmute", "riattiva audio"),
         _I.SUSPEND_SESSION: ("sospendi sessione", "sospendi conversazione", "pausa conversazione"),
         _I.RESUME_SESSION: ("riprendi sessione", "riprendi conversazione"),
-        _I.END_SESSION: ("termina sessione", "chiudi sessione", "termina conversazione", "fine conversazione"),
+        _I.END_SESSION: (
+            "termina sessione",
+            "chiudi sessione",
+            "termina conversazione",
+            "fine conversazione",
+        ),
         _I.CANCEL_TASK: ("annulla attività", "annulla compito", "cancella compito"),
     },
     "en": {
-        _I.STOP_SPEAKING: ("stop", "stop speaking", "stop talking", "be quiet", "enough", "cancel", "pause"),
+        _I.STOP_SPEAKING: (
+            "stop",
+            "stop speaking",
+            "stop talking",
+            "be quiet",
+            "enough",
+            "cancel",
+            "pause",
+        ),
         _I.MUTE: ("mute", "mute audio"),
         _I.UNMUTE: ("unmute", "unmute audio"),
         _I.SUSPEND_SESSION: ("suspend session", "pause session", "pause conversation"),
@@ -44,7 +65,9 @@ _PHRASES = {
 }
 
 
-def parse_control(text: str, *, language: str, wake_words: tuple[str, ...] = ()) -> ControlIntent | None:
+def parse_control(
+    text: str, *, language: str, wake_words: tuple[str, ...] = ()
+) -> ControlIntent | None:
     """Match a whole authoritative utterance, optionally prefixed by a wake word."""
 
     text = authoritative_text(text)
@@ -53,8 +76,8 @@ def parse_control(text: str, *, language: str, wake_words: tuple[str, ...] = ())
     words = re.findall(r"\w+", text.casefold())
     for wake in wake_words:
         prefix = re.findall(r"\w+", wake.casefold())
-        if prefix and words[:len(prefix)] == prefix:
-            words = words[len(prefix):]
+        if prefix and words[: len(prefix)] == prefix:
+            words = words[len(prefix) :]
             break
     normalized = " ".join(words)
     for intent, phrases in _PHRASES[language].items():

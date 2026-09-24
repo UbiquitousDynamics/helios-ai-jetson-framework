@@ -51,6 +51,10 @@ for record in manifest["records"]:
             "words": parsed.get("result", []),
         }
     )
-output = {"count": len(results), "nonempty": sum(bool(row["recognized"]) for row in results), "results": results}
+output = {
+    "count": len(results),
+    "nonempty": sum(bool(row["recognized"]) for row in results),
+    "results": results,
+}
 args.out.write_text(json.dumps(output, indent=2, ensure_ascii=False) + "\n")
 print(json.dumps({"count": output["count"], "nonempty": output["nonempty"]}))

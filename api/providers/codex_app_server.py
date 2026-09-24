@@ -256,8 +256,12 @@ def _safe_error_message(category: ErrorCategory) -> str:
 
 
 def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
-    for candidate in (field_value(error, "rate_limits"), field_value(error, "rateLimits"),
-                      field_value(error, "data"), field_value(error, "details")):
+    for candidate in (
+        field_value(error, "rate_limits"),
+        field_value(error, "rateLimits"),
+        field_value(error, "data"),
+        field_value(error, "details"),
+    ):
         category = _classify_usage_snapshot(candidate)
         if category is not None:
             return category, False
@@ -1158,7 +1162,8 @@ class CodexAppServerAdapter:
                     request_id=request_id,
                     retry_after_seconds=(
                         _rate_window_retry_after(value, time.time())
-                        if category is ErrorCategory.RATE_LIMITED else None
+                        if category is ErrorCategory.RATE_LIMITED
+                        else None
                     ),
                 ) from None
             if kind == "eof":

@@ -102,9 +102,7 @@ def thermal_snapshot() -> list[dict[str, Any]]:
             continue
         if abs(value) > 1000:
             value /= 1000
-        result.append(
-            {"zone": zone.name, "type": read_text(zone / "type"), "celsius": value}
-        )
+        result.append({"zone": zone.name, "type": read_text(zone / "type"), "celsius": value})
     return result
 
 
@@ -176,9 +174,7 @@ def run_case(case: Case) -> None:
                 record[metric.replace("_ms", "_budget_pct")] = (
                     100.0 * record[metric] / case.budget_ms
                 )
-            record["deadline_misses"] = sum(
-                value >= case.budget_ms for value in pooled
-            )
+            record["deadline_misses"] = sum(value >= case.budget_ms for value in pooled)
         emit(record)
     except Exception as exc:
         emit(
@@ -343,9 +339,7 @@ class NumpyBlockNLMS:
         estimate = windows @ self.weights
         error = self.microphone - estimate
         powers = np.einsum("ij,ij->i", windows, windows) + np.float32(1e-8)
-        self.weights += np.float32(0.5 / AEC_SAMPLES) * (
-            windows.T @ (error / powers)
-        )
+        self.weights += np.float32(0.5 / AEC_SAMPLES) * (windows.T @ (error / powers))
         self.history = padded[-(TAPS - 1) :].copy()
         return float(error[0])
 
@@ -405,8 +399,7 @@ def make_webrtc_audio(samples: int) -> tuple[np.ndarray, np.ndarray]:
     timeline = np.arange(samples, dtype=np.float64) / SAMPLE_RATE
     far = (np.sin(2 * np.pi * 500 * timeline) * 8000).astype(np.int16)
     near = np.clip(
-        np.roll(far, 80).astype(np.float64) * 0.35
-        + np.sin(2 * np.pi * 700 * timeline) * 1000,
+        np.roll(far, 80).astype(np.float64) * 0.35 + np.sin(2 * np.pi * 700 * timeline) * 1000,
         -32768,
         32767,
     ).astype(np.int16)
@@ -515,9 +508,7 @@ def main() -> None:
     frame = array(
         "h", (((index * 7919) % 65536) - 32768 for index in range(CAPTURE_SAMPLES))
     ).tobytes()
-    partial_payload = json.dumps(
-        {"partial": "please stop speaking now"}, separators=(",", ":")
-    )
+    partial_payload = json.dumps({"partial": "please stop speaking now"}, separators=(",", ":"))
     final_payload = json.dumps(
         {
             "text": "echo echo user",
@@ -531,10 +522,9 @@ def main() -> None:
     )
     rng = np.random.default_rng(20260903)
     reference = rng.standard_normal(AEC_SAMPLES).astype(np.float32) * np.float32(0.08)
-    microphone = (
-        np.roll(reference, 8) * np.float32(0.4)
-        + rng.standard_normal(AEC_SAMPLES).astype(np.float32) * np.float32(0.005)
-    )
+    microphone = np.roll(reference, 8) * np.float32(0.4) + rng.standard_normal(AEC_SAMPLES).astype(
+        np.float32
+    ) * np.float32(0.005)
     scalar_fir = ScalarFIR([float(value) for value in reference])
     scalar_nlms = ScalarNLMS(
         [float(value) for value in reference], [float(value) for value in microphone]
@@ -553,13 +543,55 @@ def main() -> None:
     )
     cases = [
         Case("timer_envelope", lambda: None, scaled(20_000), 1000, None, "Timer/call envelope."),
-        Case("pcm16_rms_current_1600", lambda: pcm16_rms(frame), scaled(2000), 200, CAPTURE_BUDGET_MS, "Exact deployed pure-Python RMS."),
-        Case("json_loads_partial", lambda: json.loads(partial_payload), scaled(10_000), 1000, CAPTURE_BUDGET_MS, "38-byte Vosk partial JSON decoding."),
-        Case("parse_recognition_final_three_words", lambda: parse_recognition(final_payload, "text"), scaled(2000), 200, CAPTURE_BUDGET_MS, "Exact deployed confidence/timing path."),
+        Case(
+            "pcm16_rms_current_1600",
+            lambda: pcm16_rms(frame),
+            scaled(2000),
+            200,
+            CAPTURE_BUDGET_MS,
+            "Exact deployed pure-Python RMS.",
+        ),
+        Case(
+            "json_loads_partial",
+            lambda: json.loads(partial_payload),
+            scaled(10_000),
+            1000,
+            CAPTURE_BUDGET_MS,
+            "38-byte Vosk partial JSON decoding.",
+        ),
+        Case(
+            "parse_recognition_final_three_words",
+            lambda: parse_recognition(final_payload, "text"),
+            scaled(2000),
+            200,
+            CAPTURE_BUDGET_MS,
+            "Exact deployed confidence/timing path.",
+        ),
         rag_case(repo),
-        Case("scalar_fir_128tap_20ms", scalar_fir.process, scaled(100), 3, AEC_BUDGET_MS, "40,960 tap visits; FIR only."),
-        Case("scalar_streaming_nlms_128tap_20ms", scalar_nlms.process, scaled(100), 3, AEC_BUDGET_MS, "81,920 visits including weight update."),
-        Case("numpy_block_nlms_128tap_20ms", block_nlms.process, scaled(500), 20, AEC_BUDGET_MS, "One accumulated update per block; throughput prototype."),
+        Case(
+            "scalar_fir_128tap_20ms",
+            scalar_fir.process,
+            scaled(100),
+            3,
+            AEC_BUDGET_MS,
+            "40,960 tap visits; FIR only.",
+        ),
+        Case(
+            "scalar_streaming_nlms_128tap_20ms",
+            scalar_nlms.process,
+            scaled(100),
+            3,
+            AEC_BUDGET_MS,
+            "81,920 visits including weight update.",
+        ),
+        Case(
+            "numpy_block_nlms_128tap_20ms",
+            block_nlms.process,
+            scaled(500),
+            20,
+            AEC_BUDGET_MS,
+            "One accumulated update per block; throughput prototype.",
+        ),
     ]
     add_webrtc_cases(cases)
     context = (
@@ -568,7 +600,12 @@ def main() -> None:
         else nullcontext()
     )
     with context:
-        emit({"type": "threadpools_effective", "value": threadpool_info() if threadpool_info else None})
+        emit(
+            {
+                "type": "threadpools_effective",
+                "value": threadpool_info() if threadpool_info else None,
+            }
+        )
         for case in cases:
             run_case(case)
     emit({"type": "finished", "thermal_end": thermal_snapshot()})

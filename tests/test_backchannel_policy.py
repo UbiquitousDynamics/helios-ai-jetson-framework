@@ -23,30 +23,35 @@ from test_hybrid_api_client import FakeOllamaClient, FakeRemoteProvider, hybrid_
 def runtime(language="en", *, api=None, tts=None, results=()):
     return VoiceAssistant(
         settings=config.Settings(language=language, backchannel_delay_seconds=0.01),
-        api_client=api or FakeAPI(), tts=tts or FakeTTS(),
-        speech_recognizer=FakeRecognizer(list(results)), sound_player=FakeSoundPlayer(),
+        api_client=api or FakeAPI(),
+        tts=tts or FakeTTS(),
+        speech_recognizer=FakeRecognizer(list(results)),
+        sound_player=FakeSoundPlayer(),
         sound_executor=ImmediateExecutor(),
     )
 
 
-@pytest.mark.parametrize(("language", "prompt", "suppressed"), [
-    ("en", "Take dictation: synthetic words", True),
-    ("en", "I will dictate", True),
-    ("en", "Transcribe this exactly", True),
-    ("en", "I confirm the deletion", True),
-    ("en", "Yes, proceed", True),
-    ("en", "Go ahead", True),
-    ("en", "What is dictation?", False),
-    ("en", "Confirmatory research methods", False),
-    ("it", "Ti detto un messaggio", True),
-    ("it", "Sto dettando", True),
-    ("it", "Trascrivi queste parole", True),
-    ("it", "Confermo la cancellazione", True),
-    ("it", "Sì, procedi", True),
-    ("it", "Fallo", True),
-    ("it", "Come funziona la dettatura?", False),
-    ("it", "Confermare significa cosa?", False),
-])
+@pytest.mark.parametrize(
+    ("language", "prompt", "suppressed"),
+    [
+        ("en", "Take dictation: synthetic words", True),
+        ("en", "I will dictate", True),
+        ("en", "Transcribe this exactly", True),
+        ("en", "I confirm the deletion", True),
+        ("en", "Yes, proceed", True),
+        ("en", "Go ahead", True),
+        ("en", "What is dictation?", False),
+        ("en", "Confirmatory research methods", False),
+        ("it", "Ti detto un messaggio", True),
+        ("it", "Sto dettando", True),
+        ("it", "Trascrivi queste parole", True),
+        ("it", "Confermo la cancellazione", True),
+        ("it", "Sì, procedi", True),
+        ("it", "Fallo", True),
+        ("it", "Come funziona la dettatura?", False),
+        ("it", "Confermare significa cosa?", False),
+    ],
+)
 def test_bilingual_suppression_is_wired_before_model_dispatch(language, prompt, suppressed):
     class API(FakeAPI):
         callback = None
@@ -73,7 +78,9 @@ def test_bilingual_suppression_is_wired_before_model_dispatch(language, prompt, 
 
 
 @pytest.mark.parametrize("language", ["it", "en"])
-@pytest.mark.parametrize("mode", [BackchannelMode.DICTATION, BackchannelMode.SENSITIVE_CONFIRMATION])
+@pytest.mark.parametrize(
+    "mode", [BackchannelMode.DICTATION, BackchannelMode.SENSITIVE_CONFIRMATION]
+)
 def test_explicit_flow_mode_suppresses_cues_without_changing_request_or_floor(language, mode):
     class API(FakeAPI):
         def talk(self, message, context=None, before_first_speech=None):
@@ -95,7 +102,9 @@ def test_explicit_flow_mode_suppresses_cues_without_changing_request_or_floor(la
 
 @pytest.mark.parametrize("language", ["it", "en"])
 def test_short_user_pause_never_schedules_a_backchannel_or_model_turn(language):
-    assistant = runtime(language, results=[RecognitionResult("unfinished synthetic words", is_final=False), None])
+    assistant = runtime(
+        language, results=[RecognitionResult("unfinished synthetic words", is_final=False), None]
+    )
     try:
         assert not assistant.run_once()
         assert not assistant.run_once()
@@ -105,7 +114,9 @@ def test_short_user_pause_never_schedules_a_backchannel_or_model_turn(language):
         assistant.close()
 
 
-@pytest.mark.parametrize("event", ["partial", "candidate", "dictation", "confirmation", "stop", "interrupt"])
+@pytest.mark.parametrize(
+    "event", ["partial", "candidate", "dictation", "confirmation", "stop", "interrupt"]
+)
 def test_active_cue_stops_when_user_or_local_control_requires_silence(event):
     tts = InterruptiblePreloadedTTS()
     assistant = runtime(tts=tts)
@@ -118,15 +129,22 @@ def test_active_cue_stops_when_user_or_local_control_requires_silence(event):
         elif event == "candidate":
             assistant.realtime.candidate()
         elif event in {"dictation", "confirmation"}:
-            assistant.set_backchannel_mode(BackchannelMode.DICTATION if event == "dictation"
-                                          else BackchannelMode.SENSITIVE_CONFIRMATION)
+            assistant.set_backchannel_mode(
+                BackchannelMode.DICTATION
+                if event == "dictation"
+                else BackchannelMode.SENSITIVE_CONFIRMATION
+            )
         elif event == "stop":
             assistant.process_command("stop")
         else:
             assistant._interrupt_current_response()
         cue.future.result(timeout=2)
         assert not cue.is_playing
-        assert [kind for kind, _phrase in tts.events] == ["backchannel_started", "interrupt", "backchannel_stopped"]
+        assert [kind for kind, _phrase in tts.events] == [
+            "backchannel_started",
+            "interrupt",
+            "backchannel_stopped",
+        ]
         assistant.set_backchannel_mode(BackchannelMode.NORMAL)
         assert len(tts.events) == 3  # Suppression cannot resurrect the same cue.
     finally:
@@ -138,8 +156,13 @@ def test_request_cancellation_stops_cue_even_while_model_has_not_unwound():
     tts = InterruptiblePreloadedTTS()
     cancellation = CancellationController()
     with ThreadPoolExecutor(max_workers=1) as pool:
-        cue = BackchannelSession(tts=tts, phrase="One moment.", delay_seconds=0.01,
-                                 executor=pool, cancellation=cancellation)
+        cue = BackchannelSession(
+            tts=tts,
+            phrase="One moment.",
+            delay_seconds=0.01,
+            executor=pool,
+            cancellation=cancellation,
+        )
         tts.started.get(timeout=2)
         cancellation.cancel()
         cue.future.result(timeout=2)
@@ -162,14 +185,21 @@ def test_queued_cue_checks_admission_before_playback(reason):
         return reason != "disallowed"
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        cue = BackchannelSession(tts=TTS(), phrase="One moment.", delay_seconds=0.01,
-                                 executor=pool, allowed=allowed, cancellation=cancellation)
+        cue = BackchannelSession(
+            tts=TTS(),
+            phrase="One moment.",
+            delay_seconds=0.01,
+            executor=pool,
+            allowed=allowed,
+            cancellation=cancellation,
+        )
         cue.future.result(timeout=2)
     assert not cue.triggered and not cue.played
 
 
 def test_uncooperative_cue_blocks_real_speech_with_a_bounded_failure(monkeypatch):
     import audio.backchannel as backchannel
+
     monkeypatch.setattr(backchannel, "BACKCHANNEL_STOP_TIMEOUT_SECONDS", 0.02)
     started, release = threading.Event(), threading.Event()
 
@@ -180,18 +210,24 @@ def test_uncooperative_cue_blocks_real_speech_with_a_bounded_failure(monkeypatch
             return True
 
     tts = TTS()
-    api = APIClient(client=FakeClient([chunk("Synthetic answer.", done=True)]), tts=tts, retry_wait=0)
+    api = APIClient(
+        client=FakeClient([chunk("Synthetic answer.", done=True)]), tts=tts, retry_wait=0
+    )
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
-            cue = BackchannelSession(tts=tts, phrase="One moment.", delay_seconds=0.01, executor=pool)
+            cue = BackchannelSession(
+                tts=tts, phrase="One moment.", delay_seconds=0.01, executor=pool
+            )
             try:
                 assert started.wait(timeout=2)
                 with pytest.raises(TimeoutError, match="backchannel playback did not stop"):
                     api.talk("synthetic request", before_first_speech=cue.before_first_speech)
                 assert tts.spoken == []
                 next_turn = api.conversation.begin_turn("next synthetic request")
-                assert [(message.role.value, message.content) for message in api.conversation.history_before(next_turn)] == [
-                    ("user", "synthetic request")]
+                assert [
+                    (message.role.value, message.content)
+                    for message in api.conversation.history_before(next_turn)
+                ] == [("user", "synthetic request")]
                 api.conversation.fail_turn(next_turn, interrupted=True)
             finally:
                 release.set()
@@ -203,12 +239,15 @@ def test_uncooperative_cue_blocks_real_speech_with_a_bounded_failure(monkeypatch
 @pytest.mark.parametrize("value", [0, -1, True, "1", float("nan"), float("inf")])
 def test_invalid_delays_never_submit_work(value):
     with pytest.raises(ValueError):
-        BackchannelSession(tts=object(), phrase="One moment.", delay_seconds=value, executor=object())
+        BackchannelSession(
+            tts=object(), phrase="One moment.", delay_seconds=value, executor=object()
+        )
 
 
 def test_assistant_stops_on_cue_timeout_and_owned_worker_cleans_up(monkeypatch):
     import assistant as assistant_module
     import audio.backchannel as backchannel
+
     monkeypatch.setattr(assistant_module, "BACKCHANNEL_STOP_TIMEOUT_SECONDS", 0.02)
     monkeypatch.setattr(backchannel, "BACKCHANNEL_STOP_TIMEOUT_SECONDS", 0.02)
     entered, release = threading.Event(), threading.Event()
@@ -261,12 +300,16 @@ def test_spoken_style_is_static_per_request_and_never_truncates_or_enters_histor
     answer = " ".join(["Synthetic detail."] * 30)
     source = FakeClient([chunk(answer, done=True)])
     tts = FakeTTS()
-    api = APIClient(client=source, tts=tts, retry_wait=0, language=language, spoken_response_style=True)
+    api = APIClient(
+        client=source, tts=tts, retry_wait=0, language=language, spoken_response_style=True
+    )
     try:
         instruction = config.spoken_response_instruction(language)
         assert api.talk("first request") == answer
         assert source.calls[0]["messages"] == [
-            {"role": "system", "content": instruction}, {"role": "user", "content": "first request"}]
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": "first request"},
+        ]
         assert " ".join(tts.spoken) == answer
         api.think("silent request", tts=False)
         assert all(message["role"] != "system" for message in source.calls[-1]["messages"])
@@ -281,13 +324,25 @@ def test_spoken_style_is_static_per_request_and_never_truncates_or_enters_histor
 
 @pytest.mark.parametrize("language", ["it", "en"])
 def test_spoken_style_survives_fallback_with_static_provenance(tmp_path, language):
-    error = ProviderError(ErrorCategory.PROVIDER_UNAVAILABLE, "synthetic unavailable",
-                          provider="remote", model="remote-model", transmitted=False)
+    error = ProviderError(
+        ErrorCategory.PROVIDER_UNAVAILABLE,
+        "synthetic unavailable",
+        provider="remote",
+        model="remote-model",
+        transmitted=False,
+    )
     remote = FakeRemoteProvider([error])
     local = FakeOllamaClient()
-    api = APIClient(client=local, tts=FakeTTS(), llm_settings=hybrid_settings(tmp_path),
-                    providers={"remote": remote}, connectivity=Connectivity.ONLINE,
-                    language=language, spoken_response_style=True, retry_wait=0)
+    api = APIClient(
+        client=local,
+        tts=FakeTTS(),
+        llm_settings=hybrid_settings(tmp_path),
+        providers={"remote": remote},
+        connectivity=Connectivity.ONLINE,
+        language=language,
+        spoken_response_style=True,
+        retry_wait=0,
+    )
     try:
         assert api.talk("synthetic request") == "Local."
         instruction = config.spoken_response_instruction(language)
@@ -300,8 +355,12 @@ def test_spoken_style_survives_fallback_with_static_provenance(tmp_path, languag
 
 
 def test_default_assistant_enables_spoken_style_and_modes_are_typed():
-    assistant = VoiceAssistant(settings=config.Settings(language="en"), tts=FakeTTS(),
-                               speech_recognizer=FakeRecognizer([]), sound_player=FakeSoundPlayer())
+    assistant = VoiceAssistant(
+        settings=config.Settings(language="en"),
+        tts=FakeTTS(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_player=FakeSoundPlayer(),
+    )
     try:
         assert assistant.api_client._spoken_response_style is True
         with pytest.raises(TypeError):

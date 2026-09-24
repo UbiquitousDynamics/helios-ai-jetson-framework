@@ -895,7 +895,9 @@ def _kpi_from_env(
             "HELIOS_KPI_RAW_RETENTION_DAYS",
         ),
         background_retention_days=_int_from_env(
-            env.get("HELIOS_KPI_BACKGROUND_RETENTION_DAYS", str(defaults.background_retention_days)),
+            env.get(
+                "HELIOS_KPI_BACKGROUND_RETENTION_DAYS", str(defaults.background_retention_days)
+            ),
             "HELIOS_KPI_BACKGROUND_RETENTION_DAYS",
         ),
         rollup_retention_days=_int_from_env(
@@ -1774,16 +1776,21 @@ class Settings:
             )
         if self.listen_timeout <= 0:
             raise ConfigurationError("listen_timeout must be greater than zero")
-        if (isinstance(self.activation_timeout_seconds, bool)
-                or not isinstance(self.activation_timeout_seconds, (int, float))
-                or not math.isfinite(self.activation_timeout_seconds)
-                or self.activation_timeout_seconds <= 0):
+        if (
+            isinstance(self.activation_timeout_seconds, bool)
+            or not isinstance(self.activation_timeout_seconds, (int, float))
+            or not math.isfinite(self.activation_timeout_seconds)
+            or self.activation_timeout_seconds <= 0
+        ):
             raise ConfigurationError("activation_timeout_seconds must be finite and positive")
         for name, value in (
             ("barge_in_event_energy", self.barge_in_event_energy),
             ("barge_in_expected_echo_energy", self.barge_in_expected_echo_energy),
             ("barge_in_minimum_interrupt_energy", self.barge_in_minimum_interrupt_energy),
-            ("barge_in_minimum_recognition_confidence", self.barge_in_minimum_recognition_confidence),
+            (
+                "barge_in_minimum_recognition_confidence",
+                self.barge_in_minimum_recognition_confidence,
+            ),
         ):
             if (
                 isinstance(value, bool)
@@ -1794,18 +1801,40 @@ class Settings:
                 raise ConfigurationError(f"{name} must be finite and between zero and one")
         for name, value, minimum, exclusive in (
             ("barge_in_minimum_active_seconds", self.barge_in_minimum_active_seconds, 0, False),
-            ("barge_in_candidate_inactivity_seconds", self.barge_in_candidate_inactivity_seconds, 0, True),
-            ("barge_in_candidate_maximum_seconds", self.barge_in_candidate_maximum_seconds, 0, True),
+            (
+                "barge_in_candidate_inactivity_seconds",
+                self.barge_in_candidate_inactivity_seconds,
+                0,
+                True,
+            ),
+            (
+                "barge_in_candidate_maximum_seconds",
+                self.barge_in_candidate_maximum_seconds,
+                0,
+                True,
+            ),
             ("barge_in_echo_energy_ratio", self.barge_in_echo_energy_ratio, 1, False),
             ("barge_in_startup_window_seconds", self.barge_in_startup_window_seconds, 0, False),
-            ("barge_in_startup_energy_multiplier", self.barge_in_startup_energy_multiplier, 1, False),
+            (
+                "barge_in_startup_energy_multiplier",
+                self.barge_in_startup_energy_multiplier,
+                1,
+                False,
+            ),
         ):
-            if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or value < minimum or (exclusive and value == minimum)):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < minimum
+                or (exclusive and value == minimum)
+            ):
                 raise ConfigurationError(f"invalid {name}")
-        if (isinstance(self.barge_in_minimum_partial_words, bool)
-                or not isinstance(self.barge_in_minimum_partial_words, int)
-                or self.barge_in_minimum_partial_words < 1):
+        if (
+            isinstance(self.barge_in_minimum_partial_words, bool)
+            or not isinstance(self.barge_in_minimum_partial_words, int)
+            or self.barge_in_minimum_partial_words < 1
+        ):
             raise ConfigurationError("barge_in_minimum_partial_words must be a positive integer")
         if self.barge_in_candidate_inactivity_seconds > self.barge_in_candidate_maximum_seconds:
             raise ConfigurationError("barge-in inactivity cannot exceed maximum candidate duration")
@@ -1821,16 +1850,22 @@ class Settings:
         if not isinstance(self.audio_input_strict, bool):
             raise ConfigurationError("audio_input_strict must be a boolean")
         if self.audio_input_channel_mode not in {"mono", "average", "sum", "stronger"}:
-            raise ConfigurationError("audio_input_channel_mode must be mono, average, sum, or stronger")
-        if (isinstance(self.audio_capture_level_min_rms, bool)
-                or not isinstance(self.audio_capture_level_min_rms, (int, float))
-                or not math.isfinite(self.audio_capture_level_min_rms)
-                or self.audio_capture_level_min_rms <= 0):
+            raise ConfigurationError(
+                "audio_input_channel_mode must be mono, average, sum, or stronger"
+            )
+        if (
+            isinstance(self.audio_capture_level_min_rms, bool)
+            or not isinstance(self.audio_capture_level_min_rms, (int, float))
+            or not math.isfinite(self.audio_capture_level_min_rms)
+            or self.audio_capture_level_min_rms <= 0
+        ):
             raise ConfigurationError("audio_capture_level_min_rms must be positive and finite")
-        if (isinstance(self.audio_capture_stall_seconds, bool)
-                or not isinstance(self.audio_capture_stall_seconds, (int, float))
-                or not math.isfinite(self.audio_capture_stall_seconds)
-                or self.audio_capture_stall_seconds <= 0):
+        if (
+            isinstance(self.audio_capture_stall_seconds, bool)
+            or not isinstance(self.audio_capture_stall_seconds, (int, float))
+            or not math.isfinite(self.audio_capture_stall_seconds)
+            or self.audio_capture_stall_seconds <= 0
+        ):
             raise ConfigurationError("audio_capture_stall_seconds must be positive")
 
         for name, value in (
@@ -1926,17 +1961,26 @@ class Settings:
 
         endpoint_defaults = TurnEndpointConfig()
         try:
-            endpointing = TurnEndpointConfig(**{
-                name: _float_from_env(
-                    env.get(f"HELIOS_ENDPOINT_{name.upper()}", str(getattr(endpoint_defaults, name))),
-                    f"HELIOS_ENDPOINT_{name.upper()}",
-                )
-                for name in (
-                    "short_pause_seconds", "finalization_seconds", "inactivity_seconds",
-                    "maximum_utterance_seconds", "revision_stability_seconds",
-                    "final_result_timeout_seconds", "minimum_confidence", "minimum_speech_seconds",
-                )
-            })
+            endpointing = TurnEndpointConfig(
+                **{
+                    name: _float_from_env(
+                        env.get(
+                            f"HELIOS_ENDPOINT_{name.upper()}", str(getattr(endpoint_defaults, name))
+                        ),
+                        f"HELIOS_ENDPOINT_{name.upper()}",
+                    )
+                    for name in (
+                        "short_pause_seconds",
+                        "finalization_seconds",
+                        "inactivity_seconds",
+                        "maximum_utterance_seconds",
+                        "revision_stability_seconds",
+                        "final_result_timeout_seconds",
+                        "minimum_confidence",
+                        "minimum_speech_seconds",
+                    )
+                }
+            )
         except ValueError:
             raise ConfigurationError("invalid turn endpoint configuration") from None
 
@@ -1964,7 +2008,9 @@ class Settings:
                 "HELIOS_BARGE_IN_MINIMUM_INTERRUPT_ENERGY",
             ),
             **{
-                name: _float_from_env(env.get("HELIOS_" + name.upper(), str(default)), "HELIOS_" + name.upper())
+                name: _float_from_env(
+                    env.get("HELIOS_" + name.upper(), str(default)), "HELIOS_" + name.upper()
+                )
                 for name, default in (
                     ("barge_in_minimum_active_seconds", 0.12),
                     ("barge_in_minimum_recognition_confidence", 0.5),
@@ -1993,7 +2039,9 @@ class Settings:
                 env.get("HELIOS_AUDIO_INPUT_STRICT", "false"),
                 "HELIOS_AUDIO_INPUT_STRICT",
             ),
-            audio_input_channel_mode=env.get("HELIOS_AUDIO_INPUT_CHANNEL_MODE", "mono").strip().lower(),
+            audio_input_channel_mode=env.get("HELIOS_AUDIO_INPUT_CHANNEL_MODE", "mono")
+            .strip()
+            .lower(),
             audio_capture_level_min_rms=_float_from_env(
                 env.get("HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS", "0.001"),
                 "HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS",

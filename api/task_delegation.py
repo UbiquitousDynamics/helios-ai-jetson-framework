@@ -14,8 +14,14 @@ from api.task_manager import TaskManager, TaskSnapshot, TaskState, TERMINAL
 class TaskDelegator:
     """Run injected work off the conversation thread; retain only state snapshots."""
 
-    def __init__(self, manager: TaskManager | None = None, *, workers: int = 2,
-                 metrics: object | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        manager: TaskManager | None = None,
+        *,
+        workers: int = 2,
+        metrics: object | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
             raise ValueError("workers must be a positive integer")
         self.manager = manager or TaskManager()
@@ -26,8 +32,9 @@ class TaskDelegator:
         self._metrics, self._clock = metrics, clock
         self._closed = False
 
-    def delegate(self, work: Callable, *, parent_id: str | None = None,
-                 requires_confirmation: bool = False) -> TaskSnapshot:
+    def delegate(
+        self, work: Callable, *, parent_id: str | None = None, requires_confirmation: bool = False
+    ) -> TaskSnapshot:
         if not callable(work):
             raise TypeError("work must be callable")
         with self._lock:
@@ -37,6 +44,7 @@ class TaskDelegator:
             self._started[task.task_id] = self._clock()
             self._prune_futures()
             token = self.manager.token(task.task_id)
+
             def run() -> None:
                 try:
                     self.manager.transition(task.task_id, TaskState.EXECUTING)
@@ -47,6 +55,7 @@ class TaskDelegator:
                     self._finish(task.task_id, success)
                 except Exception:
                     self._finish(task.task_id, False)
+
             try:
                 self._futures[task.task_id] = self._executor.submit(run)
             except RuntimeError:
@@ -67,11 +76,13 @@ class TaskDelegator:
                 return result
             executing = self.manager.transition(task_id, TaskState.EXECUTING)
             token = self.manager.token(task_id)
+
             def run() -> None:
                 try:
                     self._finish(task_id, bool(work(token)))
                 except Exception:
                     self._finish(task_id, False)
+
             self._futures[task_id] = self._executor.submit(run)
             return executing
 
@@ -80,16 +91,21 @@ class TaskDelegator:
             current = self.manager.get(task_id)
             if current is not None and current.state is TaskState.EXECUTING:
                 result = self.manager.transition(
-                    task_id, TaskState.COMPLETED if success else TaskState.FAILED,
+                    task_id,
+                    TaskState.COMPLETED if success else TaskState.FAILED,
                     confirmed=success,
                 )
                 self._record_terminal(result)
 
     def _record_terminal(self, task: TaskSnapshot) -> None:
         started = self._started.pop(task.task_id, None)
-        record_safely(self._metrics, "delegated_task_finished", outcome=task.state.value,
-                      success=task.state is TaskState.COMPLETED,
-                      latency_ms=max(0.0, (self._clock() - started) * 1000) if started is not None else None)
+        record_safely(
+            self._metrics,
+            "delegated_task_finished",
+            outcome=task.state.value,
+            success=task.state is TaskState.COMPLETED,
+            latency_ms=max(0.0, (self._clock() - started) * 1000) if started is not None else None,
+        )
 
     def _prune_futures(self) -> None:
         for task_id, future in tuple(self._futures.items()):

@@ -127,9 +127,7 @@ def test_declared_contract_covers_each_reachable_context_and_event() -> None:
     assert SPEC["test_task"] == "01"
     assert len(SPEC["event_kinds"]) == len(set(SPEC["event_kinds"])) == 19
     assert set(SPEC["event_kinds"]) == {kind.value for kind in E}
-    assert set(context["state"] for context in CONTEXTS.values()) == {
-        state.value for state in S
-    }
+    assert set(context["state"] for context in CONTEXTS.values()) == {state.value for state in S}
     assert set(MATRIX) == set(CONTEXTS)
     assert len(CONTEXTS) == 12
     assert len(CASES) == 228 and len(LEGAL_CASES) == 136 and len(ILLEGAL_CASES) == 92
@@ -141,7 +139,10 @@ def test_declared_contract_covers_each_reachable_context_and_event() -> None:
     assert len({_expected_metadata(context_id) for context_id in CONTEXTS}) == 12
     for context_id, context in CONTEXTS.items():
         assert set(context) == {
-            "state", "candidate_return_state", "event_prefix", "expected_revision"
+            "state",
+            "candidate_return_state",
+            "event_prefix",
+            "expected_revision",
         }
         assert set(MATRIX[context_id]) == set(SPEC["event_kinds"])
         assert all(target is None or target in CONTEXTS for target in MATRIX[context_id].values())
@@ -184,10 +185,20 @@ def test_each_context_recovers_through_explicit_session_control(
 ) -> None:
     floor = _at(source)
     for kind in (
-        terminal, "generation_completed", "playback_completed", "response_finished",
-        "generation_cancelled", "playback_failed", restart, "provisional_speech",
-        "final_speech", "generation_started", "playback_started", "generation_completed",
-        "playback_completed", "response_finished",
+        terminal,
+        "generation_completed",
+        "playback_completed",
+        "response_finished",
+        "generation_cancelled",
+        "playback_failed",
+        restart,
+        "provisional_speech",
+        "final_speech",
+        "generation_started",
+        "playback_started",
+        "generation_completed",
+        "playback_completed",
+        "response_finished",
     ):
         source = _assert_transition(floor, source, kind)
     assert source == "armed"
@@ -199,8 +210,14 @@ def test_candidate_rejection_restores_latest_underlying_floor(source: str, finis
     floor = _at(source)
     source = _assert_transition(floor, source, "interruption_candidate")
     for kind in (
-        "interruption_candidate", "provisional_speech", "silence", "generation_completed",
-        "playback_started", "playback_completed", "playback_started", "playback_completed",
+        "interruption_candidate",
+        "provisional_speech",
+        "silence",
+        "generation_completed",
+        "playback_started",
+        "playback_completed",
+        "playback_started",
+        "playback_completed",
     ):
         source = _assert_transition(floor, source, kind)
     if finish:
@@ -221,9 +238,16 @@ def test_confirmed_candidate_accepts_new_speech_after_late_terminals(source: str
     assert MATRIX[source]["final_speech"] is None
     _assert_transition(floor, source, "final_speech")
     for kind in (
-        "interruption_confirmed", "interruption_confirmed", "generation_cancelled",
-        "playback_cancelled", "generation_failed", "playback_failed", "response_finished",
-        "provisional_speech", "final_speech", "generation_started",
+        "interruption_confirmed",
+        "interruption_confirmed",
+        "generation_cancelled",
+        "playback_cancelled",
+        "generation_failed",
+        "playback_failed",
+        "response_finished",
+        "provisional_speech",
+        "final_speech",
+        "generation_started",
     ):
         source = _assert_transition(floor, source, kind)
     assert source == "thinking"
@@ -231,8 +255,13 @@ def test_confirmed_candidate_accepts_new_speech_after_late_terminals(source: str
 
 @pytest.mark.parametrize(
     "source",
-    ["thinking", "assistant_speaking", "candidate_thinking",
-     "candidate_assistant_speaking", "candidate_armed"],
+    [
+        "thinking",
+        "assistant_speaking",
+        "candidate_thinking",
+        "candidate_assistant_speaking",
+        "candidate_armed",
+    ],
 )
 @pytest.mark.parametrize(
     "kind", [E.GENERATION_CANCELLED, E.GENERATION_FAILED, E.PLAYBACK_CANCELLED, E.PLAYBACK_FAILED]
@@ -299,8 +328,10 @@ def test_concurrent_readers_observe_each_whole_candidate_snapshot() -> None:
         (E.RESUME, S.ARMED, 14, None),
         (E.END_SESSION, S.IDLE, 15, None),
     ]
-    expected = [ConversationFloorSnapshot(state, revision, underlying)
-                for _, state, revision, underlying in stages]
+    expected = [
+        ConversationFloorSnapshot(state, revision, underlying)
+        for _, state, revision, underlying in stages
+    ]
 
     def write() -> list[ConversationFloorSnapshot]:
         snapshots = []
@@ -322,8 +353,9 @@ def test_concurrent_readers_observe_each_whole_candidate_snapshot() -> None:
 
     writer, *readers = _results([_worker(write), *[_worker(read) for _ in range(3)]])
     assert writer == expected
-    assert all(all(actual is committed for actual, committed in zip(reader, writer))
-               for reader in readers)
+    assert all(
+        all(actual is committed for actual, committed in zip(reader, writer)) for reader in readers
+    )
     assert writer[9] is writer[10] and writer[11] is writer[12]
     assert floor.snapshot() is writer[-1]
 
@@ -385,7 +417,9 @@ def test_snapshot_publication_and_failure_release_waiting_reader(
     _assert_transition(floor, "candidate_armed", "interruption_rejected")
 
 
-def test_reused_events_do_not_share_floor_state_or_retain_correlation_payloads(caplog, capsys) -> None:
+def test_reused_events_do_not_share_floor_state_or_retain_correlation_payloads(
+    caplog, capsys
+) -> None:
     first, second = ConversationFloor(), ConversationFloor()
     shared = ConversationEvent(E.ACTIVATE)
     first_armed = first.apply(shared)
@@ -400,7 +434,9 @@ def test_reused_events_do_not_share_floor_state_or_retain_correlation_payloads(c
     # speech payload, and this check does not claim runtime stale-turn rejection.
     assert [field.name for field in fields(ConversationEvent)] == ["kind"]
     assert [field.name for field in fields(ConversationFloorSnapshot)] == [
-        "state", "revision", "candidate_return_state"
+        "state",
+        "revision",
+        "candidate_return_state",
     ]
     assert asdict(shared) == {"kind": E.ACTIVATE}
     assert not hasattr(shared, "__dict__")
@@ -431,7 +467,9 @@ def test_published_snapshots_remain_immutable_after_session_end(source: str) -> 
 
 
 @pytest.mark.parametrize("bad", [None, True, 1, "activate", "synthetic-private-payload", object()])
-def test_untyped_signals_fail_without_logging_or_echoing_payload(bad: object, caplog, capsys) -> None:
+def test_untyped_signals_fail_without_logging_or_echoing_payload(
+    bad: object, caplog, capsys
+) -> None:
     floor = _at("thinking")
     before = floor.snapshot()
     with pytest.raises(TypeError, match="^kind must be a ConversationEventKind$"):

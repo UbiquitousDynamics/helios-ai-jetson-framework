@@ -80,7 +80,10 @@ class BargeInDetector:
             or minimum_partial_words < 1
         ):
             raise ValueError("minimum_partial_words must be a positive integer")
-        if not self._finite_number(recognition_event_energy) or not 0 <= recognition_event_energy <= 1:
+        if (
+            not self._finite_number(recognition_event_energy)
+            or not 0 <= recognition_event_energy <= 1
+        ):
             raise ValueError("recognition_event_energy must be finite and between 0 and 1")
         if (
             not self._finite_number(minimum_recognition_confidence)
@@ -202,8 +205,11 @@ class BargeInDetector:
         raw_segment_id = getattr(result, "segment_id", None)
         segment_id = raw_segment_id if isinstance(raw_segment_id, int) else None
         capture_id = getattr(result, "capture_id", None)
-        if (capture_id is not None and self._recognition_capture_id is not None
-                and capture_id != self._recognition_capture_id):
+        if (
+            capture_id is not None
+            and self._recognition_capture_id is not None
+            and capture_id != self._recognition_capture_id
+        ):
             self._clear_recognition_candidate()
         same_pending_segment = self._recognition_partial_count > 0 and (
             segment_id is None
@@ -324,7 +330,9 @@ class BargeInDetector:
 
     @staticmethod
     def _finite_number(value: object) -> bool:
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
 
     @staticmethod
     def _optional_probability(value: object, name: str) -> float | None:

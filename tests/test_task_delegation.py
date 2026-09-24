@@ -12,10 +12,12 @@ from test_assistant import FakeAPI, FakeRecognizer, FakeSoundPlayer, FakeTTS, Im
 def test_conversation_can_continue_while_work_runs_and_late_result_is_rejected():
     started, release = Event(), Event()
     delegator = TaskDelegator()
+
     def work(token):
         started.set()
         release.wait(2)
         return True
+
     try:
         task = delegator.delegate(work)
         assert started.wait(2)
@@ -54,7 +56,10 @@ def test_denial_failure_and_cancel():
     try:
         denied = delegator.delegate(lambda token: True, requires_confirmation=True)
         delegator._futures[denied.task_id].result(timeout=2)
-        assert delegator.confirm(denied.task_id, False, lambda token: True).state is TaskState.CANCELLED
+        assert (
+            delegator.confirm(denied.task_id, False, lambda token: True).state
+            is TaskState.CANCELLED
+        )
         failed = delegator.delegate(lambda token: False)
         delegator._futures[failed.task_id].result(timeout=2)
         assert delegator.manager.get(failed.task_id).state is TaskState.FAILED
@@ -67,15 +72,20 @@ def test_assistant_local_cancel_targets_task_only():
     delegator = TaskDelegator()
     assistant = VoiceAssistant(
         settings=config.Settings(language="en", barge_in_enabled=False),
-        tts=FakeTTS(), api_client=FakeAPI(), speech_recognizer=FakeRecognizer([]),
-        sound_player=FakeSoundPlayer(), sound_executor=ImmediateExecutor(),
+        tts=FakeTTS(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
         task_delegator=delegator,
     )
     try:
+
         def work(token):
             started.set()
             release.wait(2)
             return True
+
         task = assistant.delegate_task(work)
         assert started.wait(2)
         assistant.process_command("cancel task")
@@ -94,8 +104,11 @@ def test_assistant_steering_keeps_causal_link_and_history_untouched():
     delegator = TaskDelegator()
     assistant = VoiceAssistant(
         settings=config.Settings(language="en", barge_in_enabled=False),
-        tts=FakeTTS(), api_client=FakeAPI(), speech_recognizer=FakeRecognizer([]),
-        sound_player=FakeSoundPlayer(), sound_executor=ImmediateExecutor(),
+        tts=FakeTTS(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
         task_delegator=delegator,
     )
     try:

@@ -27,9 +27,12 @@ class Clock:
 def setup_detector():
     clock = Clock()
     policy = TurnEndpointConfig(
-        short_pause_seconds=0.5, finalization_seconds=2,
-        inactivity_seconds=5, maximum_utterance_seconds=8,
-        revision_stability_seconds=0.5, final_result_timeout_seconds=1,
+        short_pause_seconds=0.5,
+        finalization_seconds=2,
+        inactivity_seconds=5,
+        maximum_utterance_seconds=8,
+        revision_stability_seconds=0.5,
+        final_result_timeout_seconds=1,
     )
     return TurnEndpointDetector(policy, clock=clock), clock
 
@@ -91,9 +94,11 @@ def test_noisy_silence_does_not_start_utterance_or_postpone_inactivity(setup_det
     detector, clock = setup_detector
     for revision in range(1, 6):
         clock.now = revision - 1
-        decision = detector.update(Observation(
-            has_text=True, confidence=0.1, speech_duration_seconds=0.01, revision=revision
-        ))
+        decision = detector.update(
+            Observation(
+                has_text=True, confidence=0.1, speech_duration_seconds=0.01, revision=revision
+            )
+        )
         assert decision.action is A.CONTINUE
         assert detector.snapshot().state is S.ARMED
     clock.now = 4.999
@@ -117,7 +122,9 @@ def test_maximum_duration_bounds_continuous_activity(setup_detector, has_text):
     detector, clock = setup_detector
     for moment in (0, 1, 3, 5, 7.999):
         clock.now = moment
-        assert detector.update(Observation(speech_active=True, has_text=has_text)).action is A.CONTINUE
+        assert (
+            detector.update(Observation(speech_active=True, has_text=has_text)).action is A.CONTINUE
+        )
     clock.now = 8
     decision = detector.update(Observation(speech_active=True, has_text=has_text))
     assert (decision.action, decision.reason) == (A.REQUEST_FINAL_RESULT, "maximum_utterance")
@@ -142,7 +149,9 @@ def test_explicit_final_is_emitted_exactly_once(setup_detector, during_flush):
     assert detector.snapshot().state is S.ENDED
 
 
-@pytest.mark.parametrize("final_at,expected", [(2.999, A.FINALIZE), (3.0, A.DISCARD), (3.001, A.DISCARD)])
+@pytest.mark.parametrize(
+    "final_at,expected", [(2.999, A.FINALIZE), (3.0, A.DISCARD), (3.001, A.DISCARD)]
+)
 def test_final_result_timeout_has_exact_boundary(setup_detector, final_at, expected):
     detector, clock = setup_detector
     detector.update(speech())
@@ -164,14 +173,22 @@ def test_empty_final_and_partial_timeout_never_create_transcript_authority(setup
     assert (decision.action, decision.reason) == (A.DISCARD, "empty_final")
 
 
-@pytest.mark.parametrize("segment,revision", [(TranscriptSegment(1, 9), 9), (TranscriptSegment(2, 1), 9), (TranscriptSegment(2, 2), 1)])
+@pytest.mark.parametrize(
+    "segment,revision",
+    [(TranscriptSegment(1, 9), 9), (TranscriptSegment(2, 1), 9), (TranscriptSegment(2, 2), 1)],
+)
 def test_stale_observation_cannot_finalize_or_extend_activity(setup_detector, segment, revision):
     detector, clock = setup_detector
     detector.update(speech(segment=TranscriptSegment(2, 2), revision=2))
     clock.now = 1
-    assert detector.update(Observation(
-        speech_active=True, has_text=True, is_final=True, segment=segment, revision=revision
-    )).action is A.PAUSE
+    assert (
+        detector.update(
+            Observation(
+                speech_active=True, has_text=True, is_final=True, segment=segment, revision=revision
+            )
+        ).action
+        is A.PAUSE
+    )
     assert detector.snapshot().last_activity_at == 0
     clock.now = 2
     assert detector.update().action is A.REQUEST_FINAL_RESULT
@@ -180,8 +197,14 @@ def test_stale_observation_cannot_finalize_or_extend_activity(setup_detector, se
 def test_recognizer_adapter_keeps_metadata_but_never_text(setup_detector, caplog):
     detector, _ = setup_detector
     raw = RecognitionResult(
-        "private synthetic content", False, capture_id=2, segment_id=1, revision=3,
-        confidence=0.9, speech_duration_seconds=0.8, energy_reemit=True,
+        "private synthetic content",
+        False,
+        capture_id=2,
+        segment_id=1,
+        revision=3,
+        confidence=0.9,
+        speech_duration_seconds=0.8,
+        energy_reemit=True,
     )
     observation = Observation.from_recognition(raw, speech_active=True)
     assert observation.segment == TranscriptSegment(2, 1)
@@ -217,42 +240,59 @@ def test_bad_clock_is_rejected_without_changing_snapshot(setup_detector, value):
 @pytest.mark.parametrize("value", [True, -1, float("inf"), float("nan"), "secret-invalid-bound"])
 def test_invalid_configuration_numbers(name, value):
     with pytest.raises(ValueError) as error:
-        replace(TurnEndpointConfig(), **{name:value})
+        replace(TurnEndpointConfig(), **{name: value})
     assert "secret-invalid-bound" not in str(error.value)
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(short_pause_seconds=0), dict(short_pause_seconds=1.2),
-    dict(inactivity_seconds=1), dict(maximum_utterance_seconds=1),
-    dict(final_result_timeout_seconds=0), dict(minimum_confidence=1.01),
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(short_pause_seconds=0),
+        dict(short_pause_seconds=1.2),
+        dict(inactivity_seconds=1),
+        dict(maximum_utterance_seconds=1),
+        dict(final_result_timeout_seconds=0),
+        dict(minimum_confidence=1.01),
+    ],
+)
 def test_inconsistent_configuration_bounds(kwargs):
     with pytest.raises(ValueError):
         TurnEndpointConfig(**kwargs)
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(speech_active=1), dict(has_text="secret"), dict(is_final=1),
-    dict(energy_reemit=1), dict(segment=(1, 1)), dict(revision=True),
-    dict(revision=0), dict(confidence=1.01), dict(confidence=float("nan")),
-    dict(speech_duration_seconds=-1),
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(speech_active=1),
+        dict(has_text="secret"),
+        dict(is_final=1),
+        dict(energy_reemit=1),
+        dict(segment=(1, 1)),
+        dict(revision=True),
+        dict(revision=0),
+        dict(confidence=1.01),
+        dict(confidence=float("nan")),
+        dict(speech_duration_seconds=-1),
+    ],
+)
 def test_malformed_observations_are_rejected(kwargs):
     with pytest.raises((TypeError, ValueError)):
         Observation(**kwargs)
 
 
 def test_settings_configure_endpoint_policy_without_runtime_activation():
-    settings = config.Settings.from_env(environ={
-        "HELIOS_ENDPOINT_SHORT_PAUSE_SECONDS":"0.5",
-        "HELIOS_ENDPOINT_FINALIZATION_SECONDS":"2",
-        "HELIOS_ENDPOINT_INACTIVITY_SECONDS":"6",
-        "HELIOS_ENDPOINT_MAXIMUM_UTTERANCE_SECONDS":"15",
-        "HELIOS_ENDPOINT_REVISION_STABILITY_SECONDS":"0.75",
-        "HELIOS_ENDPOINT_FINAL_RESULT_TIMEOUT_SECONDS":"0.5",
-        "HELIOS_ENDPOINT_MINIMUM_CONFIDENCE":"0.7",
-        "HELIOS_ENDPOINT_MINIMUM_SPEECH_SECONDS":"0.1",
-    })
+    settings = config.Settings.from_env(
+        environ={
+            "HELIOS_ENDPOINT_SHORT_PAUSE_SECONDS": "0.5",
+            "HELIOS_ENDPOINT_FINALIZATION_SECONDS": "2",
+            "HELIOS_ENDPOINT_INACTIVITY_SECONDS": "6",
+            "HELIOS_ENDPOINT_MAXIMUM_UTTERANCE_SECONDS": "15",
+            "HELIOS_ENDPOINT_REVISION_STABILITY_SECONDS": "0.75",
+            "HELIOS_ENDPOINT_FINAL_RESULT_TIMEOUT_SECONDS": "0.5",
+            "HELIOS_ENDPOINT_MINIMUM_CONFIDENCE": "0.7",
+            "HELIOS_ENDPOINT_MINIMUM_SPEECH_SECONDS": "0.1",
+        }
+    )
     assert settings.endpointing == TurnEndpointConfig(0.5, 2, 6, 15, 0.75, 0.5, 0.7, 0.1)
     assert settings.listen_timeout == config.Settings().listen_timeout
 
@@ -260,7 +300,7 @@ def test_settings_configure_endpoint_policy_without_runtime_activation():
 @pytest.mark.parametrize("value", ["nan", "-1", "secret-invalid-bound"])
 def test_invalid_endpoint_environment_fails_without_printing_values(value):
     with pytest.raises(config.ConfigurationError, match="invalid turn endpoint") as error:
-        config.Settings.from_env(environ={"HELIOS_ENDPOINT_FINALIZATION_SECONDS":value})
+        config.Settings.from_env(environ={"HELIOS_ENDPOINT_FINALIZATION_SECONDS": value})
     assert value not in str(error.value)
     assert error.value.__suppress_context__
     with pytest.raises(config.ConfigurationError):

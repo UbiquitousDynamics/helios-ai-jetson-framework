@@ -76,16 +76,20 @@ def main() -> int:
     logging.getLogger(__name__).info(
         "event=helios_run_identity tree=%s commit=%s dirty=%s routing_config=%s "
         "kpi_enabled=%s kpi_store=%s log_destination=%s",
-        settings.project_root.resolve(), identity[0] if identity else "unknown",
+        settings.project_root.resolve(),
+        identity[0] if identity else "unknown",
         identity[1] if identity else "unknown",
         settings.llm.routing_file.resolve() if settings.llm.routing_file else "none-local_only",
-        settings.kpi.enabled, settings.kpi.storage_path.resolve(),
+        settings.kpi.enabled,
+        settings.kpi.storage_path.resolve(),
         settings.log_file.resolve() if settings.log_file else "stderr",
     )
     if identity is None:
         logging.getLogger(__name__).warning("event=helios_version_unknown")
-    if (os.getenv("HELIOS_LLM_REMOTE_ENABLED", "").strip().lower() in {"1", "true", "yes"}
-            and not os.getenv("HELIOS_LLM_CONFIG", "").strip()):
+    if (
+        os.getenv("HELIOS_LLM_REMOTE_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+        and not os.getenv("HELIOS_LLM_CONFIG", "").strip()
+    ):
         logging.getLogger(__name__).warning(
             "event=remote_routing_requested_without_config using=local_only"
         )

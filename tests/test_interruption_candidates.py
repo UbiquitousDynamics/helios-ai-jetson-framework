@@ -42,8 +42,13 @@ class CandidateTTS(FakeTTS):
 
 def event(text, *, final=False, segment=1, capture=1, revision=1, energy=0.2, confidence=None):
     return RecognitionResult(
-        text, is_final=final, capture_id=capture, segment_id=segment,
-        revision=revision, frame_energy=energy, confidence=confidence,
+        text,
+        is_final=final,
+        capture_id=capture,
+        segment_id=segment,
+        revision=revision,
+        frame_energy=energy,
+        confidence=confidence,
         segment_started_at=10.2,
     )
 
@@ -57,9 +62,13 @@ def run_capture(script, *, now=None, **settings):
             yield from script(tts, api, stop_event)
 
     assistant = VoiceAssistant(
-        settings=config.Settings(**settings), tts=tts, api_client=api,
-        speech_recognizer=Recognizer([]), sound_player=FakeSoundPlayer(),
-        sound_executor=ImmediateExecutor(), clock=lambda: now[0],
+        settings=config.Settings(**settings),
+        tts=tts,
+        api_client=api,
+        speech_recognizer=Recognizer([]),
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
+        clock=lambda: now[0],
     )
     try:
         result = assistant._listen_for_barge_in(response)
@@ -130,7 +139,9 @@ def test_candidate_revisions_cannot_extend_absolute_duck_deadline():
         assert not stop.is_set()
 
     result, actions, cancelled = run_capture(
-        script, now=now, barge_in_candidate_inactivity_seconds=0.5,
+        script,
+        now=now,
+        barge_in_candidate_inactivity_seconds=0.5,
         barge_in_candidate_maximum_seconds=1.0,
     )
     assert result is None and not cancelled
@@ -139,8 +150,12 @@ def test_candidate_revisions_cannot_extend_absolute_duck_deadline():
 
 def test_absolute_duck_deadline_is_checked_without_recognition_events():
     now = [0.0]
-    stop = _BargeInCaptureStop(clock=lambda: now[0], follow_up_timeout_seconds=6.5,
-                               candidate_inactivity_seconds=1, candidate_maximum_seconds=2)
+    stop = _BargeInCaptureStop(
+        clock=lambda: now[0],
+        follow_up_timeout_seconds=6.5,
+        candidate_inactivity_seconds=1,
+        candidate_maximum_seconds=2,
+    )
     stop.candidate_activity()
     now[0] = 0.9
     stop.candidate_activity()
@@ -174,7 +189,9 @@ def test_expired_segment_cannot_rearm_or_confirm_until_a_new_segment():
         yield event("A fresh user utterance", segment=2, final=True, revision=2)
 
     result, actions, cancelled = run_capture(
-        script, now=now, barge_in_candidate_inactivity_seconds=0.5,
+        script,
+        now=now,
+        barge_in_candidate_inactivity_seconds=0.5,
         barge_in_candidate_maximum_seconds=1,
     )
     assert result == "A fresh user utterance" and cancelled
@@ -198,51 +215,75 @@ def test_final_boundary_releases_echo_references_without_segment_metadata():
 
 def test_reused_segment_id_in_new_capture_cannot_confirm_old_candidate():
     detector = BargeInDetector(minimum_active_seconds=0)
-    assert not detector.process_recognition(event("Please change the topic"), elapsed_since_tts_start=1)
+    assert not detector.process_recognition(
+        event("Please change the topic"), elapsed_since_tts_start=1
+    )
     assert detector.recognition_candidate_pending
     assert not detector.process_recognition(
-        event("Please change the topic", final=True, capture=2), elapsed_since_tts_start=2,
+        event("Please change the topic", final=True, capture=2),
+        elapsed_since_tts_start=2,
     )
     assert not detector.recognition_candidate_pending and not detector.detected
 
 
-@pytest.mark.parametrize("field", [
-    "barge_in_minimum_active_seconds", "barge_in_minimum_recognition_confidence",
-    "barge_in_candidate_inactivity_seconds", "barge_in_candidate_maximum_seconds",
-    "barge_in_echo_energy_ratio", "barge_in_startup_window_seconds", "barge_in_startup_energy_multiplier",
-])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "barge_in_minimum_active_seconds",
+        "barge_in_minimum_recognition_confidence",
+        "barge_in_candidate_inactivity_seconds",
+        "barge_in_candidate_maximum_seconds",
+        "barge_in_echo_energy_ratio",
+        "barge_in_startup_window_seconds",
+        "barge_in_startup_energy_multiplier",
+    ],
+)
 @pytest.mark.parametrize("value", [True, "1", float("nan"), float("inf"), -1])
 def test_settings_reject_invalid_candidate_thresholds(field, value):
     with pytest.raises(config.ConfigurationError):
         config.Settings(**{field: value})
 
 
-@pytest.mark.parametrize("field,value", [
-    ("barge_in_minimum_partial_words", True), ("barge_in_minimum_partial_words", 1.5),
-    ("barge_in_minimum_partial_words", 0), ("barge_in_minimum_recognition_confidence", 1.1),
-    ("barge_in_echo_energy_ratio", 0.9), ("barge_in_startup_energy_multiplier", 0.9),
-    ("barge_in_candidate_inactivity_seconds", 0), ("barge_in_candidate_maximum_seconds", 0),
-    ("barge_in_candidate_maximum_seconds", 1),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("barge_in_minimum_partial_words", True),
+        ("barge_in_minimum_partial_words", 1.5),
+        ("barge_in_minimum_partial_words", 0),
+        ("barge_in_minimum_recognition_confidence", 1.1),
+        ("barge_in_echo_energy_ratio", 0.9),
+        ("barge_in_startup_energy_multiplier", 0.9),
+        ("barge_in_candidate_inactivity_seconds", 0),
+        ("barge_in_candidate_maximum_seconds", 0),
+        ("barge_in_candidate_maximum_seconds", 1),
+    ],
+)
 def test_settings_reject_out_of_range_and_inconsistent_bounds(field, value):
     with pytest.raises(config.ConfigurationError):
         config.Settings(**{field: value})
 
 
 def test_candidate_environment_thresholds_reach_detector_and_echo_policy():
-    settings = config.Settings.from_env(environ={
-        "HELIOS_BARGE_IN_MINIMUM_ACTIVE_SECONDS": "0.3",
-        "HELIOS_BARGE_IN_MINIMUM_PARTIAL_WORDS": "4",
-        "HELIOS_BARGE_IN_MINIMUM_RECOGNITION_CONFIDENCE": "0.75",
-        "HELIOS_BARGE_IN_CANDIDATE_INACTIVITY_SECONDS": "0.8",
-        "HELIOS_BARGE_IN_CANDIDATE_MAXIMUM_SECONDS": "2",
-        "HELIOS_BARGE_IN_ECHO_ENERGY_RATIO": "2",
-        "HELIOS_BARGE_IN_STARTUP_WINDOW_SECONDS": "0.7",
-        "HELIOS_BARGE_IN_STARTUP_ENERGY_MULTIPLIER": "2",
-    })
-    assistant = VoiceAssistant(settings=settings, tts=FakeTTS(), api_client=FakeAPI(),
-                               speech_recognizer=FakeRecognizer([]), sound_player=FakeSoundPlayer(),
-                               sound_executor=ImmediateExecutor())
+    settings = config.Settings.from_env(
+        environ={
+            "HELIOS_BARGE_IN_MINIMUM_ACTIVE_SECONDS": "0.3",
+            "HELIOS_BARGE_IN_MINIMUM_PARTIAL_WORDS": "4",
+            "HELIOS_BARGE_IN_MINIMUM_RECOGNITION_CONFIDENCE": "0.75",
+            "HELIOS_BARGE_IN_CANDIDATE_INACTIVITY_SECONDS": "0.8",
+            "HELIOS_BARGE_IN_CANDIDATE_MAXIMUM_SECONDS": "2",
+            "HELIOS_BARGE_IN_ECHO_ENERGY_RATIO": "2",
+            "HELIOS_BARGE_IN_STARTUP_WINDOW_SECONDS": "0.7",
+            "HELIOS_BARGE_IN_STARTUP_ENERGY_MULTIPLIER": "2",
+        }
+    )
+    assistant = VoiceAssistant(
+        settings=settings,
+        tts=FakeTTS(),
+        api_client=FakeAPI(),
+        speech_recognizer=FakeRecognizer([]),
+        sound_player=FakeSoundPlayer(),
+        sound_executor=ImmediateExecutor(),
+    )
     try:
         detector = assistant._barge_in_detector
         assert detector.minimum_active_seconds == 0.3
@@ -256,16 +297,21 @@ def test_candidate_environment_thresholds_reach_detector_and_echo_policy():
         assistant.close()
 
 
-@pytest.mark.parametrize("factory,field", [
-    (BargeInDetector, "sample_rate"), (BargeInDetector, "energy_threshold"),
-    (BargeInDetector, "minimum_active_seconds"), (BargeInDetector, "recognition_event_energy"),
-    (BargeInDetector, "minimum_recognition_confidence"),
-    (ConservativeEchoSuppressionPolicy, "expected_echo_energy"),
-    (ConservativeEchoSuppressionPolicy, "minimum_interrupt_energy"),
-    (ConservativeEchoSuppressionPolicy, "echo_energy_ratio"),
-    (ConservativeEchoSuppressionPolicy, "startup_window_seconds"),
-    (ConservativeEchoSuppressionPolicy, "startup_energy_multiplier"),
-])
+@pytest.mark.parametrize(
+    "factory,field",
+    [
+        (BargeInDetector, "sample_rate"),
+        (BargeInDetector, "energy_threshold"),
+        (BargeInDetector, "minimum_active_seconds"),
+        (BargeInDetector, "recognition_event_energy"),
+        (BargeInDetector, "minimum_recognition_confidence"),
+        (ConservativeEchoSuppressionPolicy, "expected_echo_energy"),
+        (ConservativeEchoSuppressionPolicy, "minimum_interrupt_energy"),
+        (ConservativeEchoSuppressionPolicy, "echo_energy_ratio"),
+        (ConservativeEchoSuppressionPolicy, "startup_window_seconds"),
+        (ConservativeEchoSuppressionPolicy, "startup_energy_multiplier"),
+    ],
+)
 @pytest.mark.parametrize("value", [True, "1", float("nan")])
 def test_direct_detector_and_policy_constructors_validate_types(factory, field, value):
     with pytest.raises(ValueError):

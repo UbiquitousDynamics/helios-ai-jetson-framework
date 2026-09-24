@@ -50,8 +50,9 @@ def test_task_latency_metric_is_content_free_and_shutdown_is_bounded():
         finished = delegator.delegate(lambda token: True)
         delegator._futures[finished.task_id].result(timeout=2)
         events = recorder.snapshot()
-        assert any(event.event == "delegated_task_finished" and event.latency_ms >= 0
-                   for event in events)
+        assert any(
+            event.event == "delegated_task_finished" and event.latency_ms >= 0 for event in events
+        )
         hanging = delegator.delegate(lambda token: started.set() or release.wait(2))
         assert started.wait(2)
         with pytest.raises(TimeoutError):

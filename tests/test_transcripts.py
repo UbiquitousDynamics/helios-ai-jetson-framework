@@ -38,17 +38,22 @@ def test_revisions_finalize_only_the_last_recognizer_wording() -> None:
     assert final.segment == TranscriptSegment(1, 1)
 
 
-@pytest.mark.parametrize("revisions,final", [
-    (["Tuesday", "Tuesday actually", "Wednesday"], "Tuesday... actually, Wednesday."),
-    (["martedì", "martedì anzi", "mercoledì"], "martedì... anzi, mercoledì."),
-    (["very", "very very"], "very very carefully"),
-    (["non", "non non"], "non non cambiare questa frase"),
-    (["wrong wording", "entirely revised wording"], "new final wording"),
-])
+@pytest.mark.parametrize(
+    "revisions,final",
+    [
+        (["Tuesday", "Tuesday actually", "Wednesday"], "Tuesday... actually, Wednesday."),
+        (["martedì", "martedì anzi", "mercoledì"], "martedì... anzi, mercoledì."),
+        (["very", "very very"], "very very carefully"),
+        (["non", "non non"], "non non cambiare questa frase"),
+        (["wrong wording", "entirely revised wording"], "new final wording"),
+    ],
+)
 def test_aggregation_replaces_hypotheses_and_preserves_final_wording(revisions, final):
     aggregator = TranscriptRevisionAggregator()
     for number, text in enumerate(revisions, 1):
-        value = aggregator.observe(text, is_final=False, capture_id=1, segment_id=1, revision=number)
+        value = aggregator.observe(
+            text, is_final=False, capture_id=1, segment_id=1, revision=number
+        )
         assert aggregator.provisional() is value
         assert value.text == text
         assert aggregator.snapshot().characters == len(text)
@@ -72,7 +77,10 @@ def test_aggregation_clears_pending_without_replaying_consumed_or_stale_segments
     aggregator.clear_pending()
     assert aggregator.provisional() is None
     assert aggregator.observe("old", is_final=True, capture_id=1, segment_id=1) is None
-    assert authoritative_text(aggregator.observe("new", is_final=True, capture_id=2, segment_id=1)) == "new"
+    assert (
+        authoritative_text(aggregator.observe("new", is_final=True, capture_id=2, segment_id=1))
+        == "new"
+    )
 
 
 @pytest.mark.parametrize("is_final", [False, True])
@@ -83,7 +91,10 @@ def test_aggregation_capacity_rejects_instead_of_truncating(is_final):
         aggregator.observe("private-content", is_final=is_final, capture_id=1, segment_id=1)
     assert "private-content" not in str(error.value)
     assert aggregator.provisional() is None
-    assert authoritative_text(aggregator.observe("new", is_final=True, capture_id=2, segment_id=1)) == "new"
+    assert (
+        authoritative_text(aggregator.observe("new", is_final=True, capture_id=2, segment_id=1))
+        == "new"
+    )
 
 
 @pytest.mark.parametrize("limit", [True, 0, -1, 1.5, "invalid"])
@@ -123,7 +134,10 @@ def test_aggregation_invalid_revision_keeps_pending_and_releases_lock():
     with pytest.raises(ValueError):
         aggregator.observe("bad", is_final=True, capture_id=1, segment_id=1, revision=-1)
     assert aggregator.provisional() is pending
-    assert authoritative_text(aggregator.observe("final", is_final=True, capture_id=1, segment_id=1)) == "final"
+    assert (
+        authoritative_text(aggregator.observe("final", is_final=True, capture_id=1, segment_id=1))
+        == "final"
+    )
 
 
 @pytest.mark.parametrize("is_final", [False, True])
@@ -131,28 +145,39 @@ def test_aggregation_invalid_revision_keeps_pending_and_releases_lock():
 def test_finalized_segment_rejects_every_later_observation(is_final, revision) -> None:
     promoter = TranscriptPromoter()
     assert promoter.observe("final", is_final=True, capture_id=2, segment_id=3, revision=2)
-    assert promoter.observe(
-        "replayed", is_final=is_final, capture_id=2, segment_id=3, revision=revision
-    ) is None
+    assert (
+        promoter.observe(
+            "replayed", is_final=is_final, capture_id=2, segment_id=3, revision=revision
+        )
+        is None
+    )
 
 
-@pytest.mark.parametrize("capture,segment,revision", [(1, 99, 100), (2, 2, 100), (2, 3, 1), (2, 3, 2)])
+@pytest.mark.parametrize(
+    "capture,segment,revision", [(1, 99, 100), (2, 2, 100), (2, 3, 1), (2, 3, 2)]
+)
 @pytest.mark.parametrize("is_final", [False, True])
 def test_stale_captures_segments_and_revisions_are_rejected(capture, segment, revision, is_final):
     promoter = TranscriptPromoter()
     promoter.observe("new partial", is_final=False, capture_id=2, segment_id=3, revision=2)
-    assert promoter.observe(
-        "stale", is_final=is_final, capture_id=capture, segment_id=segment, revision=revision
-    ) is None
+    assert (
+        promoter.observe(
+            "stale", is_final=is_final, capture_id=capture, segment_id=segment, revision=revision
+        )
+        is None
+    )
     assert promoter.observe("current", is_final=True, capture_id=2, segment_id=3, revision=3)
 
 
 def test_capture_restart_and_legacy_repetition_do_not_deduplicate_by_text() -> None:
     promoter = TranscriptPromoter()
     for capture, segment in [(1, 3), (1, 4), (2, 1), (None, None), (None, 1), (None, None)]:
-        assert isinstance(promoter.observe(
-            "repeat intentionally", is_final=True, capture_id=capture, segment_id=segment
-        ), AuthoritativeUtterance)
+        assert isinstance(
+            promoter.observe(
+                "repeat intentionally", is_final=True, capture_id=capture, segment_id=segment
+            ),
+            AuthoritativeUtterance,
+        )
     assert promoter.observe("stale", is_final=True, capture_id=1, segment_id=8) is None
 
 
@@ -175,12 +200,15 @@ def test_malformed_observation_is_rejected(text, final) -> None:
         TranscriptPromoter().observe(text, is_final=final)
 
 
-@pytest.mark.parametrize("kwargs,error", [
-    ({"text": object()}, TypeError),
-    ({"text": "x", "segment": (1, 1)}, TypeError),
-    ({"text": "x", "revision": 0}, ValueError),
-    ({"text": "x", "revision": True}, ValueError),
-])
+@pytest.mark.parametrize(
+    "kwargs,error",
+    [
+        ({"text": object()}, TypeError),
+        ({"text": "x", "segment": (1, 1)}, TypeError),
+        ({"text": "x", "revision": 0}, ValueError),
+        ({"text": "x", "revision": True}, ValueError),
+    ],
+)
 def test_provisional_values_validate_without_stringifying(kwargs, error) -> None:
     with pytest.raises(error):
         ProvisionalRevision(**kwargs)
@@ -241,8 +269,12 @@ def test_construction_failure_releases_lock_and_keeps_previous_watermark(monkeyp
             promoter.observe("new partial", is_final=False, capture_id=2, segment_id=1, revision=1)
     with ThreadPoolExecutor(max_workers=1) as pool:
         result = pool.submit(
-            promoter.observe, "actual final", is_final=True,
-            capture_id=1, segment_id=1, revision=2,
+            promoter.observe,
+            "actual final",
+            is_final=True,
+            capture_id=1,
+            segment_id=1,
+            revision=2,
         ).result(timeout=2)
     assert authoritative_text(result) == "actual final"
 
@@ -265,7 +297,9 @@ def test_rag_rejects_provisional_before_loading_or_querying(method) -> None:
         getattr(rag, method)(ProvisionalRevision("private-content"))
 
 
-@pytest.mark.parametrize("method", ["process_command", "_process_model_prompt", "process_rag_command"])
+@pytest.mark.parametrize(
+    "method", ["process_command", "_process_model_prompt", "process_rag_command"]
+)
 def test_assistant_boundaries_reject_provisional_before_side_effects(method) -> None:
     assistant = object.__new__(VoiceAssistant)
     with pytest.raises(TranscriptBoundaryError):

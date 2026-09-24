@@ -43,8 +43,10 @@ def downmix_stereo_pcm16(data: bytes, mode: str) -> bytes:
         mono = samples[channel::2]
     else:
         divisor = 2 if mode == "average" else 1
-        mono = tuple(max(-32768, min(32767, int((samples[index] + samples[index + 1]) / divisor)))
-                     for index in range(0, len(samples), 2))
+        mono = tuple(
+            max(-32768, min(32767, int((samples[index] + samples[index + 1]) / divisor)))
+            for index in range(0, len(samples), 2)
+        )
     return struct.pack(f"<{len(mono)}h", *mono)
 
 
@@ -124,17 +126,23 @@ class SpeechRecognizer:
             raise ValueError("input_device_strict must be a boolean")
         if channel_mode not in {"mono", "average", "sum", "stronger"}:
             raise ValueError("invalid input channel mode")
-        if (isinstance(sanity_rms_threshold, bool)
-                or not isinstance(sanity_rms_threshold, (int, float))
-                or not math.isfinite(sanity_rms_threshold) or sanity_rms_threshold < 0
-                or isinstance(sanity_window_seconds, bool)
-                or not isinstance(sanity_window_seconds, (int, float))
-                or not math.isfinite(sanity_window_seconds) or sanity_window_seconds <= 0):
+        if (
+            isinstance(sanity_rms_threshold, bool)
+            or not isinstance(sanity_rms_threshold, (int, float))
+            or not math.isfinite(sanity_rms_threshold)
+            or sanity_rms_threshold < 0
+            or isinstance(sanity_window_seconds, bool)
+            or not isinstance(sanity_window_seconds, (int, float))
+            or not math.isfinite(sanity_window_seconds)
+            or sanity_window_seconds <= 0
+        ):
             raise ValueError("invalid capture level sanity configuration")
-        if (isinstance(capture_stall_seconds, bool)
-                or not isinstance(capture_stall_seconds, (int, float))
-                or not math.isfinite(capture_stall_seconds)
-                or capture_stall_seconds <= 0):
+        if (
+            isinstance(capture_stall_seconds, bool)
+            or not isinstance(capture_stall_seconds, (int, float))
+            or not math.isfinite(capture_stall_seconds)
+            or capture_stall_seconds <= 0
+        ):
             raise ValueError("capture_stall_seconds must be positive")
 
         self.model_path = Path(model_path)
@@ -395,8 +403,12 @@ class SpeechRecognizer:
         get_info = getattr(self.p, "get_device_info_by_index", None)
         if not callable(get_count) or not callable(get_info):
             if self.input_device_strict:
-                raise SpeechRecognitionError("Audio backend cannot resolve the configured microphone")
-            logger.warning("event=capture_device_fallback requested=%s available=unknown", configured)
+                raise SpeechRecognitionError(
+                    "Audio backend cannot resolve the configured microphone"
+                )
+            logger.warning(
+                "event=capture_device_fallback requested=%s available=unknown", configured
+            )
             return None
         try:
             device_count = int(get_count())
@@ -423,18 +435,25 @@ class SpeechRecognizer:
                 if self._selected_pulse_source is None:
                     matches = []
                 else:
-                    matches = [(index, name) for index, name in devices
-                               if name.casefold() == "pulse"]
+                    matches = [
+                        (index, name) for index, name in devices if name.casefold() == "pulse"
+                    ]
             else:
                 target = configured.casefold()
                 exact = [(index, name) for index, name in devices if name.casefold() == target]
-                matches = exact or [(index, name) for index, name in devices
-                                    if target in name.casefold()]
+                matches = exact or [
+                    (index, name) for index, name in devices if target in name.casefold()
+                ]
         if len(matches) != 1:
-            logger.warning("event=capture_device_fallback requested=%s available=%s",
-                           configured, tuple(all_names))
+            logger.warning(
+                "event=capture_device_fallback requested=%s available=%s",
+                configured,
+                tuple(all_names),
+            )
             if self.input_device_strict:
-                raise SpeechRecognitionError("Configured microphone device is unavailable or ambiguous")
+                raise SpeechRecognitionError(
+                    "Configured microphone device is unavailable or ambiguous"
+                )
             return None
         index, name = matches[0]
         logger.info("Using configured microphone device index=%s name=%s", index, name)
@@ -443,12 +462,18 @@ class SpeechRecognizer:
     @staticmethod
     def _system_pulse_sources() -> tuple[str, ...]:
         try:
-            result = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True,
-                                    text=True, check=True, timeout=2)
+            result = subprocess.run(
+                ["pactl", "list", "short", "sources"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=2,
+            )
         except (OSError, subprocess.SubprocessError):
             return ()
-        return tuple(parts[1] for line in result.stdout.splitlines()
-                     if len(parts := line.split()) >= 2)
+        return tuple(
+            parts[1] for line in result.stdout.splitlines() if len(parts := line.split()) >= 2
+        )
 
     def _prepare_pulse_source(self) -> None:
         if self._pulse_source_checked:
@@ -460,8 +485,11 @@ class SpeechRecognizer:
         source = configured[6:]
         available = self._pulse_sources()
         if not source or source not in available:
-            logger.warning("event=capture_pulse_source_unavailable requested=%s available=%s",
-                           source, available)
+            logger.warning(
+                "event=capture_pulse_source_unavailable requested=%s available=%s",
+                source,
+                available,
+            )
             if self.input_device_strict:
                 raise SpeechRecognitionError("Configured PulseAudio source is unavailable")
             self._pulse_source_checked = True
@@ -479,12 +507,20 @@ class SpeechRecognizer:
         source = requested
         try:
             if source is None:
-                info = subprocess.run(["pactl", "info"], capture_output=True, text=True,
-                                      check=True, timeout=2).stdout
-                source = next((line.split(":", 1)[1].strip() for line in info.splitlines()
-                               if line.startswith("Default Source:")), None)
-            listing = subprocess.run(["pactl", "list", "sources"], capture_output=True,
-                                     text=True, check=True, timeout=2).stdout
+                info = subprocess.run(
+                    ["pactl", "info"], capture_output=True, text=True, check=True, timeout=2
+                ).stdout
+                source = next(
+                    (
+                        line.split(":", 1)[1].strip()
+                        for line in info.splitlines()
+                        if line.startswith("Default Source:")
+                    ),
+                    None,
+                )
+            listing = subprocess.run(
+                ["pactl", "list", "sources"], capture_output=True, text=True, check=True, timeout=2
+            ).stdout
         except (OSError, subprocess.SubprocessError):
             return source, None
         current_name: str | None = None
@@ -521,11 +557,15 @@ class SpeechRecognizer:
             "input_channels=%s device_rate=%s capture_channels=%s capture_rate=%s "
             "downmix=%s pulse_source=%s active_port=%s",
             self.input_device if self.input_device is not None else "default",
-            index if index is not None else "default", name,
+            index if index is not None else "default",
+            name,
             info.get("maxInputChannels", "unknown"),
             info.get("defaultSampleRate", "unknown"),
-            1 if self.channel_mode == "mono" else 2, self.rate, self.channel_mode,
-            source or "unknown", port or "unknown",
+            1 if self.channel_mode == "mono" else 2,
+            self.rate,
+            self.channel_mode,
+            source or "unknown",
+            port or "unknown",
         )
 
     def listen_events(
@@ -622,16 +662,30 @@ class SpeechRecognizer:
             if parsed.text.strip():
                 segment_id, segment_started_at = ensure_active_segment(last_frame_started_at)
                 final_event = RecognitionResult(
-                    parsed.text.strip(), is_final=True, frame_energy=last_frame_energy,
-                    segment_id=segment_id, segment_started_at=segment_started_at,
-                    confidence=parsed.confidence, speech_duration_seconds=parsed.speech_duration_seconds,
+                    parsed.text.strip(),
+                    is_final=True,
+                    frame_energy=last_frame_energy,
+                    segment_id=segment_id,
+                    segment_started_at=segment_started_at,
+                    confidence=parsed.confidence,
+                    speech_duration_seconds=parsed.speech_duration_seconds,
                     segment_peak_energy=observe_segment_energy(last_frame_energy),
-                    word_confidences=parsed.word_confidences, word_timings=parsed.word_timings,
-                    capture_id=capture_id, revision=next_revision(),
+                    word_confidences=parsed.word_confidences,
+                    word_timings=parsed.word_timings,
+                    capture_id=capture_id,
+                    revision=next_revision(),
                 )
-            action = on_frame(final_event or RecognitionResult("", is_final=True), last_frame_energy) if on_frame else None
+            action = (
+                on_frame(final_event or RecognitionResult("", is_final=True), last_frame_energy)
+                if on_frame
+                else None
+            )
             reset_active_segment()
-            return final_event if action not in {EndpointAction.DISCARD, EndpointAction.EXPIRE} else None
+            return (
+                final_event
+                if action not in {EndpointAction.DISCARD, EndpointAction.EXPIRE}
+                else None
+            )
 
         def reset_decoder() -> None:
             nonlocal recognizer
@@ -666,7 +720,8 @@ class SpeechRecognizer:
                     if elapsed >= self.capture_stall_seconds:
                         logger.warning(
                             "event=capture_stall_detected elapsed_ms=%s capture_id=%s",
-                            round(elapsed * 1_000), capture_id,
+                            round(elapsed * 1_000),
+                            capture_id,
                         )
                         return
 
@@ -717,7 +772,8 @@ class SpeechRecognizer:
                         if self.sanity_rms_threshold and sanity_peak < self.sanity_rms_threshold:
                             logger.warning(
                                 "event=capture_level_low peak_rms=%0.6f threshold_rms=%0.6f",
-                                sanity_peak, self.sanity_rms_threshold,
+                                sanity_peak,
+                                self.sanity_rms_threshold,
                             )
                 # Keep the peak for the current Vosk endpoint interval even
                 # before the first non-empty partial. Final-only utterances
@@ -784,7 +840,10 @@ class SpeechRecognizer:
                         )
 
                 action = on_frame(frame_result, last_frame_energy) if on_frame else None
-                if frame_result is not None and action not in {EndpointAction.DISCARD, EndpointAction.EXPIRE}:
+                if frame_result is not None and action not in {
+                    EndpointAction.DISCARD,
+                    EndpointAction.EXPIRE,
+                }:
                     yield frame_result
                 if action is EndpointAction.REQUEST_FINAL_RESULT:
                     if not keep_open:

@@ -68,22 +68,25 @@ def writer(stream: sd.OutputStream) -> None:
 
 
 started = time.perf_counter()
-with sd.InputStream(
-    device=args.input,
-    samplerate=rate,
-    channels=1,
-    dtype="float32",
-    blocksize=320,
-    latency="high",
-    callback=input_callback,
-) as input_stream, sd.OutputStream(
-    device=args.output,
-    samplerate=rate,
-    channels=args.output_channels,
-    dtype="float32",
-    blocksize=320,
-    latency="high",
-) as output_stream:
+with (
+    sd.InputStream(
+        device=args.input,
+        samplerate=rate,
+        channels=1,
+        dtype="float32",
+        blocksize=320,
+        latency="high",
+        callback=input_callback,
+    ) as input_stream,
+    sd.OutputStream(
+        device=args.output,
+        samplerate=rate,
+        channels=args.output_channels,
+        dtype="float32",
+        blocksize=320,
+        latency="high",
+    ) as output_stream,
+):
     capture_started_ns = time.perf_counter_ns()
     thread = threading.Thread(target=writer, args=(output_stream,), daemon=False)
     thread.start()
@@ -141,9 +144,7 @@ result = {
     "pre_rms": baseline_rms,
     "during_rms": during_rms,
     "post_rms": rms(post) if len(post) else 0.0,
-    "during_to_pre_db": (
-        20 * math.log10(max(during_rms, 1e-12) / max(baseline_rms, 1e-12))
-    ),
+    "during_to_pre_db": (20 * math.log10(max(during_rms, 1e-12) / max(baseline_rms, 1e-12))),
     "input_status": input_status,
     "output_status": output_status,
 }

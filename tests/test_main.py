@@ -56,15 +56,21 @@ def test_application_log_rotation_is_size_bounded(tmp_path, monkeypatch) -> None
     configured = {}
     monkeypatch.setattr(entrypoint, "_LOG_MAX_BYTES", 128)
     monkeypatch.setattr(entrypoint, "_LOG_BACKUP_COUNT", 2)
-    monkeypatch.setattr(entrypoint.logging, "basicConfig", lambda **kwargs: configured.update(kwargs))
+    monkeypatch.setattr(
+        entrypoint.logging, "basicConfig", lambda **kwargs: configured.update(kwargs)
+    )
     entrypoint.configure_logging(
-        SimpleNamespace(log_file=tmp_path / "app.log", log_level=logging.INFO, log_format="%(message)s")
+        SimpleNamespace(
+            log_file=tmp_path / "app.log", log_level=logging.INFO, log_format="%(message)s"
+        )
     )
     handler = configured["handlers"][0]
     handler.setFormatter(logging.Formatter("%(message)s"))
     try:
         for index in range(30):
-            handler.emit(logging.LogRecord("helios", logging.INFO, __file__, 1, f"message-{index}", (), None))
+            handler.emit(
+                logging.LogRecord("helios", logging.INFO, __file__, 1, f"message-{index}", (), None)
+            )
     finally:
         handler.close()
     files = list(tmp_path.glob("app.log*"))

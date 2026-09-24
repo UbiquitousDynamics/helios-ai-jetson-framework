@@ -58,7 +58,9 @@ def test_network_probe_persistence_preserves_state_changes_and_summarizes(monkey
     client._record_network_snapshot(offline, offline)
 
     assert [item.event for item in recorded] == [
-        "network_probe_completed", "network_state_changed", "network_probe_completed"
+        "network_probe_completed",
+        "network_state_changed",
+        "network_probe_completed",
     ]
     assert [item.count for item in recorded] == [1, 2, 1]
 

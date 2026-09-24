@@ -10,7 +10,10 @@ def test_lifecycle_and_verified_completion():
     task = manager.create()
     token = manager.token(task.task_id)
     assert manager.transition(task.task_id, TaskState.EXECUTING).revision == 1
-    assert manager.transition(task.task_id, TaskState.WAITING_FOR_USER).state is TaskState.WAITING_FOR_USER
+    assert (
+        manager.transition(task.task_id, TaskState.WAITING_FOR_USER).state
+        is TaskState.WAITING_FOR_USER
+    )
     manager.transition(task.task_id, TaskState.EXECUTING)
     with pytest.raises(ValueError):
         manager.transition(task.task_id, TaskState.COMPLETED)

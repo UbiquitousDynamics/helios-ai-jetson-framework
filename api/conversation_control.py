@@ -111,9 +111,7 @@ _TRANSITIONS = {
     },
     _E.FINAL_SPEECH: {
         state: _S.FINALIZING
-        for state in (
-            _S.ARMED, _S.USER_SPEAKING, _S.USER_PAUSED, _S.INTERRUPTED, _S.FINALIZING
-        )
+        for state in (_S.ARMED, _S.USER_SPEAKING, _S.USER_PAUSED, _S.INTERRUPTED, _S.FINALIZING)
     },
     _E.SILENCE: {
         _S.IDLE: _S.IDLE,
@@ -152,7 +150,10 @@ _TRANSITIONS = {
     _E.END_SESSION: {state: _S.IDLE for state in _S},
 }
 for _kind in (
-    _E.GENERATION_CANCELLED, _E.GENERATION_FAILED, _E.PLAYBACK_CANCELLED, _E.PLAYBACK_FAILED
+    _E.GENERATION_CANCELLED,
+    _E.GENERATION_FAILED,
+    _E.PLAYBACK_CANCELLED,
+    _E.PLAYBACK_FAILED,
 ):
     _TRANSITIONS[_kind] = {
         **{state: _S.INTERRUPTED for state in (*_RESPONSE_STATES, _S.INTERRUPTED)},

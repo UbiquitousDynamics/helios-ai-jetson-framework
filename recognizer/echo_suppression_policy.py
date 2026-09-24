@@ -56,12 +56,17 @@ class ConservativeEchoSuppressionPolicy:
             raise ValueError("echo_energy_ratio must be finite and at least 1")
         if not self._finite_number(self.startup_window_seconds) or self.startup_window_seconds < 0:
             raise ValueError("startup_window_seconds must be finite and non-negative")
-        if not self._finite_number(self.startup_energy_multiplier) or self.startup_energy_multiplier < 1:
+        if (
+            not self._finite_number(self.startup_energy_multiplier)
+            or self.startup_energy_multiplier < 1
+        ):
             raise ValueError("startup_energy_multiplier must be finite and at least 1")
 
     @staticmethod
     def _finite_number(value: object) -> bool:
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
 
     @staticmethod
     def _validate_energy(value: float, name: str) -> None:

@@ -6,18 +6,31 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from audio.speech_pipeline import SpeechPipeline, SpeechPipelineShutdownTimeout, SpeechPipelineTimeout
+from audio.speech_pipeline import (
+    SpeechPipeline,
+    SpeechPipelineShutdownTimeout,
+    SpeechPipelineTimeout,
+)
 from api.realtime_conversation import ResponseEvent
 
 
-@pytest.mark.parametrize("argument,value", [
-    ("max_pending", True), ("max_pending", 1.5), ("max_pending", 0),
-    ("operation_timeout", 0), ("operation_timeout", float("inf")),
-    ("shutdown_timeout", -1), ("shutdown_timeout", float("nan")),
-])
+@pytest.mark.parametrize(
+    "argument,value",
+    [
+        ("max_pending", True),
+        ("max_pending", 1.5),
+        ("max_pending", 0),
+        ("operation_timeout", 0),
+        ("operation_timeout", float("inf")),
+        ("shutdown_timeout", -1),
+        ("shutdown_timeout", float("nan")),
+    ],
+)
 def test_pipeline_rejects_invalid_wait_and_queue_bounds(argument, value):
     with pytest.raises(ValueError):
-        SpeechPipeline(synthesize=lambda text: text, play=lambda _fragment: None, **{argument: value})
+        SpeechPipeline(
+            synthesize=lambda text: text, play=lambda _fragment: None, **{argument: value}
+        )
 
 
 @pytest.mark.parametrize("waiting", ["dispatch", "drain"])
@@ -29,8 +42,13 @@ def test_native_stall_has_bounded_wait_and_explicit_bounded_shutdown(waiting):
         assert release.wait(timeout=2)
         return text
 
-    pipeline = SpeechPipeline(synthesize=synthesize, play=lambda _fragment: None,
-                              max_pending=1, operation_timeout=0.05, shutdown_timeout=0.05)
+    pipeline = SpeechPipeline(
+        synthesize=synthesize,
+        play=lambda _fragment: None,
+        max_pending=1,
+        operation_timeout=0.05,
+        shutdown_timeout=0.05,
+    )
     try:
         pipeline("first")
         assert started.wait(timeout=1)
@@ -102,8 +120,9 @@ def test_close_wakes_blocked_producer_without_accepting_new_audio():
         assert release.wait(timeout=2)
         return text
 
-    pipeline = SpeechPipeline(synthesize=synthesize, play=lambda _fragment: None,
-                              max_pending=1, interrupt=release.set)
+    pipeline = SpeechPipeline(
+        synthesize=synthesize, play=lambda _fragment: None, max_pending=1, interrupt=release.set
+    )
     with ThreadPoolExecutor(max_workers=1) as pool:
         pipeline("active")
         assert started.wait(timeout=1)
@@ -164,8 +183,12 @@ def test_pipeline_retains_original_response_observer_across_cancellation():
             release.set()
         new.flush()
     assert observed[0] == [ResponseEvent.SYNTHESIS_STARTED, ResponseEvent.SYNTHESIS_COMPLETED]
-    assert observed[1] == [ResponseEvent.SYNTHESIS_STARTED, ResponseEvent.SYNTHESIS_COMPLETED,
-                           ResponseEvent.PLAYBACK_STARTED, ResponseEvent.PLAYBACK_COMPLETED]
+    assert observed[1] == [
+        ResponseEvent.SYNTHESIS_STARTED,
+        ResponseEvent.SYNTHESIS_COMPLETED,
+        ResponseEvent.PLAYBACK_STARTED,
+        ResponseEvent.PLAYBACK_COMPLETED,
+    ]
 
 
 @pytest.mark.parametrize("stage", ["synthesis", "playback"])
@@ -185,7 +208,9 @@ def test_bound_pipeline_observer_receives_stage_failure(stage):
         with pytest.raises(RuntimeError, match="synthetic failure"):
             speak("synthetic")
             speak.flush()
-    assert events[-1] is (ResponseEvent.SYNTHESIS_FAILED if stage == "synthesis" else ResponseEvent.PLAYBACK_FAILED)
+    assert events[-1] is (
+        ResponseEvent.SYNTHESIS_FAILED if stage == "synthesis" else ResponseEvent.PLAYBACK_FAILED
+    )
 
 
 class _Recorder:
