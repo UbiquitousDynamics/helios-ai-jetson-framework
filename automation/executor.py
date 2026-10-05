@@ -130,16 +130,22 @@ class ReceiptLedger:
 
     @ledger_operation
     def complete(self, proposal: ActionProposal, outcome: ActionOutcome):
-        self.connection.execute(
-            "UPDATE actions SET status=?,reason=? WHERE action_key=? AND fingerprint=?",
-            (
-                outcome.status.value,
-                outcome.reason_code,
-                identifier(proposal.action_id),
-                proposal.fingerprint,
-            ),
-        )
-        self.connection.commit()
+        try:
+            self.connection.execute(
+                "UPDATE actions SET status=?,reason=? WHERE action_key=? AND fingerprint=?",
+                (
+                    outcome.status.value,
+                    outcome.reason_code,
+                    identifier(proposal.action_id),
+                    proposal.fingerprint,
+                ),
+            )
+            self.connection.commit()
+        except Exception:
+            # Do not expose a transaction-local success to duplicate lookup when
+            # its durable commit failed; retain the pending unknown reservation.
+            self.connection.rollback()
+            raise
 
 
 class ActionExecutor:

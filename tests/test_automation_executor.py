@@ -152,3 +152,51 @@ def test_capacity_and_turn_limits_fail_closed(tmp_path):
 
     anyio.run(scenario)
     ledger.close()
+
+
+def test_failed_receipt_commit_cannot_expose_uncommitted_success(tmp_path):
+    ledger = ReceiptLedger(tmp_path / "ledger")
+    connection = ledger.connection
+
+    class ConnectionProxy:
+        fail_commit = False
+
+        def execute(self, *args):
+            return connection.execute(*args)
+
+        def commit(self):
+            if self.fail_commit:
+                raise OSError("generated disk-full fixture")
+            connection.commit()
+
+        def rollback(self):
+            connection.rollback()
+
+        def close(self):
+            connection.close()
+
+    proxy = ConnectionProxy()
+    ledger.connection = proxy
+    client = Client()
+
+    async def call(*args):
+        client.calls += 1
+        proxy.fail_commit = True
+        return ToolResult(False, "{}")
+
+    client.call = call
+    proposal = action()
+
+    async def scenario():
+        executor = ActionExecutor(policy(), client, ledger, clock=lambda: 80)
+        assert (
+            await executor.execute(proposal, confirmed(proposal))
+        ).status == OutcomeStatus.UNKNOWN
+        assert ledger.lookup(proposal).status == OutcomeStatus.UNKNOWN
+        assert (await executor.execute(proposal)).status == OutcomeStatus.UNKNOWN
+        assert client.calls == 1
+
+    try:
+        anyio.run(scenario)
+    finally:
+        ledger.close()
