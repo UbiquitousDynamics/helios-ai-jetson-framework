@@ -303,3 +303,112 @@ def test_cursor_cycle_and_result_size_limit():
             assert caught.value.possible_dispatch
 
     anyio.run(scenario)
+
+
+@pytest.mark.parametrize(
+    "status,category", [(401, ClientFailure.AUTH), (503, ClientFailure.TRANSPORT)]
+)
+def test_sdk_http_failure_during_call_is_typed_and_never_replayed(status, category):
+    import httpx2
+
+    calls = []
+
+    async def handler(request):
+        if request.method != "POST":
+            return httpx2.Response(405, request=request)
+        body = json.loads(request.content)
+        if "id" not in body:
+            return httpx2.Response(202, request=request)
+        if body["method"] == "initialize":
+            result = {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake", "version": "1"},
+            }
+        elif body["method"] == "tools/list":
+            result = {"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}
+        else:
+            calls.append(body["method"])
+            return httpx2.Response(status, request=request)
+        return httpx2.Response(
+            200, request=request, json={"jsonrpc": "2.0", "id": body["id"], "result": result}
+        )
+
+    @asynccontextmanager
+    async def factory(server, token, timeout):
+        async with sdk_session(
+            server, token, timeout, http_transport=httpx2.MockTransport(handler)
+        ) as session:
+            yield session
+
+    async def scenario():
+        async with MCPClient(
+            settings(), "home", environ={"MCP_TOKEN": "secret"}, session_factory=factory
+        ) as client:
+            (tool,) = await client.discover()
+            with pytest.raises(MCPClientError) as caught:
+                await client.call(tool, "{}")
+            assert caught.value.category == category
+            assert caught.value.possible_dispatch
+        assert calls == ["tools/call"]
+
+    anyio.run(scenario)
+
+
+def test_genuine_cancellation_of_sdk_call_propagates_and_closes():
+    import httpx2
+
+    closed = []
+    calls = []
+
+    async def scenario():
+        started = anyio.Event()
+
+        async def handler(request):
+            if request.method != "POST":
+                return httpx2.Response(405, request=request)
+            body = json.loads(request.content)
+            if "id" not in body:
+                return httpx2.Response(202, request=request)
+            if body["method"] == "initialize":
+                result = {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "fake", "version": "1"},
+                }
+            elif body["method"] == "tools/list":
+                result = {"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}
+            else:
+                calls.append(body["method"])
+                started.set()
+                await anyio.sleep_forever()
+            return httpx2.Response(
+                200, request=request, json={"jsonrpc": "2.0", "id": body["id"], "result": result}
+            )
+
+        @asynccontextmanager
+        async def factory(server, token, timeout):
+            try:
+                async with sdk_session(
+                    server, token, timeout, http_transport=httpx2.MockTransport(handler)
+                ) as session:
+                    yield session
+            finally:
+                closed.append(True)
+
+        async def request():
+            async with MCPClient(
+                settings(), "home", environ={"MCP_TOKEN": "secret"}, session_factory=factory
+            ) as client:
+                (tool,) = await client.discover()
+                await client.call(tool, "{}")
+            pytest.fail("Cancellation was swallowed")
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(request)
+            await started.wait()
+            group.cancel_scope.cancel()
+        assert closed == [True]
+        assert calls == ["tools/call"]
+
+    anyio.run(scenario)
