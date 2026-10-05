@@ -40,6 +40,6 @@ The 2026-09-24 USB/Jetson calibration in repository documents does not calibrate
 current Debian integrated microphone. Windows CI cannot certify Jetson hardware.
 
 Rollout and rollback are described in MCP_HOME_ASSISTANT.md. A production entry-point
-assembly, concurrent confirmation barge-in and installed HA target mapping still require
+assembly, acoustic confirmation barge-in and installed HA target mapping still require
 verification; the injected components and fake verifier alone are not a deployable voice
 write profile. Preserve the ledger when disabling configuration or revoking tokens.

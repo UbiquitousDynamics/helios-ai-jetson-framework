@@ -80,8 +80,17 @@ class VoiceActionController:
         self.speak(italian if self.language == "it" else english)
 
     async def handle(
-        self, text: str, recognition: RecognitionResult, *, session_id: str, turn_id: str
+        self,
+        text: str,
+        recognition: RecognitionResult,
+        *,
+        session_id: str,
+        turn_id: str,
+        cancelled: Callable[[], bool] = lambda: False,
     ):
+        if cancelled():
+            self.cancel()
+            return None
         if self.pending is not None:
             pending, self.pending = self.pending, None
             proposal = pending.proposal
@@ -103,6 +112,7 @@ class VoiceActionController:
                 in ({"confermo"} if self.language == "it" else {"confirm"})
                 and recognition.text.strip().casefold() == text.strip().casefold()
                 and not self._cancelled.is_set()
+                and not cancelled()
             )
             if not valid:
                 self.audit.emit(AuditPhase.CONFIRMATION, AuditOutcome.DENIED, proposal=proposal)
@@ -111,7 +121,7 @@ class VoiceActionController:
                 return None
             confirmation = Confirmation(proposal.fingerprint, session_id, proposal.expires_at)
             self.audit.emit(AuditPhase.CONFIRMATION, AuditOutcome.APPROVED, proposal=proposal)
-            return await self._dispatch(proposal, confirmation)
+            return await self._dispatch(proposal, confirmation, cancelled=cancelled)
 
         self._cancelled.clear()
         prefix = "domotica " if self.language == "it" else "home control "
@@ -126,13 +136,16 @@ class VoiceActionController:
             )
         except Exception:
             plan = None
+        if cancelled() or self._cancelled.is_set():
+            self.cancel()
+            return None
         if plan is None or plan.kind != PlanKind.PROPOSE or len(plan.proposals) != 1:
             self.state = VoiceActionState.CLARIFICATION
             self._say("Specifica un dispositivo e un'azione.", "Specify one device and action.")
             return None
         proposal = plan.proposals[0]
         if not self.planner.policy.requires_confirmation(proposal):
-            return await self._dispatch(proposal, None)
+            return await self._dispatch(proposal, None, cancelled=cancelled)
         if self.verifier is None or not self.verifier.calibration_id:
             self.state = VoiceActionState.CLARIFICATION
             self._say(
@@ -159,10 +172,10 @@ class VoiceActionController:
         self.state = VoiceActionState.AWAITING_CONFIRMATION
         return None
 
-    async def _dispatch(self, proposal, confirmation) -> ActionOutcome:
+    async def _dispatch(self, proposal, confirmation, *, cancelled=lambda: False) -> ActionOutcome:
         self.state = VoiceActionState.DISPATCH
         outcome = await self.executor.execute(
-            proposal, confirmation, cancelled=self._cancelled.is_set
+            proposal, confirmation, cancelled=lambda: self._cancelled.is_set() or cancelled()
         )
         self.pending = None
         self.state = VoiceActionState.OUTCOME
