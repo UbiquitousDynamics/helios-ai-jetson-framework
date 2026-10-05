@@ -22,6 +22,7 @@ class ServerSettings:
     credential_env: str
     tools: tuple[str, ...]
     entities: tuple[str, ...]
+    areas: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.endpoint)
@@ -39,7 +40,7 @@ class ServerSettings:
             raise AutomationConfigError("Non-loopback MCP endpoints require HTTPS")
         if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", self.credential_env):
             raise AutomationConfigError("Invalid credential environment reference")
-        for scope in (self.tools, self.entities):
+        for scope in (self.tools, self.entities, self.areas):
             if not isinstance(scope, tuple) or any(
                 not isinstance(item, str) or not item.strip() or "*" in item for item in scope
             ):
@@ -54,9 +55,21 @@ class AutomationSettings:
     max_calls_per_turn: int = 3
     proposal_ttl_seconds: float = 30.0
     allow_remote_context: bool = False
+    allow_remote_catalog: bool = False
+    allow_remote_home_state: bool = False
+    allow_remote_results: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.enabled) is not bool or type(self.allow_remote_context) is not bool:
+        if any(
+            type(value) is not bool
+            for value in (
+                self.enabled,
+                self.allow_remote_context,
+                self.allow_remote_catalog,
+                self.allow_remote_home_state,
+                self.allow_remote_results,
+            )
+        ):
             raise AutomationConfigError("Automation flags must be booleans")
         for value in (self.timeout_seconds, self.proposal_ttl_seconds):
             if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 300:
@@ -88,7 +101,7 @@ def load_automation_settings(
         servers = []
         for raw in raw_servers:
             server = dict(raw)
-            for field in ("tools", "entities"):
+            for field in ("tools", "entities", "areas"):
                 scope = server.get(field, [])
                 if not isinstance(scope, list):
                     raise AutomationConfigError("Scopes must be arrays")
