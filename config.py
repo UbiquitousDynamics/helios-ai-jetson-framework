@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from automation.settings import AutomationSettings, load_automation_settings
 from recognizer.turn_endpoint_detector import TurnEndpointConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -1756,6 +1757,7 @@ class Settings:
     think_model: str = "qwen3:0.6b"
     top_k: int = 4
     llm: LLMSettings = field(default_factory=LLMSettings)
+    automation: AutomationSettings = field(default_factory=AutomationSettings)
     kpi: KPISettings = field(default_factory=KPISettings)
     endpointing: TurnEndpointConfig = field(default_factory=TurnEndpointConfig)
     activation_timeout_seconds: float = 30.0
@@ -1913,6 +1915,10 @@ class Settings:
 
         env = os.environ if environ is None else environ
         root = Path(project_root).expanduser().resolve()
+        automation_path = env.get("HELIOS_AUTOMATION_CONFIG", "").strip()
+        automation = load_automation_settings(
+            root / Path(automation_path).expanduser() if automation_path else None, environ=env
+        )
         llm = LLMSettings()
         routing_override = env.get("HELIOS_LLM_CONFIG")
         # Remote routing is opt-in. Files under examples/ are documentation, not
@@ -2057,6 +2063,7 @@ class Settings:
             audio_output_latency=env.get("HELIOS_AUDIO_OUTPUT_LATENCY", "high"),
             ollama_host=env.get("HELIOS_OLLAMA_HOST", "http://localhost:11434"),
             llm=llm,
+            automation=automation,
             kpi=kpi,
             endpointing=endpointing,
         )

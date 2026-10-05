@@ -15,6 +15,11 @@ switch on a light. Do not add an actuation layer without an explicit request.
 
 Tool and function calls are explicitly rejected by the streaming layer.
 
+Issue #23 authorizes an optional MCP automation extension. Its contracts live under
+`automation/`; it remains disabled unless `HELIOS_AUTOMATION_CONFIG` is explicitly
+selected. The extension must keep authorization and execution local and preserve the
+existing streaming rejection. See `docs/adr/0001-local-mcp-boundary.md`.
+
 ## Branches differ materially — check which one you are on
 
 - `main` — pre-barge-in baseline. No `recognizer/barge_in_detector.py`, no

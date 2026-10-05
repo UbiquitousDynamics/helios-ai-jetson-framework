@@ -1,0 +1,2 @@
+# Optional automation contracts and schema validation. No models or audio drivers.
+jsonschema==4.26.0
