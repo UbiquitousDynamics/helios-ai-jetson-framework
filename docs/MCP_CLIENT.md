@@ -23,6 +23,9 @@ Transport errors after a possible send must be handled as unknown by the executo
 SDK background-task failures are recovered during shutdown in the owning task and
 returned as typed client failures. They must not be confused with caller cancellation;
 genuine cancellation propagates. Authentication loss during a call never causes replay.
+SDK protocol logs are suppressed only within Helios client tasks, including inherited
+transport tasks, because they can contain session IDs and tool content. Fixed content-free
+audit events provide diagnostics instead; unrelated MCP clients retain their logging.
 
 References: [official SDK source](https://github.com/modelcontextprotocol/python-sdk/tree/v2.3.0),
 [MCP security guidance](https://modelcontextprotocol.io/docs/2025-11-25/tutorials/security/security_best_practices).
