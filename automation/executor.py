@@ -11,6 +11,7 @@ from typing import Callable, Protocol
 
 import anyio
 
+from automation.audit import AuditOutcome, AuditPhase, AutomationAudit
 from automation.contracts import (
     ActionOutcome,
     ActionProposal,
@@ -132,12 +133,14 @@ class ActionExecutor:
         *,
         clock: Callable[[], float] = time.time,
         cancelled: Callable[[], bool] = lambda: False,
+        audit: AutomationAudit | None = None,
     ):
         self.policy = policy
         self.client = client
         self.ledger = ledger
         self.clock = clock
         self.cancelled = cancelled
+        self.audit = audit or AutomationAudit()
         self._lock = anyio.Lock()
 
     async def execute(
@@ -148,6 +151,13 @@ class ActionExecutor:
         cancelled: Callable[[], bool] = lambda: False,
     ) -> ActionOutcome:
         def denied(reason):
+            self.audit.emit(
+                AuditPhase.POLICY,
+                AuditOutcome.CANCELLED
+                if reason == "cancelled_before_dispatch"
+                else AuditOutcome.DENIED,
+                proposal=proposal,
+            )
             return ActionOutcome(proposal.action_id, OutcomeStatus.DENIED, reason)
 
         async with self._lock:
@@ -155,6 +165,13 @@ class ActionExecutor:
                 return denied("cancelled_before_dispatch")
             previous = self.ledger.lookup(proposal)
             if previous is not None:
+                self.audit.emit(
+                    AuditPhase.REPLAY,
+                    AuditOutcome.UNKNOWN
+                    if previous.status == OutcomeStatus.UNKNOWN
+                    else AuditOutcome.DENIED,
+                    proposal=proposal,
+                )
                 return previous
             try:
                 catalog = await self.client.discover()
@@ -164,6 +181,7 @@ class ActionExecutor:
             decision = self.policy.authorize(proposal, now, catalog=catalog)
             if not decision.allowed:
                 return denied(decision.reason_code)
+            self.audit.emit(AuditPhase.POLICY, AuditOutcome.APPROVED, proposal=proposal)
             if proposal.expires_at > now + self.policy.settings.proposal_ttl_seconds:
                 return denied("proposal_lifetime")
             if self.policy.requires_confirmation(proposal) and (
@@ -189,6 +207,13 @@ class ActionExecutor:
             except (sqlite3.Error, OSError):
                 return denied("ledger_unavailable")
             if previous is not None:
+                self.audit.emit(
+                    AuditPhase.REPLAY,
+                    AuditOutcome.UNKNOWN
+                    if previous.status == OutcomeStatus.UNKNOWN
+                    else AuditOutcome.DENIED,
+                    proposal=proposal,
+                )
                 return previous
             descriptor = next(
                 item
@@ -196,6 +221,8 @@ class ActionExecutor:
                 if item.server_id == proposal.server_id and item.name == proposal.tool_name
             )
             try:
+                started_at = time.monotonic()
+                self.audit.emit(AuditPhase.DISPATCH, AuditOutcome.PENDING, proposal=proposal)
                 result = await self.client.call(descriptor, proposal.arguments_json)
                 outcome = ActionOutcome(
                     proposal.action_id,
@@ -205,6 +232,12 @@ class ActionExecutor:
             except asyncio.CancelledError:
                 # The already durable pending record remains unknown. Propagate
                 # cancellation; a caller can query it without repeating a write.
+                self.audit.emit(
+                    AuditPhase.OUTCOME,
+                    AuditOutcome.CANCELLED,
+                    proposal=proposal,
+                    latency_ms=(time.monotonic() - started_at) * 1000,
+                )
                 raise
             except Exception:
                 outcome = ActionOutcome(
@@ -215,7 +248,13 @@ class ActionExecutor:
             except (sqlite3.Error, OSError):
                 # A successful response whose receipt could not be persisted is
                 # still conservatively unknown across process restarts.
-                return ActionOutcome(
+                outcome = ActionOutcome(
                     proposal.action_id, OutcomeStatus.UNKNOWN, "receipt_unavailable"
                 )
+            self.audit.emit(
+                AuditPhase.OUTCOME,
+                AuditOutcome(outcome.status.value),
+                proposal=proposal,
+                latency_ms=(time.monotonic() - started_at) * 1000,
+            )
             return outcome

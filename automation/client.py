@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Callable, Mapping, Protocol
 
 import anyio
 
+from automation.audit import AuditOutcome, AuditPhase, AutomationAudit
 from automation.contracts import ToolDescriptor, object_json
 from automation.settings import AutomationSettings, ServerSettings
 
@@ -159,9 +160,11 @@ class MCPClient:
         *,
         environ: Mapping[str, str],
         session_factory: Callable = sdk_session,
+        audit: AutomationAudit | None = None,
     ):
         if not settings.enabled:
             raise MCPClientError(ClientFailure.CLOSED)
+        self.audit = audit or AutomationAudit()
         self.server = next(
             (server for server in settings.servers if server.server_id == server_id), None
         )
@@ -169,6 +172,7 @@ class MCPClient:
             raise MCPClientError(ClientFailure.AUTH)
         self._token = environ.get(self.server.credential_env, "").strip()
         if not self._token or any(char in self._token for char in "\r\n"):
+            self.audit.emit(AuditPhase.CAPABILITY, AuditOutcome.AUTH_DENIED, provider_id=server_id)
             raise MCPClientError(ClientFailure.AUTH)
         self.timeout = settings.timeout_seconds
         self._factory = session_factory
@@ -207,9 +211,17 @@ class MCPClient:
             from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
             if initialized.get("protocolVersion") not in HANDSHAKE_PROTOCOL_VERSIONS:
+                self.audit.emit(
+                    AuditPhase.CAPABILITY,
+                    AuditOutcome.UNSUPPORTED,
+                    provider_id=self.server.server_id,
+                )
                 raise MCPClientError(ClientFailure.PROTOCOL)
             if not isinstance(initialized.get("capabilities", {}).get("tools"), dict):
                 raise MCPClientError(ClientFailure.PROTOCOL)
+            self.audit.emit(
+                AuditPhase.CAPABILITY, AuditOutcome.SUCCESS, provider_id=self.server.server_id
+            )
             return self
         except (Exception, asyncio.CancelledError):
             await self.__aexit__(None, None, None)
@@ -223,9 +235,15 @@ class MCPClient:
             try:
                 await context.__aexit__(exc_type, exc, tb)
             except Exception as failure:
-                raise MCPClientError(
-                    failure_category(failure), possible_dispatch=self._inflight_write
-                ) from None
+                category = failure_category(failure)
+                self.audit.emit(
+                    AuditPhase.CAPABILITY,
+                    AuditOutcome.AUTH_DENIED
+                    if category == ClientFailure.AUTH
+                    else AuditOutcome.TRANSPORT_FAILED,
+                    provider_id=self.server.server_id,
+                )
+                raise MCPClientError(category, possible_dispatch=self._inflight_write) from None
 
     async def discover(self) -> tuple[ToolDescriptor, ...]:
         from mcp_types import PaginatedRequestParams
