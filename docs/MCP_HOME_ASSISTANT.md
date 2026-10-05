@@ -4,6 +4,31 @@ Installed Home Assistant compatibility is **unverified** until the user's URL/ve
 and an authenticated catalog are checked. Fake catalogs are software tests, not a
 claim that a particular HA tool exists. No devices have been acted on.
 
+## Home Assistant Core 2025.12.3 checkpoint
+
+The operator reports Core 2025.12.3 and Frontend 20251203.2 on the Debian host.
+An unauthenticated loopback probe found the frontend responding with HTTP 200,
+`/api/` with 401, and both `/api/mcp` and `/api/mcp/assist` with 404. These probes
+do not verify the reported version or establish why the MCP route is unavailable.
+No token reference was found in the SSH environment or the inspected top-level
+Helios configuration filenames; credentials may exist elsewhere.
+
+The [2025.12.3 transport source](https://github.com/home-assistant/core/blob/2025.12.3/homeassistant/components/mcp_server/http.py)
+registers `/api/mcp`, with POST requests and no `/api/mcp/assist` route. Its
+[configuration flow](https://github.com/home-assistant/core/blob/2025.12.3/homeassistant/components/mcp_server/config_flow.py)
+selects the Assist API during integration setup. Use `/api/mcp` for this version;
+the API-specific path described below belongs to newer Home Assistant versions.
+Authenticated initialization and catalog compatibility remain unverified.
+
+Because Home Assistant and Helios share the Debian host, the diagnostic endpoint
+can be `http://127.0.0.1:8123/api/mcp`; this satisfies the existing loopback-only
+HTTP policy without changing transport validation. A client on another machine
+still requires HTTPS or a local tunnel. Before diagnostics, configure the MCP
+Server integration and a dedicated token in a private file. Discovery grants no
+device calls, and production automation remains disabled.
+
+## General setup
+
 The [official integration documentation](https://www.home-assistant.io/integrations/mcp_server/)
 describes Streamable HTTP at `/api/mcp` and the selected Assist API at `/api/mcp/assist`.
 Use a dedicated non-administrator HA user where supported and expose only designated
