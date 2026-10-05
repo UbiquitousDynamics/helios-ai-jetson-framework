@@ -192,6 +192,17 @@ class MCPClient:
             return result
         except MCPClientError as exc:
             raise MCPClientError(exc.category, possible_dispatch=method == "call_tool") from None
+        except asyncio.CancelledError:
+            # An SDK background task failure may cancel its enclosing request.
+            # Close its task group in the owning task to recover the typed cause.
+            # Genuine caller cancellation still propagates when no failure exists.
+            try:
+                await self.__aexit__(None, None, None)
+            except MCPClientError as exc:
+                raise MCPClientError(
+                    exc.category, possible_dispatch=method == "call_tool"
+                ) from None
+            raise
         except TimeoutError:
             raise MCPClientError(
                 ClientFailure.TIMEOUT, possible_dispatch=method == "call_tool"
