@@ -1720,6 +1720,8 @@ class VoiceAssistant:
         self,
         cancellation: CancellationController | None = None,
     ) -> None:
+        if self.automation_controller is not None:
+            self.automation_controller.cancel()
         self.realtime.interruption()
         record_safely(
             self.metrics,
@@ -2719,6 +2721,7 @@ class VoiceAssistant:
         suppress_backchannel: bool = False,
         cancellation: CancellationController | None = None,
         initial_response: Callable[[CancellationController, int], str | None] | None = None,
+        follow_up_response: Callable[[str, CancellationController, int], str | None] | None = None,
     ) -> str | None:
         cancellation = cancellation or CancellationController()
         response_deadline = time.monotonic() + self.settings.llm.timeouts.total_seconds + 30.0
@@ -2838,6 +2841,8 @@ class VoiceAssistant:
             response_id = self.realtime.begin_response()
 
             def execute_follow_up(prompt: str = model_prompt) -> str | None:
+                if follow_up_response is not None:
+                    return follow_up_response(prompt, cancellation, response_id)
                 return self._process_model_prompt(
                     prompt,
                     pipeline_started_at=follow_up_started_at,
@@ -2853,6 +2858,67 @@ class VoiceAssistant:
                 self._finish_response(response_id, failed=True)
                 self._set_active_response_cancellation(None)
                 raise
+
+    def _process_automation_prompt(
+        self,
+        prompt: str,
+        recognition: RecognitionResult,
+        *,
+        session_id: str,
+        turn_id: str,
+        cancellation: CancellationController | None = None,
+        response_id: int | None = None,
+    ) -> None:
+        import anyio
+
+        cancellation = cancellation or CancellationController()
+        response_id = self.realtime.begin_response() if response_id is None else response_id
+        controller = self.automation_controller
+        original_speak = controller.speak
+        failed = False
+        controller.speak = lambda message: self._speak_observed(
+            message, scope="automation", response_id=response_id, cancellation=cancellation
+        )
+
+        async def handle():
+            await controller.handle(
+                prompt,
+                recognition,
+                session_id=session_id,
+                turn_id=turn_id,
+                cancelled=lambda: cancellation.cancelled or self._stop_requested,
+            )
+
+        try:
+            anyio.run(handle)
+        except Exception:
+            failed = True
+            raise
+        finally:
+            controller.speak = original_speak
+            self._finish_response(response_id, failed=failed)
+
+    def _automation_barge_follow_up(
+        self, prompt: str, cancellation: CancellationController, response_id: int
+    ) -> None:
+        # Barge-in supplies text, not calibrated microphone metadata. It can
+        # cancel an action but cannot supply consent.
+        self.automation_controller.cancel()
+        message = (
+            "Azione annullata. Ripeti il comando dopo la risposta."
+            if self.profile.code == "it"
+            else "Action cancelled. Repeat the command after the response."
+        )
+        failed = False
+        try:
+            self._speak_observed(
+                message, scope="automation", response_id=response_id, cancellation=cancellation
+            )
+        except Exception:
+            failed = True
+            raise
+        finally:
+            self._finish_response(response_id, failed=failed)
 
     def run_once(self) -> bool:
         if not self._run_once_lock.acquire(blocking=False):
@@ -2982,17 +3048,30 @@ class VoiceAssistant:
                         self.automation_controller is not None
                         and self.automation_controller.accepts(model_prompt)
                     ):
-                        import anyio
-
-                        async def handle_automation():
-                            await self.automation_controller.handle(
+                        if self.settings.barge_in_enabled:
+                            self._process_command_with_barge_in(
+                                model_prompt,
+                                pipeline_started_at=finalized_at,
+                                suppress_backchannel=True,
+                                initial_response=lambda token, identity: (
+                                    self._process_automation_prompt(
+                                        model_prompt,
+                                        result,
+                                        session_id=session_id,
+                                        turn_id=str(turn_number),
+                                        cancellation=token,
+                                        response_id=identity,
+                                    )
+                                ),
+                                follow_up_response=self._automation_barge_follow_up,
+                            )
+                        else:
+                            self._process_automation_prompt(
                                 model_prompt,
                                 result,
                                 session_id=session_id,
                                 turn_id=str(turn_number),
                             )
-
-                        anyio.run(handle_automation)
                     elif self.settings.barge_in_enabled:
                         self._process_command_with_barge_in(
                             model_prompt,
