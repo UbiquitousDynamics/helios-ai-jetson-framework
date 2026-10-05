@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol
 
+from automation.audit import AuditOutcome, AuditPhase, AutomationAudit
 from automation.contracts import ActionOutcome, ActionProposal, Confirmation, OutcomeStatus
 from automation.planner import PlanKind, ProposalPlanner
 from recognizer.speech_recognizer import RecognitionResult
@@ -47,6 +48,7 @@ class VoiceActionController:
         language: str = "it",
         clock: Callable[[], float] = time.time,
         capture_clock: Callable[[], float] = time.monotonic,
+        audit: AutomationAudit | None = None,
     ):
         if language not in {"it", "en"}:
             raise ValueError("Unsupported voice action language")
@@ -59,6 +61,7 @@ class VoiceActionController:
         self.language = language
         self.clock = clock
         self.capture_clock = capture_clock
+        self.audit = audit or AutomationAudit()
         self.state = VoiceActionState.IDLE
         self.pending: PendingAction | None = None
         self._cancelled = threading.Event()
@@ -102,10 +105,12 @@ class VoiceActionController:
                 and not self._cancelled.is_set()
             )
             if not valid:
+                self.audit.emit(AuditPhase.CONFIRMATION, AuditOutcome.DENIED, proposal=proposal)
                 self.state = VoiceActionState.CLARIFICATION
                 self._say("Azione annullata.", "Action cancelled.")
                 return None
             confirmation = Confirmation(proposal.fingerprint, session_id, proposal.expires_at)
+            self.audit.emit(AuditPhase.CONFIRMATION, AuditOutcome.APPROVED, proposal=proposal)
             return await self._dispatch(proposal, confirmation)
 
         self._cancelled.clear()
@@ -150,6 +155,7 @@ class VoiceActionController:
             self.cancel()
             return None
         self.pending = PendingAction(proposal, recognition.capture_id, self.capture_clock())
+        self.audit.emit(AuditPhase.CONFIRMATION, AuditOutcome.PENDING, proposal=proposal)
         self.state = VoiceActionState.AWAITING_CONFIRMATION
         return None
 
