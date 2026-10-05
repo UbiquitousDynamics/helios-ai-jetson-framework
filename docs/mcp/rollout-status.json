@@ -1,0 +1,38 @@
+{
+    "schema_version":  1,
+    "voice_writes_enabled":  false,
+    "stages":  {
+                   "model_free":  {
+                                      "status":  "passed_windows_python_3_12",
+                                      "hardware_certification":  false
+                                  },
+                   "home_assistant_discovery":  {
+                                                    "status":  "unverified",
+                                                    "reason":  "URL_version_and_authenticated_catalog_pending"
+                                                },
+                   "live_reads":  {
+                                      "status":  "blocked",
+                                      "reason":  "installed_catalog_and_entity_exposure_unverified"
+                                  },
+                   "voice_confirmation":  {
+                                              "status":  "blocked",
+                                              "reason":  "Debian_microphone_unresolved_and_concurrent_barge_in_unverified"
+                                          },
+                   "voice_writes":  {
+                                        "status":  "blocked",
+                                        "reason":  "no_calibrated_confirmation_verifier"
+                                    },
+                   "reboot_persistence":  {
+                                              "status":  "unverified",
+                                              "reason":  "new_MCP_runtime_not_deployed"
+                                          }
+               },
+    "hardware_results":  {
+                             "samples":  0,
+                             "failures":  null,
+                             "median_ms":  null,
+                             "p95_ms":  null,
+                             "max_ms":  null,
+                             "thresholds":  null
+                         }
+}
