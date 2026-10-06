@@ -191,6 +191,27 @@ class _OfficialCodexRuntime:
             service_tier=service_tier,
         )
 
+    def start_proposal_turn(
+        self, *, model: str, prompt: str, output_schema: dict[str, Any]
+    ) -> _Turn:
+        """A separate structured turn with the same auth-only isolation."""
+        thread = self._client.thread_start(
+            approval_mode=self._approval_mode,
+            cwd=str(self._working_directory),
+            developer_instructions="Return only the requested JSON proposal. Never call tools, run commands, inspect files or claim execution.",
+            ephemeral=True,
+            model=model,
+            model_provider="openai",
+            sandbox=self._sandbox,
+        )
+        return thread.turn(
+            prompt,
+            approval_mode=self._approval_mode,
+            cwd=str(self._working_directory),
+            sandbox=self._sandbox,
+            output_schema=output_schema,
+        )
+
     def close(self) -> None:
         try:
             self._client.close()
