@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import json
-from contextlib import asynccontextmanager
+import logging
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Mapping, Protocol
@@ -19,6 +21,29 @@ from automation.settings import AutomationSettings, ServerSettings
 MAX_PAYLOAD_BYTES = 1024 * 1024
 MAX_CATALOG_PAGES = 20
 MAX_CATALOG_TOOLS = 1000
+_PRIVATE_SDK_LOGS = ContextVar("helios_private_mcp_logs", default=False)
+
+
+class _PrivateSDKLogFilter(logging.Filter):
+    def filter(self, record):
+        return not _PRIVATE_SDK_LOGS.get()
+
+
+_SDK_LOG_FILTER = _PrivateSDKLogFilter()
+
+
+@contextmanager
+def private_sdk_logging():
+    # Install once per loaded SDK logger; the task-local flag leaves unrelated
+    # clients untouched. SDK child tasks inherit it through contextvars.
+    for name, logger in tuple(logging.Logger.manager.loggerDict.items()):
+        if name.startswith("mcp.") and isinstance(logger, logging.Logger):
+            logger.addFilter(_SDK_LOG_FILTER)
+    marker = _PRIVATE_SDK_LOGS.set(True)
+    try:
+        yield
+    finally:
+        _PRIVATE_SDK_LOGS.reset(marker)
 
 
 class ClientFailure(str, Enum):
@@ -130,18 +155,19 @@ async def sdk_session(
         async def aclose(self):
             await self.inner.aclose()
 
-    async with httpx2.AsyncClient(
-        headers={"Authorization": f"Bearer {token}"},
-        transport=GuardedTransport(),
-        timeout=timeout,
-        follow_redirects=False,
-        trust_env=False,
-    ) as http:
-        async with streamable_http_client(
-            server.endpoint, http_client=http, max_sse_event_size=MAX_PAYLOAD_BYTES
-        ) as streams:
-            async with ClientSession(*streams, read_timeout_seconds=timeout) as session:
-                yield session
+    with private_sdk_logging():
+        async with httpx2.AsyncClient(
+            headers={"Authorization": f"Bearer {token}"},
+            transport=GuardedTransport(),
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+        ) as http:
+            async with streamable_http_client(
+                server.endpoint, http_client=http, max_sse_event_size=MAX_PAYLOAD_BYTES
+            ) as streams:
+                async with ClientSession(*streams, read_timeout_seconds=timeout) as session:
+                    yield session
 
 
 @dataclass(frozen=True, slots=True)

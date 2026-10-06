@@ -175,7 +175,12 @@ def test_real_sdk_with_fake_http_handshake_and_call():
         else:
             result = {"content": [{"type": "text", "text": "ok"}], "isError": False}
         return httpx2.Response(
-            200, request=request, json={"jsonrpc": "2.0", "id": body["id"], "result": result}
+            200,
+            request=request,
+            headers={"mcp-session-id": "generated-private-session"}
+            if method == "initialize"
+            else {},
+            json={"jsonrpc": "2.0", "id": body["id"], "result": result},
         )
 
     @asynccontextmanager
@@ -412,3 +417,13 @@ def test_genuine_cancellation_of_sdk_call_propagates_and_closes():
         assert calls == ["tools/call"]
 
     anyio.run(scenario)
+
+
+def test_sdk_protocol_logs_do_not_persist_session_or_tool_content(caplog):
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="mcp"):
+        test_real_sdk_with_fake_http_handshake_and_call()
+    records = [record for record in caplog.records if record.name.startswith("mcp.")]
+    assert records == []
+    assert "generated-private-session" not in caplog.text
