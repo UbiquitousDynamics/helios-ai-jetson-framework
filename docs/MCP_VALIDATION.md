@@ -20,7 +20,7 @@ GET config and tools/list. It does not constitute a live state read or designate
 | Live reads | Exact installed schema and explicitly permitted test entities | One selected light verified through the scoped local bridge |
 | Confirmed test writes | Named low-risk entities; local policy; verified confirmation | Blocked |
 | Voice acoustic release | Device calibration, echo/false-confirmation/barged speech evidence | Blocked |
-| Startup deployment | Reboot persistence, capture selection and rollback verified | Read runtime deployed; reboot and rollback unverified |
+| Startup deployment | Reboot persistence, capture selection and rollback verified | Read runtime deployed and operational rollback checked; reboot and capture unverified |
 
 `docs/mcp/scoped-read-rollout-status.json` records the current read-stage evidence;
 `rollout-status.json` preserves the original discovery-only snapshot. Both record
@@ -59,6 +59,31 @@ Review the newer selected-light evidence with `python scripts/mcp_rollout_check.
 the scoped software read stage; selecting `voice_writes` remains blocked on missing
 voice-confirmation evidence. The original discovery snapshot and its regression
 tests remain intact.
+
+For a repeatable explicitly authorized scoped read, run only
+`tests/test_automation_live_reads.py` with `HELIOS_MCP_LIVE_READS=1` and the private
+enabled state-profile environment. This independently opts into `GetEntityState`;
+the metadata-only discovery flag does not permit it. The test checks a selected
+state read and the bridge's denial of an unconfigured entity. It opens no microphone,
+does not send model requests and cannot enable device actions. Ordinary CI skips it.
+
+Operational rollback was exercised on Debian on 2026-10-06: stop Helios, select
+the private date/time-only EnvironmentFile, reload systemd, stop the bridge and
+restart Helios. The running process had one authorized server, no state aliases,
+and a successful actual date/time read; bridge port 8124 was not listening.
+Restore the previous state-profile drop-in, reload/start the bridge and restart
+Helios. Both actual scoped state and date/time reads succeeded afterward, both
+services remained enabled, and the existing LLM configuration was preserved.
+No machine reboot or physical light action was performed. The private pre-test
+drop-in remains on the device for recovery; receipt ledgers were preserved.
+
+The current Debian service still uses the default audio input, rather than an
+explicit persistent source. PipeWire exposes its integrated analog microphone;
+this metadata does not calibrate confirmation or certify correct capture after
+reboot. Physical tests require reviewed explicit stimulus/response audio devices,
+generated-only stimuli, isolation/feedback abort setup and predeclared calibrated
+limits. `voice_test_suite.py --require-hil` reviews the baseline and never opens
+audio; its blocked result is not a completed physical test.
 
 Stages are ordered: `home_assistant_discovery`, `live_reads`, `voice_confirmation`,
 `voice_writes`, `reboot_persistence`. Later stages require all earlier stages.
