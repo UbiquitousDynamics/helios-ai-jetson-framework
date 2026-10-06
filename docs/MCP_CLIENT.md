@@ -20,6 +20,9 @@ Discovery performs no tools/call. Calls are never automatically retried. SDK SSE
 resumption can retrieve an existing response; it does not resend a mutating POST.
 Shutdown closes transport/session resources; cancellation propagates to the caller.
 Transport errors after a possible send must be handled as unknown by the executor.
+SDK background-task failures are recovered during shutdown in the owning task and
+returned as typed client failures. They must not be confused with caller cancellation;
+genuine cancellation propagates. Authentication loss during a call never causes replay.
 
 References: [official SDK source](https://github.com/modelcontextprotocol/python-sdk/tree/v2.3.0),
 [MCP security guidance](https://modelcontextprotocol.io/docs/2025-11-25/tutorials/security/security_best_practices).
