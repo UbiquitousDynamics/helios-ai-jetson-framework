@@ -50,6 +50,30 @@ def test_exposure_is_exact_and_nonempty():
     assert not exposure_matches(["light.*"], ["light.test"])
 
 
+def test_verified_2025_12_assist_schema_does_not_grant_exact_entity_actions():
+    # Sanitized shape observed on the installed server; no entity names or state.
+    observed = ToolDescriptor(
+        "ha",
+        "HassTurnOn",
+        "observed-catalog",
+        '{"type":"object","properties":{"name":{"type":"string"},'
+        '"area":{"type":"string"},"domain":{"type":"array","items":{"type":"string"}}}}',
+    )
+    selected = replace(server(), endpoint="http://127.0.0.1:8123/api/mcp", tools=("HassTurnOn",))
+    assert (
+        catalog_report("2025.12.3", selected, (observed,)).reason_code
+        == "exact_selector_unverified"
+    )
+    discovery = replace(selected, tools=(), entities=())
+    report = catalog_report("2025.12.3", discovery, (observed,), expected_version="2025.12.3")
+    assert report.status == "discovery_only"
+    assert report.scoped_tool_count == 0
+    assert (
+        catalog_report("2025.12.3", discovery, (observed,), expected_version="2026.9.4").status
+        == "incompatible"
+    )
+
+
 @pytest.mark.parametrize("status", [200, 401, 403, 307])
 def test_version_probe_is_get_only_and_origin_bound(status):
     requests = []
