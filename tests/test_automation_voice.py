@@ -207,3 +207,73 @@ def test_assistant_hook_requires_wake_and_preserves_normal_requests():
         assert voice.pending is not None
     finally:
         assistant.close()
+
+
+def test_assistant_barge_in_cannot_supply_confirmation_without_capture_evidence():
+    from tests.test_assistant import make_assistant
+
+    voice, _, executor = controller()
+    assistant, _, api, _, _ = make_assistant(
+        [
+            recognition("Emilia domotica accendi", capture_id=1, segment_started_at=10),
+        ]
+    )
+    assistant.settings = replace(
+        assistant.settings, automation=voice.planner.policy.settings, barge_in_enabled=True
+    )
+    assistant.automation_controller = voice
+    captures = []
+
+    def capture(response, *, cancellation, **kwargs):
+        response.result(timeout=2)
+        captures.append(True)
+        if len(captures) == 1:
+            assert voice.pending is not None
+            assistant._interrupt_current_response(cancellation)
+            return "confermo"
+        return None
+
+    assistant._listen_for_barge_in = capture
+    try:
+        assert assistant.run_once()
+        assert captures == [True, True]
+        assert voice.pending is None
+        assert executor.calls == []
+        assert api.messages == []
+    finally:
+        assistant.close()
+
+
+def test_real_receipt_ledger_supports_assistant_conversation_worker(tmp_path):
+    from automation.executor import ActionExecutor, ReceiptLedger
+    from tests.test_assistant import make_assistant
+    from tests.test_automation_executor import Client
+
+    voice, _, _ = controller()
+    ledger = ReceiptLedger(tmp_path / "receipts")
+    client = Client()
+    voice.executor = ActionExecutor(policy(), client, ledger, clock=lambda: 80)
+    assistant, _, api, _, _ = make_assistant(
+        [
+            recognition("Emilia domotica accendi", capture_id=1, segment_started_at=10),
+            recognition("confermo", capture_id=2, segment_started_at=21),
+        ]
+    )
+    assistant.settings = replace(
+        assistant.settings, automation=voice.planner.policy.settings, barge_in_enabled=True
+    )
+    assistant.automation_controller = voice
+
+    def capture(response, **kwargs):
+        response.result(timeout=2)
+        return None
+
+    assistant._listen_for_barge_in = capture
+    try:
+        assert assistant.run_once()
+        assert assistant.run_once()
+        assert client.calls == 1
+        assert api.messages == []
+    finally:
+        assistant.close()
+        ledger.close()

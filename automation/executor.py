@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sqlite3
+import threading
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -26,6 +28,17 @@ def identifier(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def ledger_operation(method):
+    """Serialize one connection across primary and conversation workers."""
+
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class DispatchClient(Protocol):
     async def discover(self) -> tuple[ToolDescriptor, ...]: ...
     async def call(self, tool: ToolDescriptor, arguments_json: str): ...
@@ -43,7 +56,8 @@ class ReceiptLedger:
             raise ValueError("Invalid dispatch-ledger limits")
         self.retention = retention_seconds
         self.max_records = max_records
-        self.connection = sqlite3.connect(path, timeout=2)
+        self._lock = threading.RLock()
+        self.connection = sqlite3.connect(path, timeout=2, check_same_thread=False)
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.execute(
@@ -53,9 +67,11 @@ class ReceiptLedger:
         )
         self.connection.commit()
 
+    @ledger_operation
     def close(self):
         self.connection.close()
 
+    @ledger_operation
     def lookup(self, proposal: ActionProposal) -> ActionOutcome | None:
         row = self.connection.execute(
             "SELECT fingerprint,status,reason FROM actions WHERE action_key=?",
@@ -67,6 +83,7 @@ class ReceiptLedger:
             return ActionOutcome(proposal.action_id, OutcomeStatus.DENIED, "action_id_conflict")
         return ActionOutcome(proposal.action_id, OutcomeStatus(row[1]), row[2])
 
+    @ledger_operation
     def reserve(
         self, proposal: ActionProposal, now: float, *, max_calls: int
     ) -> ActionOutcome | None:
@@ -111,6 +128,7 @@ class ReceiptLedger:
             self.connection.rollback()
             raise
 
+    @ledger_operation
     def complete(self, proposal: ActionProposal, outcome: ActionOutcome):
         self.connection.execute(
             "UPDATE actions SET status=?,reason=? WHERE action_key=? AND fingerprint=?",
