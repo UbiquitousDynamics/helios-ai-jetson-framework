@@ -141,13 +141,17 @@ class ActionExecutor:
         self._lock = anyio.Lock()
 
     async def execute(
-        self, proposal: ActionProposal, confirmation: Confirmation | None = None
+        self,
+        proposal: ActionProposal,
+        confirmation: Confirmation | None = None,
+        *,
+        cancelled: Callable[[], bool] = lambda: False,
     ) -> ActionOutcome:
         def denied(reason):
             return ActionOutcome(proposal.action_id, OutcomeStatus.DENIED, reason)
 
         async with self._lock:
-            if self.cancelled():
+            if self.cancelled() or cancelled():
                 return denied("cancelled_before_dispatch")
             previous = self.ledger.lookup(proposal)
             if previous is not None:
@@ -168,7 +172,7 @@ class ActionExecutor:
                 return denied("confirmation_required")
             await anyio.lowlevel.checkpoint()
             now = self.clock()
-            if self.cancelled():
+            if self.cancelled() or cancelled():
                 return denied("cancelled_before_dispatch")
             # Revalidate expiry after the cancellation checkpoint and before the
             # synchronous durable boundary. No await occurs until tools/call.
