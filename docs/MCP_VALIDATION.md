@@ -13,18 +13,43 @@ CI does not opt into external calls. Live metadata verification is skipped unles
 server credential reference and optional expected installed version. It performs only
 GET config and tools/list. It does not constitute a live state read or designated write.
 
-| Stage | Required evidence | Current status |
-| --- | --- | --- |
-| Disabled checkout | No connection/action; existing voice suite | Model-free tested |
-| HA discovery | Actual version/auth/catalog; diagnostic result | Unverified, awaiting instance details |
-| Live reads | Exact installed schema and exposed test entities | Blocked |
-| Confirmed test writes | Named low-risk entities; local policy; verified confirmation | Blocked |
-| Voice acoustic release | Device calibration, echo/false-confirmation/barged speech evidence | Blocked |
-| Startup deployment | Reboot persistence, capture selection and rollback verified | Unverified |
+Deployment evidence is private and is not bundled with this repository.
+The JSON records under `docs/mcp/` named `rollout-status.json`,
+`scoped-read-rollout-status.json`, `discovery.example.json` and
+`scoped-read.example.json` are synthetic fixtures only. Their sample verdicts
+exercise offline validation and certify no real system, read or device action.
 
-`docs/mcp/rollout-status.json` records unknown values as null and absent evidence as
-blocked/unverified. Zero hardware samples is not a pass. No production automation was
-deployed on Debian or Jetson; the existing service is unchanged.
+## Executable evidence review
+
+Run `python scripts/mcp_rollout_check.py --manifest docs/mcp/rollout-status.json
+--stage home_assistant_discovery`. Exit 0 means that stage's required evidence is
+present; exit 2 means blocked. Output contains only the stage, status and a fixed
+reason code. The CLI opens no network/audio connection and never enables automation.
+CI checks the synthetic discovery fixture on every OS/Python matrix entry, without
+using credentials or opting into the live test.
+
+Stages are ordered: `home_assistant_discovery`, `live_reads`, `voice_confirmation`,
+`voice_writes`, `reboot_persistence`. Later stages require all earlier stages.
+The discovery artifact must be bounded, local and match its recorded SHA-256.
+Read evidence requires verified exact target mapping, exposure, permission and at
+least one successful scoped read. The installed intent schemas have no entity-ID
+selector; claiming that the catalog is present cannot satisfy these read gates.
+
+Acoustic evidence requires a target profile, calibration artifact hash, calibration
+verification, predeclared thresholds, positive samples, zero failures and finite,
+ordered median/p95/max within limits. Each of false wake, wrong target, playback
+echo, missed denial, interruptions before/after dispatch and remote failure/fallback
+requires a nonempty, failure-free scenario record. Empty samples, null thresholds,
+NaN, boolean counts or a claimed stage pass alone remain blocked. A designated
+write also needs exact low-risk target evidence and a successful test write. Deployment
+needs runtime assembly, reboot, capture and rollback verification.
+
+This is a review of **operator-maintained evidence**, not a hardware certification
+or authorization mechanism. The checker does not independently authenticate a
+calibration hash, recompute summary measurements from samples or deploy a runtime.
+Use the existing acoustic runners to produce and review those measurements. Fixture
+records in tests are fictional and must never be copied into release evidence.
+The production policy, calibrated verifier and durable executor remain mandatory.
 
 Reuse #18 and the existing voice test suite for generated acoustic fixtures only. Record
 explicit capture/playback devices, device/route identity, gain, calibration artifact and
