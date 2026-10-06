@@ -1,8 +1,50 @@
 # Home Assistant provisioning and diagnostics
 
-Installed Home Assistant compatibility is **unverified** until the user's URL/version
-and an authenticated catalog are checked. Fake catalogs are software tests, not a
-claim that a particular HA tool exists. No devices have been acted on.
+Discovery compatibility was verified on the Debian installation of Core 2025.12.3
+on 2026-10-06 with the actual PR #39 diagnostic modules. The authenticated command
+returned `discovery_only`, 21 tools and zero authorized tools. No tools/call or device
+actions were performed. This verifies discovery, not entity reads or write compatibility.
+
+## Verified Core 2025.12.3 profile
+
+The integration was configured through Home Assistant's API with Assist selected.
+The diagnostic endpoint is `http://127.0.0.1:8123/api/mcp`: Home Assistant and Helios
+share the Debian host, so no LAN HTTP exception is needed. The installed version has
+no `/api/mcp/assist` route; select Assist during integration setup instead. See the
+[versioned transport source](https://github.com/home-assistant/core/blob/2025.12.3/homeassistant/components/mcp_server/http.py).
+The MCP server negotiated protocol version `2025-06-18`.
+
+Provisioning created a dedicated local-only, non-administrator user in Home Assistant's
+`system-read-only` group. Its 30-day token is stored only on the device at
+`/home/debian/.config/helios/ha-token`, mode 0600. The temporary login refresh token was
+revoked. Tokens and raw catalog content are not repository artifacts. The diagnostic
+configuration at `/home/debian/.config/helios/automation-diagnostics.toml` has empty
+tools, entities and areas, and all remote-context permissions disabled. It is selected
+only by the diagnostic CLI, not by the production service.
+
+| Observed tools | Observed selectors | Local profile decision |
+| --- | --- | --- |
+| `GetDateTime` | Empty input | Present; no device read, not authorized |
+| `GetLiveContext` | Empty input | Broad home context; not authorized |
+| `todo_get_items` | `todo_list`, optional `status` | List name is not an exact entity ID; not authorized |
+| `HassTurnOn`, `HassTurnOff`, `ChangeLightState`, `HassLightSet` | Name/area/floor/domain selectors | No `entity_id`; exact light writes unsupported by this profile |
+| Remaining timer/media/list/vacuum actions | Intent-specific selectors | Outside the initial light/scene scope; not authorized |
+
+This table maps real schemas rather than guessing an entity selector. No configured
+entity needs exposure because the scope is empty. The existing exposure snapshot had
+three explicit Assist exclusions; default exposure was not overridden. That snapshot
+does not certify an exact target for future actions. Establish a designated sandbox
+entity and verify its exposure and unique mapping before any read/write rollout.
+
+The installed catalog includes `GetLiveContext`, not `homeassistant__GetLiveContext`.
+Use the installed catalog as authority when configuring a different version. The
+production Helios service remained active and enabled, without an MCP runtime restart.
+Its process environment had no `HELIOS_AUTOMATION_CONFIG`. Real negative checks also
+passed: an invalid bearer credential returned a fixed failure code with exit 2, and
+an expected version of 2025.12.4 returned `version_mismatch` with exit 2. The sanitized
+[discovery evidence](mcp/home-assistant-2025.12.3-discovery.json) records these checks.
+
+## General setup
 
 The [official integration documentation](https://www.home-assistant.io/integrations/mcp_server/)
 describes Streamable HTTP at `/api/mcp` and the selected Assist API at `/api/mcp/assist`.
@@ -30,7 +72,7 @@ separate from ChatGPT OAuth. Helios currently supports bearer tokens, not HA OAu
    No generic service-call shortcut is provided. Read checks and designated writes are
    separate opt-ins; the diagnostic command contains no tools/call.
 
-Current HA source advertises `homeassistant__GetLiveContext`, but it is not automatically
+Tool names can differ between HA versions. A context tool is not automatically
 authorized by Helios: the installed catalog must confirm it, and broad context may
 include more exposed entities than a desired local scope. Do not invent tool names or
 infer exposed entities from catalog hints. `exposure_matches` checks explicit snapshots;
@@ -41,3 +83,9 @@ ordinary local voice operation. Revoke the dedicated HA token in the user's secu
 settings; remove unused exposed entities and the MCP integration if appropriate. Preserve
 the dispatch ledger through rollback so an uncertain action cannot be replayed later.
 Voice writes remain gated by #29/#32 and the unresolved Debian microphone.
+
+For the provisioned profile, remove or revoke the token named "Helios MCP metadata
+diagnostics" in the dedicated user's security settings (or delete that user as an
+administrator). Remove the private diagnostic configuration/token files when no longer
+needed. Delete the MCP integration if it is no longer used. Renew the token explicitly
+after its 30-day lifetime; no automatic renewal or remote credential export is configured.
