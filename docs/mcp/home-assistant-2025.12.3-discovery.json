@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-10-06",
+  "target": "Debian x86_64",
+  "core_version": "2025.12.3",
+  "transport": "streamable_http_loopback",
+  "endpoint_path": "/api/mcp",
+  "protocol_version": "2025-06-18",
+  "catalog_id": "f7c4075591ae2d1b5b518643f6329c356c692e4c7cbc9693b507c7b94b4f8500",
+  "tool_count": 21,
+  "scoped_tool_count": 0,
+  "status": "discovery_only",
+  "reason_code": "no_tools_authorized",
+  "credential": {
+    "dedicated_user": true,
+    "local_only": true,
+    "group": "system-read-only",
+    "lifespan_days": 30,
+    "file_mode": "0600",
+    "temporary_login_revoked": true
+  },
+  "negative_checks": {
+    "invalid_bearer": {"status": "failed", "exit_code": 2},
+    "expected_version_mismatch": {"reason_code": "version_mismatch", "exit_code": 2}
+  },
+  "entity_scope": {
+    "configured_entities": 0,
+    "explicit_assist_exclusions_observed": 3,
+    "default_exposure_changed": false,
+    "exact_target_mapping": "unsupported_by_observed_intent_selectors"
+  },
+  "safety": {
+    "tools_call_performed": false,
+    "home_state_exported": false,
+    "production_automation_config_present": false,
+    "voice_writes_enabled": false,
+    "physical_device_compatibility": "unverified"
+  }
+}
