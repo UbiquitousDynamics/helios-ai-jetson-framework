@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_only": true,
+  "status": "discovery_only",
+  "core_version": "2099.1.0",
+  "catalog_id": "example-catalog",
+  "tool_count": 1,
+  "scoped_tool_count": 0,
+  "safety": {
+    "tools_call_performed": false,
+    "home_state_exported": false
+  }
+}
