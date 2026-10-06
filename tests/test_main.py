@@ -38,6 +38,48 @@ def test_main_runs_and_closes_the_assistant(monkeypatch) -> None:
     assert assistant.exited is True
 
 
+def test_main_injects_enabled_read_runtime_and_closes_it_after_assistant(monkeypatch):
+    from contextlib import contextmanager
+    from dataclasses import replace
+
+    import automation.read_runtime as runtime
+    from automation.settings import AutomationSettings, ServerSettings
+
+    assistant = FakeAssistant()
+    controller = object()
+    lifecycle = []
+
+    @contextmanager
+    def factory(*args, **kwargs):
+        lifecycle.append("runtime_open")
+        yield controller
+        assert assistant.exited
+        lifecycle.append("runtime_closed")
+
+    def assistant_factory(**kwargs):
+        assert kwargs == {"automation_controller": controller}
+        return assistant
+
+    monkeypatch.setattr(entrypoint, "configure_logging", lambda: None)
+    monkeypatch.setattr(entrypoint, "VoiceAssistant", assistant_factory)
+    monkeypatch.setattr(runtime, "read_only_runtime", factory)
+    # The injected factory handles configuration; no real credentials/devices.
+    enabled = AutomationSettings(
+        enabled=True,
+        servers=(
+            ServerSettings(
+                "homeassistant", "http://127.0.0.1:8123/api/mcp", "TOKEN", ("GetDateTime",), ()
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        entrypoint.config, "SETTINGS", replace(entrypoint.config.SETTINGS, automation=enabled)
+    )
+    assert entrypoint.main() == 0
+    assert lifecycle == ["runtime_open", "runtime_closed"]
+    assert assistant.exited is True
+
+
 def test_startup_identity_is_content_free_and_missing_route_is_visible(monkeypatch, caplog):
     assistant = FakeAssistant()
     monkeypatch.setattr(entrypoint, "configure_logging", lambda: None)
