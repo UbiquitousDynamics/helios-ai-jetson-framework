@@ -11,6 +11,7 @@ from typing import Any, Callable, Protocol
 
 import anyio
 
+from automation.audit import AuditOutcome, AuditPhase, AutomationAudit
 from automation.contracts import ActionProposal, ToolDescriptor, object_json
 from automation.policy import LocalPolicy
 
@@ -51,12 +52,14 @@ class ProposalPlanner:
         allow_remote_transcript: bool = False,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
+        audit: AutomationAudit | None = None,
     ):
         self.policy = policy
         self.provider = provider
         self.allow_remote_transcript = allow_remote_transcript
         self.clock = clock
         self.id_factory = id_factory
+        self.audit = audit or AutomationAudit()
 
     async def plan(
         self, transcript: str, catalog: tuple[ToolDescriptor, ...], *, session_id: str, turn_id: str
@@ -64,10 +67,24 @@ class ProposalPlanner:
         settings = self.policy.settings
         capability = self.provider.capability
         if not settings.enabled or not capability.structured_output:
+            self.audit.emit(
+                AuditPhase.CAPABILITY,
+                AuditOutcome.UNSUPPORTED,
+                session_id=session_id,
+                turn_id=turn_id,
+                provider_id=capability.provider,
+            )
             return PlanResult(PlanKind.UNSUPPORTED, reason_code="provider_unsupported")
         if capability.remote and (
             not self.allow_remote_transcript or not settings.allow_remote_catalog
         ):
+            self.audit.emit(
+                AuditPhase.CAPABILITY,
+                AuditOutcome.SCOPE_DENIED,
+                session_id=session_id,
+                turn_id=turn_id,
+                provider_id=capability.provider,
+            )
             return PlanResult(PlanKind.UNSUPPORTED, reason_code="remote_context_denied")
         if (
             not isinstance(transcript, str)
@@ -168,6 +185,12 @@ class ProposalPlanner:
                 if not self.policy.authorize(proposal, now, catalog=catalog).allowed:
                     raise ValueError("Proposal exceeds local scope")
                 proposals.append(proposal)
+                self.audit.emit(
+                    AuditPhase.PROPOSAL,
+                    AuditOutcome.PENDING,
+                    proposal=proposal,
+                    provider_id=capability.provider,
+                )
             return PlanResult(PlanKind.PROPOSE, tuple(proposals), "proposal_ready")
         except Exception:
             return PlanResult(PlanKind.CLARIFY, reason_code="invalid_proposal")
