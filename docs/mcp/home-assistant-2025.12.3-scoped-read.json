@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-06",
+  "target": "Debian_x86_64_python_3_11",
+  "core_version": "2025.12.3",
+  "status": "scoped_read_verified",
+  "implementation_commit": "64efb4a",
+  "transport": "local_MCP_bridge_to_exact_Home_Assistant_REST_GET",
+  "tool": "GetEntityState",
+  "scope": {
+    "operator_selected_light_count": 1,
+    "exact_entity_mapping_verified": true,
+    "local_bridge_allowlist_verified": true,
+    "upstream_read_permission_verified": true,
+    "native_assist_entity_selector_available": false,
+    "private_entity_ids_in_repository": false
+  },
+  "results": {
+    "successful_scoped_read_count": 1,
+    "unscoped_entity_denied": true,
+    "invalid_bridge_bearer_denied": true
+  },
+  "safety": {
+    "physical_write_performed": false,
+    "broad_GetLiveContext_called": false,
+    "raw_attributes_exported": false,
+    "home_state_sent_to_llm": false,
+    "microphone_calibrated": false,
+    "reboot_tested": false
+  },
+  "limitations": "Operator-recorded live software evidence; not acoustic or physical-action certification. Private exact scope and bearer credentials remain only on the device."
+}
