@@ -9,7 +9,7 @@ allow_remote_results = false
 
 [[servers]]
 server_id = "homeassistant"
-endpoint = "https://homeassistant.example/api/mcp/assist"
+endpoint = "https://homeassistant.example/api/mcp"
 credential_env = "HELIOS_HA_TOKEN"
 # Copy exact identities from your verified catalog/exposure configuration.
 # No tool names or devices are authorized by this example.
