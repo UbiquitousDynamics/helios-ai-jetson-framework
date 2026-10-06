@@ -25,6 +25,8 @@ are pruned only beyond retention. IDs must be locally generated and never reused
 duplicate suppression is bounded by retention. Per-turn limits are checked inside the
 same transaction. Proposal lifetime is capped by configuration (at most 300 seconds).
 Clock rollback denies new reservations; a session controller must invalidate pending consent.
+Receipt update failures roll back the uncommitted terminal state, preserving the durable
+pending/unknown reservation for both in-process duplicates and restart recovery.
 
 Tests simulate lost acknowledgment after execution, restart, a durable pending crash,
 conflicting IDs, cancellation, stale catalogs, missing confirmation and capacity limits.
