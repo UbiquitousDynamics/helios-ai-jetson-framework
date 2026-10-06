@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "fixture_only": true,
+  "voice_writes_enabled": false,
+  "stages": {
+    "model_free": {
+      "status": "passed"
+    },
+    "home_assistant_discovery": {
+      "status": "passed",
+      "evidence_file": "discovery.example.json",
+      "evidence_sha256": "cfe1940b1b27d27560e752e342b72adca3e365ae00ae52cf8d4439f3c19753da"
+    },
+    "live_reads": {
+      "status": "blocked"
+    },
+    "voice_confirmation": {
+      "status": "blocked"
+    },
+    "voice_writes": {
+      "status": "blocked"
+    },
+    "reboot_persistence": {
+      "status": "unverified"
+    }
+  },
+  "hardware_results": {
+    "samples": 0,
+    "failures": null,
+    "median_ms": null,
+    "p95_ms": null,
+    "max_ms": null,
+    "thresholds": null
+  }
+}

@@ -1,0 +1,68 @@
+# MCP validation and rollout gates
+
+Model-free tests run in the existing Linux/Windows CI matrix (Python 3.10/3.12).
+They use injected providers/recognition and the pinned real SDK with mock HTTP; no
+microphone, models, credentials, Home Assistant instance or real device are required.
+The integrated test covers proposal, exact confirmation, dispatch, lost response,
+unknown speech, fallback replay suppression and receipt lookup after restart.
+
+Runtime audio/model dependencies remain optional. Automation dependencies are separate
+in `requirements-automation.txt`, included by the development test requirements only.
+CI does not opt into external calls. Live metadata verification is skipped unless
+`HELIOS_MCP_LIVE_DISCOVERY=1`, with an explicit enabled HELIOS_AUTOMATION_CONFIG,
+server credential reference and optional expected installed version. It performs only
+GET config and tools/list. It does not constitute a live state read or designated write.
+
+Deployment evidence is private and is not bundled with this repository.
+The JSON records under `docs/mcp/` named `rollout-status.json`,
+`scoped-read-rollout-status.json`, `discovery.example.json` and
+`scoped-read.example.json` are synthetic fixtures only. Their sample verdicts
+exercise offline validation and certify no real system, read or device action.
+
+## Executable evidence review
+
+Run `python scripts/mcp_rollout_check.py --manifest docs/mcp/rollout-status.json
+--stage home_assistant_discovery`. Exit 0 means that stage's required evidence is
+present; exit 2 means blocked. Output contains only the stage, status and a fixed
+reason code. The CLI opens no network/audio connection and never enables automation.
+CI checks the synthetic discovery fixture on every OS/Python matrix entry, without
+using credentials or opting into the live test.
+
+Stages are ordered: `home_assistant_discovery`, `live_reads`, `voice_confirmation`,
+`voice_writes`, `reboot_persistence`. Later stages require all earlier stages.
+The discovery artifact must be bounded, local and match its recorded SHA-256.
+Read evidence requires verified exact target mapping, exposure, permission and at
+least one successful scoped read. The installed intent schemas have no entity-ID
+selector; claiming that the catalog is present cannot satisfy these read gates.
+
+Acoustic evidence requires a target profile, calibration artifact hash, calibration
+verification, predeclared thresholds, positive samples, zero failures and finite,
+ordered median/p95/max within limits. Each of false wake, wrong target, playback
+echo, missed denial, interruptions before/after dispatch and remote failure/fallback
+requires a nonempty, failure-free scenario record. Empty samples, null thresholds,
+NaN, boolean counts or a claimed stage pass alone remain blocked. A designated
+write also needs exact low-risk target evidence and a successful test write. Deployment
+needs runtime assembly, reboot, capture and rollback verification.
+
+This is a review of **operator-maintained evidence**, not a hardware certification
+or authorization mechanism. The checker does not independently authenticate a
+calibration hash, recompute summary measurements from samples or deploy a runtime.
+Use the existing acoustic runners to produce and review those measurements. Fixture
+records in tests are fictional and must never be copied into release evidence.
+The production policy, calibrated verifier and durable executor remain mandatory.
+
+Reuse #18 and the existing voice test suite for generated acoustic fixtures only. Record
+explicit capture/playback devices, device/route identity, gain, calibration artifact and
+abort feedback limits before running. Predeclare hardware-specific latency/error and
+false-confirmation thresholds before interpreting data. Include counts, failures,
+median, nearest-rank p95 and max. Never store user speech/PCM. Test false wakes, wrong
+targets, playback echo, missed denial, interrupts before/after dispatch and remote
+failure/fallback without replay. Missing device/threshold evidence blocks the stage.
+
+Reuse #13 for persistent capture selection, #12 for barge-in calibration, and #19/#20
+for provider fallback behavior; this change does not alter their thresholds or retries.
+
+Windows CI cannot certify target hardware. Require deployment-specific calibration
+and verification before enabling live reads or writes. Keep device evidence private.
+To disable the extension, unset HELIOS_AUTOMATION_CONFIG and restart the service.
+Revoke unused credentials and preserve the receipt ledger to prevent replay.
