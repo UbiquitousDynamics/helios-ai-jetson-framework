@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from logging.handlers import RotatingFileHandler
 import os
 import signal
@@ -100,7 +101,19 @@ def main() -> int:
         signal.signal(signal.SIGINT, _TwoStageInterruptHandler())
         installed_handler = True
     try:
-        with VoiceAssistant() as assistant:
+        with ExitStack() as resources:
+            assistant_options = {}
+            if settings.automation.enabled:
+                from automation.read_runtime import read_only_runtime
+
+                controller = resources.enter_context(
+                    read_only_runtime(settings.automation, language=settings.language)
+                )
+                assistant_options["automation_controller"] = controller
+                logging.getLogger(__name__).info(
+                    "event=mcp_read_runtime_configured profile=date_time"
+                )
+            assistant = resources.enter_context(VoiceAssistant(**assistant_options))
             try:
                 assistant.run()
             except (KeyboardInterrupt, AssistantShutdownTimeout):
