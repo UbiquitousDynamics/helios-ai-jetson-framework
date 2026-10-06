@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "fixture_only": true,
+  "status": "scoped_read_example",
+  "safety": {
+    "physical_write_performed": false,
+    "home_state_sent_to_llm": false
+  }
+}
