@@ -246,8 +246,10 @@ class VoiceAssistant:
         clock: Callable[[], float] = time.monotonic,
         metrics: Any | None = None,
         task_delegator: Any | None = None,
+        automation_controller: Any | None = None,
     ) -> None:
         self.settings = settings
+        self.automation_controller = automation_controller if settings.automation.enabled else None
         self.profile = settings.profile
         if conversation_executor is not None and settings.barge_in_enabled:
             max_workers = getattr(conversation_executor, "_max_workers", None)
@@ -459,6 +461,8 @@ class VoiceAssistant:
                 )
 
     def _deactivate_voice_conversation(self) -> None:
+        if self.automation_controller is not None:
+            self.automation_controller.cancel()
         with self._voice_conversation_lock:
             self._voice_conversation_active = False
             self._voice_conversation_last_activity_at = None
@@ -719,6 +723,8 @@ class VoiceAssistant:
         intent = self._parse_control(command)
         if intent is None:
             return False
+        if self.automation_controller is not None:
+            self.automation_controller.cancel()
         applied = True
         if intent is ControlIntent.UNMUTE:
             self.realtime.speech_output.set_muted(False)
@@ -2972,7 +2978,22 @@ class VoiceAssistant:
                     logger.info("event=voice_follow_up_accepted wake_word_required=false")
                 self._transition_voice_conversation(VoiceConversationState.USER_TURN_FINALIZED)
                 try:
-                    if self.settings.barge_in_enabled:
+                    if (
+                        self.automation_controller is not None
+                        and self.automation_controller.accepts(model_prompt)
+                    ):
+                        import anyio
+
+                        async def handle_automation():
+                            await self.automation_controller.handle(
+                                model_prompt,
+                                result,
+                                session_id=session_id,
+                                turn_id=str(turn_number),
+                            )
+
+                        anyio.run(handle_automation)
+                    elif self.settings.barge_in_enabled:
                         self._process_command_with_barge_in(
                             model_prompt,
                             pipeline_started_at=finalized_at,
