@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "voice_writes_enabled": false,
+  "stages": {
+    "model_free": {
+      "status": "passed_windows_python_3_12",
+      "hardware_certification": false
+    },
+    "home_assistant_discovery": {
+      "status": "passed",
+      "evidence_file": "home-assistant-2025.12.3-discovery.json",
+      "evidence_sha256": "f1bcd758b80389a1a5ddc47e998f24c6778612888de20402063575a6069bfc0f"
+    },
+    "live_reads": {
+      "status": "blocked",
+      "reason": "exact_target_mapping_and_exposed_test_entity_not_verified"
+    },
+    "voice_confirmation": {
+      "status": "blocked",
+      "reason": "Debian_microphone_uncalibrated_concurrent_software_in_PR42"
+    },
+    "voice_writes": {
+      "status": "blocked",
+      "reason": "no_calibrated_confirmation_verifier"
+    },
+    "reboot_persistence": {
+      "status": "unverified",
+      "reason": "new_MCP_runtime_not_deployed"
+    }
+  },
+  "hardware_results": {
+    "samples": 0,
+    "failures": null,
+    "median_ms": null,
+    "p95_ms": null,
+    "max_ms": null,
+    "thresholds": null
+  },
+  "live_test": {
+    "status": "passed",
+    "target": "Debian_x86_64_python_3_11",
+    "date": "2026-10-06",
+    "test": "test_explicit_home_assistant_version_and_catalog",
+    "tools_call_performed": false
+  }
+}
