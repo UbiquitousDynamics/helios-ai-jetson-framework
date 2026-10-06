@@ -78,8 +78,9 @@ The 2026-09-24 USB/Jetson calibration in repository documents does not calibrate
 current Debian integrated microphone. Windows CI cannot certify Jetson hardware.
 
 Rollout and rollback are described in MCP_HOME_ASSISTANT.md. Concurrent confirmation
-barge-in software is supplied separately by #42; it does not calibrate this microphone.
-Production assembly, exact HA target mapping and reboot evidence remain deployment
-gates. The validation PR is reviewable while those gates correctly report blocked;
-merging validation does not authorize live writes. Preserve the ledger when disabling
-configuration or revoking tokens.
+barge-in software is implemented by #42; acoustic confirmation and interruption on
+the Debian microphone still require calibration and verification. Production assembly,
+exact HA target mapping and reboot evidence remain deployment gates. The validation
+PR is reviewable while those gates correctly report blocked; merging validation does
+not authorize live writes. Preserve the ledger when disabling configuration or
+revoking tokens.
