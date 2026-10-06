@@ -49,6 +49,11 @@ jobs:
       - name: Run unit tests
         run: python -m pytest
 
+      - name: Validate MCP rollout evidence
+        run: >-
+          python scripts/mcp_rollout_check.py
+          --manifest docs/mcp/rollout-status.json --stage home_assistant_discovery
+
       - name: Validate bundled asset inventory
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: python scripts/doctor.py --assets-only --check-hashes
