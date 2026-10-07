@@ -1,0 +1,15 @@
+# Inactive documentation. The first runtime profile permits only date/time reads.
+enabled = false
+timeout_seconds = 10
+max_calls_per_turn = 1
+allow_remote_catalog = false
+allow_remote_home_state = false
+allow_remote_results = false
+
+[[servers]]
+server_id = "homeassistant"
+endpoint = "http://127.0.0.1:8123/api/mcp"
+credential_env = "HELIOS_HA_TOKEN"
+tools = ["GetDateTime"]
+entities = []
+areas = []
