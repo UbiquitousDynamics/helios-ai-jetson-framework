@@ -144,3 +144,32 @@ hum, but does not identify electrical versus acoustic coupling or prove it is
 the sole recognition problem. The next controlled comparison is Debian on
 battery with the same microphone setup, if battery operation is available.
 No audio filter or production configuration change has been applied.
+
+## Integrated microphone at closer range
+
+After the user requested returning to the integrated microphone and indicated
+readiness for the requested 20–30 cm setup, pilots 007 and 008 used the exact
+integrated Pulse source, mono 16 kHz, temporary +12 dB Internal Mic Boost and
+Windows playback gain 0.4. Exact physical distance was not supplied and is null
+in the reports; the requested range is recorded separately.
+
+Both runs produced three nonempty final segments, all exactly matching the
+five-word reference, for six exact segments across six generated playbacks.
+This is positive evidence for this phrase and local setup, not calibrated
+confirmation evidence or a general recognition accuracy estimate. Final segment
+timestamps were not explicitly paired with playback trial boundaries.
+
+Quiet median RMS was 0.007702 and 0.011732. The opening-phase RMS maxima were
+0.319371 and 0.999969: the earlier opening transient remains unresolved. The
+three-second settling phase preceded the quiet baseline and playback, and the
+post-settling RMS abort was not triggered. Successful phrase recognition does
+not certify startup or justify ignoring the transient in a production profile.
+
+The first attempted launch stopped before playback because the ALSA card index
+had changed: PCH was card 1 rather than 0. Helios was explicitly restarted and
+the temporary runner changed to the stable PCH card name. Its cleanup now starts
+the service even if mixer restoration fails. No production code was changed.
+After both completed runs, +36 dB boost and both active services were verified.
+Persistent capture remains the integrated source. No gain/profile/threshold
+change was installed. Next validation must cover multiple phrases, denials,
+silence and echo as well as startup before a local calibrated profile is usable.
