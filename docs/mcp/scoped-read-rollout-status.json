@@ -33,11 +33,11 @@
     },
     "reboot_persistence": {
       "status": "unverified",
-      "reason": "read_runtime_deployed_reboot_and_rollback_not_verified",
+      "reason": "read_runtime_and_rollback_verified_reboot_and_capture_not_verified",
       "runtime_assembly_verified": true,
       "reboot_verified": false,
       "capture_verified": false,
-      "rollback_verified": false
+      "rollback_verified": true
     }
   },
   "hardware_results": {
@@ -54,5 +54,26 @@
     "date": "2026-10-06",
     "test": "test_explicit_home_assistant_version_and_catalog",
     "tools_call_performed": false
+  },
+  "scoped_live_test": {
+    "status": "passed",
+    "target": "Debian_x86_64_python_3_11",
+    "date": "2026-10-06",
+    "test": "test_explicit_scoped_state_read_and_independent_bridge_denial",
+    "opt_in": "HELIOS_MCP_LIVE_READS=1",
+    "physical_writes": false
+  },
+  "operational_rollback": {
+    "status": "passed",
+    "target": "Debian_x86_64_python_3_11",
+    "date": "2026-10-06",
+    "date_time_only_service_config_verified": true,
+    "bridge_endpoint_stopped_verified": true,
+    "successful_date_time_read": true,
+    "original_state_profile_restored": true,
+    "successful_state_and_date_time_reads_after_restore": true,
+    "existing_llm_config_preserved": true,
+    "machine_reboot_performed": false,
+    "physical_write_performed": false
   }
 }
