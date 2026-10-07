@@ -316,6 +316,7 @@ class VoiceAssistant:
                 input_device=settings.audio_input_device,
                 input_device_strict=settings.audio_input_strict,
                 channel_mode=settings.audio_input_channel_mode,
+                calibration_path=settings.audio_calibration_config,
                 sanity_rms_threshold=settings.audio_capture_level_min_rms,
                 capture_stall_seconds=settings.audio_capture_stall_seconds,
             )

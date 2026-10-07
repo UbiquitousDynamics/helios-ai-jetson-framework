@@ -2,9 +2,11 @@
 
 Issue #32 requires independent calibration for each deployment. This component
 adds explicit **diagnostic candidate selection**, not acoustic approval, automatic
-gain adjustment or a production confirmation verifier. `main.py` does not consume
-`HELIOS_AUDIO_CALIBRATION_CONFIG` yet. Setting it on the Helios service currently
-does not configure the recognizer or authorize actions. No shared defaults change.
+gain adjustment or a production confirmation verifier. Settings and the standard
+assistant now pass an explicitly selected `HELIOS_AUDIO_CALIBRATION_CONFIG` to the
+recognizer. Without selection the existing runtime is unchanged. A selected
+candidate checks identity and rejects mismatches; it does not authorize actions
+or apply gains or thresholds. No shared defaults change.
 
 The diagnostic command reads the exact Pulse source, active port, ALSA hardware
 identity, capture/boost gains and all mixer controls (including AGC and playback
@@ -15,9 +17,13 @@ ambiguous sources and unsupported/asymmetric capture controls fail closed.
 
 `--rate` and `--channel-mode` describe the intended capture settings. This command
 does not open an audio stream and cannot prove the running recognizer uses those
-settings. Full runtime integration must compare actual resolved capture settings,
-use live hardware identity, and validate playback provenance/echo and startup
-before any verifier can authorize writes. Candidate selection is not that gate.
+settings. The runtime additionally checks its opened Pulse source-output by PID,
+requiring one unambiguous capture stream routed to the exact source, PCM16 at the
+configured rate/channel count, unmuted/uncorked and unity stream gain. Strict
+explicit Pulse input selection is mandatory. Identity and route are checked after
+opening and before each final result, including decoder flush, before observers
+receive that final. A mismatch closes the capture and raises a speech error.
+Acoustic approval still requires playback provenance/echo and startup validation.
 
 On Debian, create a private candidate without overwriting an existing file:
 
@@ -60,7 +66,8 @@ Jetson compatibility and acoustic approval have not been verified.
 
 The injectable `DeviceBoundCalibration.require_match()` rechecks identity on each
 call. Consumers must call it at the point of use with a live identity provider;
-the helper does not run continuously or intercept the production recognizer.
+the helper does not run continuously. The standard recognizer now calls the
+binding at capture opening and final-result delivery when explicitly configured.
 Its `calibration_id` is always empty and `accepts()` always false. Even if injected
 into `VoiceActionController`, a candidate cannot arm a pending action. The current
 schema rejects `verified` status and arbitrary thresholds altogether.
@@ -68,5 +75,5 @@ schema rejects `verified` status and arbitrary thresholds altogether.
 On 2026-10-07 an isolated copy on Debian created a candidate, matched real current
 metadata, rejected a different requested rate, and verified mode 0600. Hardware
 settings and the running deployment were unchanged. Remaining #32 work includes
-startup-transient diagnosis, actual runtime binding and confirmed echo/interruption
+startup-transient diagnosis, confirmed echo/interruption
 guards, acoustic limits, authorized low-risk writes and controlled reboot evidence.
