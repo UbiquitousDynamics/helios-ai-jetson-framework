@@ -81,7 +81,15 @@ On 2026-10-07 the Debian service was updated to merged main and given an explici
 persistent integrated-microphone selector with strict resolution. See
 `MCP_DEBIAN_CAPTURE.md`. Autostart of the earlier configuration was observed after
 a different boot; the new selector still needs a controlled reboot/capture test.
-Audio device metadata does not calibrate confirmation. Physical tests require
+Audio device metadata does not calibrate confirmation.
+Calibration results are specific to the measured deployment and audio path; do
+not promote them to project-wide defaults. Select a local profile explicitly,
+bind its evidence to microphone/route identity, relevant gain/channel settings
+and model versions, and revalidate on changes. Missing or mismatched calibration
+must block voice writes. Runtime profile identity enforcement must be verified
+separately; an artifact hash alone does not establish a device match.
+
+Physical tests require
 reviewed explicit stimulus/response audio devices,
 generated-only stimuli, isolation/feedback abort setup and predeclared calibrated
 limits. `voice_test_suite.py --require-hil` reviews the baseline and never opens

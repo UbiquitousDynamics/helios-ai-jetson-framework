@@ -4,6 +4,15 @@ Issue #32 remains open. Six component pilots did not establish calibrated
 recognition or confirmation. See `mcp/debian-acoustic-pilots-2026-10-07.json`.
 These are diagnostic measurements, not acceptance-suite samples or latency results.
 
+Calibration is deployment-specific, never a shared default. These measurements
+apply only to this Debian microphone route and the recorded Windows playback
+setup, including distance, gain, channel mode and model versions. They must not
+set thresholds for other PCs, Jetson targets or microphones. Store any eventual
+validated calibration in an explicitly selected local device profile. A changed
+microphone, route or relevant audio/model setting requires new validation; a
+missing or mismatched profile must not authorize voice writes. This is a required
+deployment contract, not a claim that runtime identity checks are implemented.
+
 The user confirmed a quiet room, unobstructed devices, monitoring disabled and
 98 cm separation. Windows played generated Italian Piper speech through its
 Realtek speaker; the user confirmed hearing the three repetitions clearly.
