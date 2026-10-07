@@ -173,3 +173,39 @@ After both completed runs, +36 dB boost and both active services were verified.
 Persistent capture remains the integrated source. No gain/profile/threshold
 change was installed. Next validation must cover multiple phrases, denials,
 silence and echo as well as startup before a local calibrated profile is usable.
+
+## Varied phrases and silence
+
+Six further component pilots used the same explicit integrated source, mono
+16 kHz, temporary +12 dB boost, playback gain 0.4 and requested close placement.
+Five generated fixtures were played three times each; the sixth pilot captured
+35 seconds without a speech stimulus. Helios remained stopped during each
+capture. Aggregate results and pinned synthetic-file comparisons are in
+`mcp/debian-varied-pilots-2026-10-07.json`.
+
+| Fixture | Exact nonempty finals | Other observations |
+| --- | --- | --- |
+| Date/time request | 0/3 | One word edit each; reported confidence 1.0 each |
+| Confermo | 3/3 | Confirmation word present in each |
+| No, annulla | 0/3 | Denial word present in only 2/3; no confirmation word |
+| State request without wake word | 3/3 | Recognition only, not a wake-policy test |
+| Request naming nonexistent light | 3/3 | Recognition only, not a target-policy test |
+| Silence | No nonempty finals | One 35-second observation, not a false-positive rate |
+
+The original generated WAVs were also resampled directly to 16 kHz and supplied
+to Vosk small Italian 0.22. Date/time, confirmation, no-wake and nonexistent-target
+fixtures matched exactly offline. The denial fixture did not: its three-word
+output had two edits against the two-word reference even without the acoustic
+path. Thus the denial failure cannot be attributed solely to this microphone;
+synthetic stimulus/model compatibility needs investigation as well. No fixture
+or acceptance criterion was changed to turn these failures into passes.
+
+These samples do not calibrate confidence: a confidence of 1.0 accompanied
+incorrect date/time recognition. They also do not validate negative-action
+handling, echo suppression, interruption or live confirmation, because the
+automation runtime and executor were not involved. Startup transients recurred
+(maximum opening RMS across these pilots 0.681290); measured settling is still
+not a startup fix. +36 dB boost and both active services were verified after
+cleanup. No calibration/profile/default was installed, no user audio was retained
+and no physical write occurred. Voice confirmation remains blocked pending
+reliable denial recognition, startup and runtime echo/interruption validation.
