@@ -22,6 +22,11 @@ cancelled requests do not cause replay or invented clock readings. Speaker failu
 are propagated without retry. Only validated numeric date/time fields are spoken;
 server prose and instructions are never handed to TTS or an LLM.
 
+An explicit second `homeassistant_state` server can enable exact light-state reads
+through the separate local bridge. See `MCP_SCOPED_STATE.md` for its independent
+credential, entity allowlist and spoken alias mapping. The date/time-only profile
+does not require or start that bridge.
+
 This is a server-clock read, not a sensor query or an actuator profile. Device-state
 reads still need explicit entity scope/mapping; writes still require the separate
 calibrated confirmation and rollout evidence. The controller uses the existing

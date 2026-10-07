@@ -17,14 +17,27 @@ GET config and tools/list. It does not constitute a live state read or designate
 | --- | --- | --- |
 | Disabled checkout | No connection/action; existing voice suite | Model-free tested |
 | HA discovery | Actual version/auth/catalog; diagnostic result | Passed on Debian, Core 2025.12.3; 21 tools, zero authorized |
-| Live reads | Exact installed schema and exposed test entities | Blocked |
+| Live reads | Exact installed schema and explicitly permitted test entities | One selected light verified through the scoped local bridge |
 | Confirmed test writes | Named low-risk entities; local policy; verified confirmation | Blocked |
 | Voice acoustic release | Device calibration, echo/false-confirmation/barged speech evidence | Blocked |
-| Startup deployment | Reboot persistence, capture selection and rollback verified | Unverified |
+| Startup deployment | Reboot persistence, capture selection and rollback verified | Read runtime deployed; reboot and rollback unverified |
 
-`docs/mcp/rollout-status.json` records unknown values as null and absent evidence as
-blocked/unverified. Zero hardware samples is not a pass. No production automation was
-deployed on Debian or Jetson; the existing service is unchanged.
+`docs/mcp/scoped-read-rollout-status.json` records the current read-stage evidence;
+`rollout-status.json` preserves the original discovery-only snapshot. Both record
+unknown values as null and absent evidence as
+blocked/unverified. Zero hardware samples is not a pass. Date/time and one explicitly
+selected light-state read are deployed on Debian through #47/#48; no physical actions
+are enabled. Jetson deployment remains unverified.
+
+On 2026-10-06 the actual local read controller successfully called the scoped bridge
+on Debian. The bridge uses only an exact `GET /api/states/<entity_id>`, with an
+independent bridge bearer token and dedicated read-only HA credentials. Live calls
+verified rejection of a different entity and of an invalid bridge token. Entity IDs,
+credentials and raw state attributes remain private; the bounded operator evidence
+is `docs/mcp/home-assistant-2025.12.3-scoped-read.json`. This proves the scoped
+software read, not microphone recognition, confirmation or physical actuation.
+Here `exposure_verified` refers to the bridge's independent exact allowlist;
+it does not certify native Assist exposure. See `MCP_SCOPED_STATE.md`.
 
 On 2026-10-06 the PR's opt-in `test_explicit_home_assistant_version_and_catalog`
 passed on Debian x86_64/Python 3.11 in the isolated diagnostic environment. It used
@@ -41,12 +54,20 @@ reason code. The CLI opens no network/audio connection and never enables automat
 CI checks the bundled discovery record on every OS/Python matrix entry, without
 using credentials or opting into the live test.
 
+Review the newer selected-light evidence with `python scripts/mcp_rollout_check.py
+--manifest docs/mcp/scoped-read-rollout-status.json --stage live_reads`. This passes
+the scoped software read stage; selecting `voice_writes` remains blocked on missing
+voice-confirmation evidence. The original discovery snapshot and its regression
+tests remain intact.
+
 Stages are ordered: `home_assistant_discovery`, `live_reads`, `voice_confirmation`,
 `voice_writes`, `reboot_persistence`. Later stages require all earlier stages.
 The discovery artifact must be bounded, local and match its recorded SHA-256.
 Read evidence requires verified exact target mapping, exposure, permission and at
 least one successful scoped read. The installed intent schemas have no entity-ID
 selector; claiming that the catalog is present cannot satisfy these read gates.
+The selected state read therefore uses the separate allowlisted MCP bridge, rather
+than native GetLiveContext. It proves exact REST permission and bridge exposure.
 
 Acoustic evidence requires a target profile, calibration artifact hash, calibration
 verification, predeclared thresholds, positive samples, zero failures and finite,
@@ -79,8 +100,8 @@ current Debian integrated microphone. Windows CI cannot certify Jetson hardware.
 
 Rollout and rollback are described in MCP_HOME_ASSISTANT.md. Concurrent confirmation
 barge-in software is implemented by #42; acoustic confirmation and interruption on
-the Debian microphone still require calibration and verification. Production assembly,
-exact HA target mapping and reboot evidence remain deployment gates. The validation
+the Debian microphone still require calibration and verification. Read-runtime assembly
+and one exact HA target are verified; reboot evidence remains missing. The validation
 PR is reviewable while those gates correctly report blocked; merging validation does
 not authorize live writes. Preserve the ledger when disabling configuration or
 revoking tokens.

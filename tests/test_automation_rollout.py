@@ -123,3 +123,14 @@ def test_bundled_record_only_passes_discovery_and_cli_is_content_free(capsys):
         "status": "blocked",
         "reason_code": "live_reads_evidence_missing",
     }
+
+
+def test_scoped_read_record_passes_reads_but_blocks_voice_writes(capsys):
+    path = ROOT / "docs/mcp/scoped-read-rollout-status.json"
+    assert check_rollout(path, "live_reads").status == "passed"
+    assert main(["--manifest", str(path), "--stage", "voice_writes"]) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "stage": "voice_writes",
+        "status": "blocked",
+        "reason_code": "voice_confirmation_evidence_missing",
+    }
