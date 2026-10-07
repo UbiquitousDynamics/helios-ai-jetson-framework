@@ -77,3 +77,24 @@ metadata, rejected a different requested rate, and verified mode 0600. Hardware
 settings and the running deployment were unchanged. Remaining #32 work includes
 startup-transient diagnosis, confirmed echo/interruption
 guards, acoustic limits, authorized low-risk writes and controlled reboot evidence.
+
+## Runtime verification on Debian
+
+At commit `44ab27b`, the Windows suite passed 2309 tests (4 skipped); the Debian
+QA checkout passed 2310 (3 skipped). Ruff check and format passed on both.
+An actual integrated-microphone pilot selected a locally created candidate at
+temporary +12 dB boost with the new capture identity and Pulse source-output
+guards enabled. All three nonempty finals passed those guards, but none matched
+the reference. One long segment included the pre-playback interval, and final
+segments were not aligned one-to-one to stimulus repetitions. Thus this validates
+operation of the binding checks, not acoustic quality or confirmation safety.
+
+After restoring +36 dB boost, a second actual recognizer rejected the +12 dB
+candidate before delivering recognition. This verifies live gain-mismatch denial,
+not just a fixture or a CLI comparison. Both services were active after cleanup;
+the production service was not configured to select a calibration file and no
+gain/threshold default changed. Evidence is in
+`mcp/debian-runtime-profile-2026-10-07.json`. The earlier six exact close-range
+state segments remain historical evidence, not a guarantee of repeatability.
+Startup stability, room/background variation and runtime echo/interruption
+validation still block acoustic approval.
