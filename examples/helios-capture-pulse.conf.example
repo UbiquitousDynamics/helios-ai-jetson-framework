@@ -1,0 +1,5 @@
+# Documentation only: replace the source with the exact name on your target.
+# Install as a helios.service drop-in only after checking source availability.
+[Service]
+Environment=HELIOS_AUDIO_INPUT_DEVICE=pulse:REPLACE_WITH_EXACT_PULSE_SOURCE
+Environment=HELIOS_AUDIO_INPUT_STRICT=true
