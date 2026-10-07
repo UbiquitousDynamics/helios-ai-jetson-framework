@@ -65,3 +65,32 @@ Next, diagnose channel integrity, DC/noise and the physical input path before
 calibration and the confirmation/negative/echo/interruption suite. Controlled
 reboot with the new configuration and designated test writes remain unverified.
 Voice writes remain disabled; current Home Assistant credentials are read-only.
+
+## Follow-up channel diagnostics at 50 cm
+
+Two further acquisitions kept playback gain 0.4 and temporary mic boost +12 dB.
+Each opened the explicit Pulse source as stereo PCM16 at 16 kHz, with 1600-frame
+reads. Left, right and arithmetic-average signals were submitted to separate
+Vosk recognizers from the same acquisition; these are not independent trials.
+Only aggregate levels and edit counts were retained. Evidence is in
+`mcp/debian-channel-diagnostics-2026-10-07.json`.
+
+Each acquisition produced three nonempty final segments per channel, with exactly
+one matching the reference on each channel. Other segments still had word errors.
+Quiet median RMS for the averaged channel was 0.005714 and 0.007793. Median
+uncentered channel correlation in the playback wall-clock window was 0.973246
+and 0.990657. The phase medians for rail fraction were zero; this does not assert
+that every individual sample was unclipped. These observations do not suggest
+destructive stereo cancellation or establish a consistently superior channel.
+
+The opening transient observed in earlier pilots remains unresolved; these
+opening-phase median summaries cannot rule out brief transients. Processing
+three recognizers also changes diagnostic workload. Phase windows use local
+processing time rather than synchronized acoustic timestamps, so their levels
+are descriptive and must not be used for SNR, latency or production performance
+claims. Final segments are not explicitly matched to playback trial boundaries.
+
+No calibrated profile or thresholds were installed. Original +36 dB boost was
+restored and both services restarted successfully. Recognition remains too
+inconsistent to validate voice confirmation; further input-path and stimulus
+diagnostics are needed before deployment-specific calibration.
