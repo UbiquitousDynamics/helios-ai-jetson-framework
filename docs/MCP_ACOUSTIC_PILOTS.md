@@ -94,3 +94,37 @@ No calibrated profile or thresholds were installed. Original +36 dB boost was
 restored and both services restarted successfully. Recognition remains too
 inconsistent to validate voice confirmation; further input-path and stimulus
 diagnostics are needed before deployment-specific calibration.
+
+## USB input follow-up
+
+After reconnecting, Debian enumerated USB PnP Sound Device (`8086:0808`), using
+`snd_usb_audio`, as the mono Pulse source
+`alsa_input.usb-C-Media_Electronics_Inc._USB_PnP_Sound_Device-00.mono-fallback`.
+The tests selected that source explicitly and left persistent Helios input
+configuration unchanged. The physical microphone/adapter assembly is not yet
+confirmed; enumeration of a USB audio interface alone does not verify its capsule.
+
+Three pilots used the same generated phrase and Windows playback gain 0.4, with
+the previous 50 cm bench distance as the comparison setup. The new capsule's
+exact position relative to the speaker has not been independently confirmed.
+
+| USB pilot | Hardware Mic level | Auto Gain Control | Quiet median RMS | Nonempty recognized finals |
+| --- | --- | --- | --- | --- |
+| 001 | 16/16 (+23.81 dB) | On | 0.164349 | 0 |
+| 002 | 16/16 | Off temporarily | 0.139994 | 0 |
+| 003 | 8/16 | Off temporarily | 0.039199 | 0 |
+
+A separate one-second explicit-source `parec` check measured RMS 0.146015,
+DC mean -0.000166, peak 0.281464 and zero rail samples. Ten PortAudio buffers
+also showed high RMS without significant DC offset or rail samples. These
+observations do not identify a root cause; they do not establish a healthy
+physical microphone or justify installing a calibration. The inherited
+`startup_transient_is_unresolved` flag tracks the unresolved earlier investigation,
+not proof that the USB device reproduced the integrated microphone's transient.
+
+Raw audio and microphone transcripts were not retained. Aggregate pilot evidence
+is in `mcp/debian-usb-diagnostics-2026-10-07.json`. Hardware Mic level 16/16 and
+Auto Gain Control on were restored, both services were active, and the production
+input selector still points to the integrated microphone. No thresholds, local
+calibration profile or project defaults were changed. Verify the physical USB
+microphone/adapter connection and positioning before further gain trials.
