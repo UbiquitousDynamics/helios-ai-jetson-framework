@@ -207,6 +207,59 @@
       "calibration_verified": false,
       "user_audio_retained": false,
       "physical_write_performed": false
+    },
+    {
+      "schema_version": 1,
+      "date": "2026-10-07",
+      "status": "pilot_measurements_only",
+      "generated_speech_only": true,
+      "distance_cm": 50,
+      "fixture_id": "it-state",
+      "stimulus_repetitions_requested": 3,
+      "playback_gain": 0.4,
+      "temporary_internal_mic_boost_db": 12,
+      "restore_internal_mic_boost_db": 36,
+      "capture_channel_mode": "stronger",
+      "startup_rms_max": 0.012203797007305553,
+      "startup_transient_is_unresolved": true,
+      "quiet_frames": 50,
+      "quiet_rms_median": 0.006789304619976808,
+      "quiet_rms_max": 0.013118938212773374,
+      "total_frames": 228,
+      "overall_rms_max": 0.06761007654402104,
+      "recognized_finals": [
+        {
+          "reference_word_count": 5,
+          "recognized_word_count": 6,
+          "word_error_count": 3,
+          "exact_match": false,
+          "confidence": 0.8632599999999999,
+          "segment_peak_rms": 0.06761007654402104,
+          "speech_duration_seconds": 1.9800000000000004
+        },
+        {
+          "reference_word_count": 5,
+          "recognized_word_count": 6,
+          "word_error_count": 2,
+          "exact_match": false,
+          "confidence": 0.8806039999999999,
+          "segment_peak_rms": 0.06020052130072756,
+          "speech_duration_seconds": 2.009999999999998
+        },
+        {
+          "reference_word_count": 5,
+          "recognized_word_count": 6,
+          "word_error_count": 3,
+          "exact_match": false,
+          "confidence": 0.7890915,
+          "segment_peak_rms": 0.06198476576873509,
+          "speech_duration_seconds": 2.009999999999998
+        }
+      ],
+      "safety_aborted": false,
+      "calibration_verified": false,
+      "user_audio_retained": false,
+      "physical_write_performed": false
     }
   ]
 }

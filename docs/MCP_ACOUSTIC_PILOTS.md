@@ -1,6 +1,6 @@
 # Debian acoustic pilots, 2026-10-07
 
-Issue #32 remains open. Five component pilots did not establish calibrated
+Issue #32 remains open. Six component pilots did not establish calibrated
 recognition or confirmation. See `mcp/debian-acoustic-pilots-2026-10-07.json`.
 These are diagnostic measurements, not acceptance-suite samples or latency results.
 
@@ -22,6 +22,15 @@ path, but does not identify the defective hardware or a single root cause.
 | 003 | +24 dB | 0.2 | 0.028789 | No exact recognized segment |
 | 004 | +12 dB | 0.4 | 0.007486 | No exact recognized segment |
 | 005 | +12 dB | 0.4 | 0.014695 | Stronger stereo channel; no exact segment |
+| 006 | +12 dB | 0.4 | 0.006789 | At 50 cm, stronger channel; no exact segment |
+
+For pilot 006 the user moved the Windows speaker to 50 cm. Playback and capture
+parameters matched pilot 005. Three recognized final segments had respectively
+3, 2 and 3 word edits against the five-word reference; none matched exactly.
+This is consistent with distance contributing to recognition failure, but a
+single repeat with a different measured quiet level does not isolate distance
+as the only cause or establish reliable recognition. The microphone boost was
+again restored to +36 dB and both services were active after the trial.
 
 The playback gain is a multiplier on generated PCM; Windows master volume was
 1.0 and unmuted. Pilot 001 aborted before playback. Later pilots explicitly
