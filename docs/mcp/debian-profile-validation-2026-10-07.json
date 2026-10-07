@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-07",
+  "candidate_creation_verified": true,
+  "current_identity_match_verified": true,
+  "different_requested_rate_denied": true,
+  "private_profile_mode_verified": true,
+  "profile_sha256": "ad063c534d821d7a44037fc8eabbc8dae1904e61e6357d73524af365cda24f0a",
+  "captured_baseline_boost_db": 36.0,
+  "captured_baseline_gain_db": 30.0,
+  "live_audio_capture_performed": false,
+  "hardware_settings_changed": false,
+  "voice_writes_enabled": false,
+  "calibration_verified": false,
+  "production_runtime_integration": false
+}
