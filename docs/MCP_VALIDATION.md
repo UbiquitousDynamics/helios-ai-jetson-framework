@@ -40,21 +40,15 @@ the metadata-only discovery flag does not permit it. The test checks a selected
 state read and the bridge's denial of an unconfigured entity. It opens no microphone,
 does not send model requests and cannot enable device actions. Ordinary CI skips it.
 
-Operational rollback was exercised on Debian on 2026-10-06: stop Helios, select
-the private date/time-only EnvironmentFile, reload systemd, stop the bridge and
-restart Helios. The running process had one authorized server, no state aliases,
-and a successful actual date/time read; bridge port 8124 was not listening.
-Restore the previous state-profile drop-in, reload/start the bridge and restart
-Helios. Both actual scoped state and date/time reads succeeded afterward, both
-services remained enabled, and the existing LLM configuration was preserved.
-No machine reboot or physical light action was performed. The private pre-test
-drop-in remains on the device for recovery; receipt ledgers were preserved.
+Operational rollback, deployment and reboot results must be recorded privately.
+Calibration results are specific to the measured deployment and audio path; do
+not promote them to project-wide defaults. Select a local profile explicitly,
+bind its evidence to microphone/route identity, relevant gain/channel settings
+and model versions, and revalidate on changes. Missing or mismatched calibration
+must block voice writes. Runtime profile identity enforcement must be verified
+separately; an artifact hash alone does not establish a device match.
 
-On 2026-10-07 the Debian service was updated to merged main and given an explicit
-persistent integrated-microphone selector with strict resolution. See
-`MCP_DEBIAN_CAPTURE.md`. Autostart of the earlier configuration was observed after
-a different boot; the new selector still needs a controlled reboot/capture test.
-Audio device metadata does not calibrate confirmation. Physical tests require
+Physical tests require
 reviewed explicit stimulus/response audio devices,
 generated-only stimuli, isolation/feedback abort setup and predeclared calibrated
 limits. `voice_test_suite.py --require-hil` reviews the baseline and never opens
