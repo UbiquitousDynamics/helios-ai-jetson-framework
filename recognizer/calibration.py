@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 from collections.abc import Callable, Mapping
@@ -222,3 +223,46 @@ def pulse_audio_identity(
         )
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
         raise CalibrationError("Live Linux audio identity unavailable") from exc
+
+
+def verify_pulse_stream(
+    source: str,
+    *,
+    sample_rate_hz: int,
+    channels: int,
+    process_id: int | None = None,
+    command: Callable[[list[str]], str] = _command,
+) -> None:
+    """Verify the opened process stream, not merely the existence of a named source."""
+    try:
+        sources = json.loads(command(["pactl", "--format=json", "list", "sources"]))
+        selected = [item for item in sources if item.get("name") == source]
+        streams = json.loads(command(["pactl", "--format=json", "list", "source-outputs"]))
+        pid = str(os.getpid() if process_id is None else process_id)
+        owned = [
+            item
+            for item in streams
+            if str(item.get("properties", {}).get("application.process.id")) == pid
+        ]
+        if len(selected) != 1 or len(owned) != 1:
+            raise CalibrationError("Opened capture route unavailable or ambiguous")
+        stream = owned[0]
+        if (
+            stream.get("source") != selected[0]["index"]
+            or stream.get("sample_specification") != f"s16le {channels}ch {sample_rate_hz}Hz"
+            or stream.get("mute") is not False
+            or stream.get("corked") is not False
+        ):
+            raise CalibrationError("Opened capture route or format mismatch")
+        volumes = stream["volume"]
+        if (
+            not isinstance(volumes, dict)
+            or len(volumes) != channels
+            or any(
+                not isinstance(v, dict) or type(v.get("value")) is not int or v["value"] != 65536
+                for v in volumes.values()
+            )
+        ):
+            raise CalibrationError("Unexpected per-stream capture gain")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+        raise CalibrationError("Cannot verify opened Pulse capture stream") from exc

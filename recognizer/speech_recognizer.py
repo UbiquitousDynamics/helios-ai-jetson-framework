@@ -17,6 +17,13 @@ from typing import Any
 
 import config
 from recognizer.barge_in_detector import pcm16_rms
+from recognizer.calibration import (
+    AudioIdentity,
+    DeviceBoundCalibration,
+    load_profile,
+    pulse_audio_identity,
+    verify_pulse_stream,
+)
 
 from recognizer.turn_endpoint_detector import EndpointAction
 
@@ -109,6 +116,9 @@ class SpeechRecognizer:
         sanity_rms_threshold: float = 0.0,
         sanity_window_seconds: float = 1.0,
         capture_stall_seconds: float = 5.0,
+        calibration_path: str | Path | None = None,
+        calibration_probe: Callable[[], AudioIdentity] | None = None,
+        calibration_stream_probe: Callable[[], None] | None = None,
     ) -> None:
         if rate <= 0 or chunk <= 0:
             raise ValueError("rate and chunk must be greater than zero")
@@ -146,6 +156,40 @@ class SpeechRecognizer:
             raise ValueError("capture_stall_seconds must be positive")
 
         self.model_path = Path(model_path)
+        self._calibration = None
+        self._calibration_stream_probe = calibration_stream_probe
+        if calibration_path is not None:
+            if (
+                not input_device_strict
+                or not isinstance(input_device, str)
+                or not input_device.startswith("pulse:")
+            ):
+                raise ValueError("Calibration selection requires an explicit strict Pulse source")
+            profile = load_profile(calibration_path)
+            if (
+                profile.identity.input_source != input_device[6:]
+                or profile.identity.sample_rate_hz != rate
+                or profile.identity.channel_mode != channel_mode
+            ):
+                raise ValueError("Calibration does not match configured capture format/source")
+            self._calibration = DeviceBoundCalibration(
+                profile,
+                calibration_probe
+                or (
+                    lambda: pulse_audio_identity(
+                        input_device[6:],
+                        self.model_path,
+                        sample_rate_hz=self.rate,
+                        channel_mode=self.channel_mode,
+                    )
+                ),
+            )
+            if self._calibration_stream_probe is None:
+                self._calibration_stream_probe = lambda: verify_pulse_stream(
+                    input_device[6:],
+                    sample_rate_hz=self.rate,
+                    channels=1 if self.channel_mode == "mono" else 2,
+                )
         self.model = model
         self.p = audio_interface
         self._recognizer_factory = recognizer_factory
@@ -568,6 +612,23 @@ class SpeechRecognizer:
             port or "unknown",
         )
 
+    def _check_calibration(self, selected_index: int | None) -> None:
+        if self._calibration is None:
+            return
+        if selected_index is None or self._selected_pulse_source is None:
+            raise SpeechRecognitionError("Calibration requires an explicitly resolved input")
+        info = self.p.get_device_info_by_index(selected_index)
+        if str(info.get("name", "")).casefold() != "pulse":
+            raise SpeechRecognitionError("Calibration input is not the selected Pulse backend")
+        try:
+            if os.environ.get("PULSE_SOURCE") != self._selected_pulse_source:
+                raise SpeechRecognitionError("Selected Pulse source changed")
+            self._calibration_stream_probe()
+            self._calibration.require_match()
+        except Exception as exc:
+            logger.warning("event=capture_calibration_mismatch")
+            raise SpeechRecognitionError("Selected calibration identity does not match") from exc
+
     def listen_events(
         self,
         timeout: float | None = None,
@@ -675,6 +736,8 @@ class SpeechRecognizer:
                     capture_id=capture_id,
                     revision=next_revision(),
                 )
+            if final_event is not None:
+                self._check_calibration(input_device_index)
             action = (
                 on_frame(final_event or RecognitionResult("", is_final=True), last_frame_energy)
                 if on_frame
@@ -730,6 +793,9 @@ class SpeechRecognizer:
             )
             stall_monitor.start()
             self._log_capture_identity(input_device_index)
+            self._check_calibration(input_device_index)
+            if self._calibration is not None:
+                logger.info("event=capture_calibration_candidate_matched approved=false")
             recognizer = self._recognizer_factory(self.model, self.rate)
             self._enable_word_metadata(recognizer)
             logger.info(
@@ -839,6 +905,8 @@ class SpeechRecognizer:
                             revision=next_revision(),
                         )
 
+                if frame_result is not None and frame_result.is_final:
+                    self._check_calibration(input_device_index)
                 action = on_frame(frame_result, last_frame_energy) if on_frame else None
                 if frame_result is not None and action not in {
                     EndpointAction.DISCARD,

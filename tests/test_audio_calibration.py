@@ -18,7 +18,7 @@ from recognizer.calibration import (
 def identity():
     return AudioIdentity(
         "test-debian",
-        "pulse:test",
+        "test",
         "test-card",
         "test-port",
         "a" * 64,
@@ -298,3 +298,208 @@ def test_candidate_cannot_arm_existing_action_controller(profile_path, identity)
     assert voice.state == VoiceActionState.CLARIFICATION
     assert voice.pending is None
     assert executor.calls == []
+
+
+def runtime_recognizer(profile_path, identity, probe=None):
+    from recognizer.speech_recognizer import SpeechRecognizer
+    from tests.test_recognizer import FakeAudio, FinalRecognizer
+
+    class PulseAudio(FakeAudio):
+        def get_device_count(self):
+            return 1
+
+        def get_device_info_by_index(self, index):
+            return {"name": "pulse", "maxInputChannels": 2, "defaultSampleRate": 16000}
+
+    audio = PulseAudio()
+    return SpeechRecognizer(
+        model=object(),
+        audio_interface=audio,
+        recognizer_factory=FinalRecognizer,
+        input_device="pulse:test",
+        input_device_strict=True,
+        pulse_sources=lambda: ("test",),
+        calibration_path=profile_path,
+        calibration_probe=probe or (lambda: identity),
+        calibration_stream_probe=lambda: None,
+    ), audio
+
+
+def test_runtime_selected_profile_checks_open_and_final(profile_path, identity):
+    calls = []
+
+    def probe():
+        calls.append(True)
+        return identity
+
+    recognizer, audio = runtime_recognizer(profile_path, identity, probe)
+    events = recognizer.listen_events()
+    try:
+        assert next(events).is_final
+        assert len(calls) == 2
+        assert audio.open_kwargs["channels"] == 1
+        assert audio.open_kwargs["rate"] == 16000
+    finally:
+        events.close()
+        recognizer.close()
+    assert audio.stream.closed
+
+
+def test_runtime_identity_change_blocks_final_before_observer(profile_path, identity):
+    from recognizer.speech_recognizer import SpeechRecognitionError
+
+    identities = iter((identity, replace(identity, microphone_boost_db=36)))
+    recognizer, audio = runtime_recognizer(profile_path, identity, lambda: next(identities))
+    observed = []
+    try:
+        with pytest.raises(SpeechRecognitionError, match="does not match"):
+            next(recognizer.listen_events(on_frame=lambda *args: observed.append(args)))
+    finally:
+        recognizer.close()
+    assert observed == []
+    assert audio.stream.closed
+
+
+def test_runtime_invalid_identity_closes_stream_at_open(profile_path, identity):
+    from recognizer.speech_recognizer import SpeechRecognitionError
+
+    recognizer, audio = runtime_recognizer(
+        profile_path, identity, lambda: replace(identity, deployment_id="other-machine")
+    )
+    try:
+        with pytest.raises(SpeechRecognitionError):
+            next(recognizer.listen_events())
+    finally:
+        recognizer.close()
+    assert audio.stream.closed
+
+
+@pytest.mark.parametrize("device,strict", [(None, True), (0, True), ("pulse:test", False)])
+def test_runtime_profile_requires_strict_explicit_source(profile_path, device, strict):
+    from recognizer.speech_recognizer import SpeechRecognizer
+
+    with pytest.raises(ValueError, match="explicit strict"):
+        SpeechRecognizer(
+            model=object(),
+            input_device=device,
+            input_device_strict=strict,
+            calibration_path=profile_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("sample_rate_hz", 48000), ("channel_mode", "stronger"), ("input_source", "other")],
+)
+def test_runtime_profile_rejects_different_configured_format(profile_path, identity, field, value):
+    data = json.loads(profile_path.read_text())
+    data["identity"] = asdict(replace(identity, **{field: value}))
+    profile_path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="capture format/source"):
+        runtime_recognizer(profile_path, identity)
+
+
+def test_settings_profile_selection_is_explicit_and_project_rooted(tmp_path):
+    import config
+
+    assert (
+        config.Settings.from_env(project_root=tmp_path, environ={}).audio_calibration_config is None
+    )
+    selected = config.Settings.from_env(
+        environ={"HELIOS_AUDIO_CALIBRATION_CONFIG": "local-candidate.json"}, project_root=tmp_path
+    )
+    assert selected.audio_calibration_config == tmp_path / "local-candidate.json"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [None, "route", "rate", "gain", "muted", "corked", "other_pid", "duplicate", "no_source"],
+)
+def test_opened_pulse_stream_route_and_format_are_verified(mutation):
+    from recognizer.calibration import verify_pulse_stream
+
+    sources = [{"name": "test", "index": 17}]
+    stream = {
+        "source": 17,
+        "sample_specification": "s16le 1ch 16000Hz",
+        "mute": False,
+        "corked": False,
+        "volume": {"mono": {"value": 65536}},
+        "properties": {"application.process.id": "123"},
+    }
+    streams = [stream]
+    if mutation == "route":
+        stream["source"] = 18
+    elif mutation == "rate":
+        stream["sample_specification"] = "s16le 1ch 48000Hz"
+    elif mutation == "gain":
+        stream["volume"]["mono"]["value"] = 60000
+    elif mutation == "muted":
+        stream["mute"] = True
+    elif mutation == "corked":
+        stream["corked"] = True
+    elif mutation == "other_pid":
+        stream["properties"]["application.process.id"] = "456"
+    elif mutation == "duplicate":
+        streams.append(dict(stream))
+    elif mutation == "no_source":
+        sources.clear()
+
+    def command(args):
+        return json.dumps(streams if args[-1] == "source-outputs" else sources)
+
+    if mutation is None:
+        verify_pulse_stream(
+            "test", sample_rate_hz=16000, channels=1, process_id=123, command=command
+        )
+    else:
+        with pytest.raises(CalibrationError):
+            verify_pulse_stream(
+                "test", sample_rate_hz=16000, channels=1, process_id=123, command=command
+            )
+
+
+def test_runtime_flush_rechecks_before_final_observer(profile_path, identity):
+    from recognizer.speech_recognizer import SpeechRecognitionError
+    from recognizer.turn_endpoint_detector import EndpointAction
+    from tests.test_recognizer import PendingRecognizer
+
+    identities = iter((identity, replace(identity, deployment_id="changed")))
+    recognizer, audio = runtime_recognizer(profile_path, identity, lambda: next(identities))
+    recognizer._recognizer_factory = PendingRecognizer
+    observed = []
+
+    def observe(result, energy):
+        observed.append(result)
+        return EndpointAction.REQUEST_FINAL_RESULT
+
+    events = recognizer.listen_events(on_frame=observe)
+    try:
+        assert next(events).is_final is False
+        with pytest.raises(SpeechRecognitionError):
+            next(events)
+    finally:
+        events.close()
+        recognizer.close()
+    assert len(observed) == 1
+    assert observed[0].is_final is False
+    assert audio.stream.closed
+
+
+def test_runtime_route_change_blocks_result_even_when_source_identity_matches(
+    profile_path, identity
+):
+    from recognizer.speech_recognizer import SpeechRecognitionError
+
+    recognizer, audio = runtime_recognizer(profile_path, identity)
+
+    def invalid_route():
+        raise CalibrationError("Stream moved")
+
+    recognizer._calibration_stream_probe = invalid_route
+    try:
+        with pytest.raises(SpeechRecognitionError):
+            next(recognizer.listen_events())
+    finally:
+        recognizer.close()
+    assert audio.stream.closed
