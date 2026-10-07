@@ -209,3 +209,38 @@ not a startup fix. +36 dB boost and both active services were verified after
 cleanup. No calibration/profile/default was installed, no user audio was retained
 and no physical write occurred. Voice confirmation remains blocked pending
 reliable denial recognition, startup and runtime echo/interruption validation.
+
+## Isolated denial words and Debian speaker leakage
+
+After the user explicitly placed the bench at 20–30 cm, two additional synthetic
+fixtures tested isolated "No" and "Annulla" at the same temporary +12 dB boost
+and Windows gain 0.4. They supplement, rather than replace, the failed compound
+denial. Exact final segments were 1/3 and 2/3 respectively; no segment contained
+"confermo". The original generated "No" file matched offline, while "Annulla"
+already had two word edits offline. These results still do not establish a
+calibrated acoustic acceptance threshold.
+
+Separately, Debian played its pinned original "Confermo" WAV three times using
+unchanged default `aplay` output while its integrated microphone captured audio.
+All three playback processes returned zero. Three nonempty final segments were
+observed, one exactly "confermo", with segment peak RMS 0.076419 and confidence
+1.0. The other two segments differed from the reference. Thus own-speaker leakage
+can reproduce the confirmation word in raw recognition. Echo suppression and
+the action runtime were deliberately not active in this component measurement:
+this does not demonstrate an authorized action or failure of the full runtime's
+existing timing/capture guards. It does require full playback provenance and
+echo/interruption validation before enabling a calibrated confirmation verifier.
+The close-range Windows distance metadata does not measure the physical distance
+between Debian's own speaker and microphone.
+
+Code inspection shows that pending action confirmation accepts only exact
+"confermo" with the additional verifier, capture, timing and cancellation checks;
+other replies cancel. Imperfect denial transcription therefore does not itself
+prove unsafe action approval. No actual pending action was tested here.
+
+Evidence, new generated-fixture hashes and offline comparisons are recorded in
+`mcp/debian-denial-echo-2026-10-07.json`. No user audio/transcripts were retained.
+The integrated boost was restored to +36 dB and both services were active.
+No calibrated profile, gain default, suppression threshold or production code
+was changed. Full runtime echo/confirmation and interruption evidence remains
+missing; startup transients remain unresolved and voice writes stay disabled.
