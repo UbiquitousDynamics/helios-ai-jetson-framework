@@ -33,7 +33,7 @@
     },
     "reboot_persistence": {
       "status": "unverified",
-      "reason": "read_runtime_and_rollback_verified_reboot_and_capture_not_verified",
+      "reason": "explicit_capture_and_rollback_configured_controlled_reboot_and_speech_capture_unverified",
       "runtime_assembly_verified": true,
       "reboot_verified": false,
       "capture_verified": false,
@@ -75,5 +75,12 @@
     "existing_llm_config_preserved": true,
     "machine_reboot_performed": false,
     "physical_write_performed": false
+  },
+  "capture_configuration": {
+    "status": "explicit_route_verified_after_service_restart",
+    "evidence_file": "debian-capture-2026-10-07.json",
+    "strict_resolution": true,
+    "controlled_reboot_verified": false,
+    "acoustic_calibration_verified": false
   }
 }

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-07",
+  "target": "Debian_x86_64_python_3_11",
+  "runtime_commit": "de4706d",
+  "status": "explicit_capture_verified_after_service_restart",
+  "capture": {
+    "persistent_systemd_dropin": true,
+    "strict_resolution": true,
+    "requested_source": "pulse:alsa_input.pci-0000_00_1b.0.analog-stereo",
+    "resolved_backend": "pulse",
+    "resolved_index_at_observation": 12,
+    "active_port": "analog-input-internal-mic",
+    "channels": 1,
+    "sample_rate_hz": 16000,
+    "fallback_observed": false,
+    "voice_ready": true,
+    "gain_or_threshold_changed": false
+  },
+  "earlier_configuration_boot_observation": {
+    "different_boot_observed": true,
+    "helios_active_enter_microseconds_after_boot": 16018491,
+    "bridge_active_enter_microseconds_after_boot": 16010965,
+    "both_services_active_and_enabled": true,
+    "covers_new_capture_dropin": false
+  },
+  "validation": {
+    "model_free_passed": 2247,
+    "model_free_skipped": 3,
+    "explicit_live_read_test_passed": 1,
+    "ruff_lint_and_format_passed": true
+  },
+  "limitations": {
+    "new_configuration_reboot_tested": false,
+    "controlled_generated_speech_capture_tested": false,
+    "acoustic_confirmation_calibrated": false,
+    "physical_write_performed": false,
+    "user_speech_recorded_for_validation": false
+  }
+}
