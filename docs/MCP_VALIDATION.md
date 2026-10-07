@@ -28,12 +28,19 @@ reason code. The CLI opens no network/audio connection and never enables automat
 CI checks the synthetic discovery fixture on every OS/Python matrix entry, without
 using credentials or opting into the live test.
 
+Review the newer selected-light evidence with `python scripts/mcp_rollout_check.py
+--manifest docs/mcp/scoped-read-rollout-status.json --stage live_reads`. This exercises
+the fictional scoped software read stage; selecting `voice_writes` remains blocked on missing
+voice-confirmation evidence. The examples contain no actual deployment evidence.
+
 Stages are ordered: `home_assistant_discovery`, `live_reads`, `voice_confirmation`,
 `voice_writes`, `reboot_persistence`. Later stages require all earlier stages.
 The discovery artifact must be bounded, local and match its recorded SHA-256.
 Read evidence requires verified exact target mapping, exposure, permission and at
 least one successful scoped read. The installed intent schemas have no entity-ID
 selector; claiming that the catalog is present cannot satisfy these read gates.
+The selected state read therefore uses the separate allowlisted MCP bridge, rather
+than native GetLiveContext. It proves exact REST permission and bridge exposure.
 
 Acoustic evidence requires a target profile, calibration artifact hash, calibration
 verification, predeclared thresholds, positive samples, zero failures and finite,
