@@ -6,6 +6,38 @@
   "calibration_verified": false,
   "physical_writes": false,
   "user_audio_retained": false,
+  "complete_usb_microphone_user_confirmed": true,
+  "quiet_spectrum": {
+    "schema_version": 1,
+    "date": "2026-10-07",
+    "status": "quiet_spectrum_diagnostic_not_calibration",
+    "source": "alsa_input.usb-C-Media_Electronics_Inc._USB_PnP_Sound_Device-00.mono-fallback",
+    "audio_retained": false,
+    "samples": [
+      {
+        "rate": 16000,
+        "seconds": 2,
+        "rms": 0.057383598109453336,
+        "dc_mean": -0.00014161396026611328,
+        "peak": 0.123046875,
+        "dominant_frequency_hz": 50.0,
+        "dominant_bin_power_fraction": 0.5659701938293958,
+        "power_below_100_hz_fraction": 0.8486347689230147,
+        "power_above_4000_hz_fraction": 3.096086845958363e-06
+      },
+      {
+        "rate": 48000,
+        "seconds": 2,
+        "rms": 0.056885471982810076,
+        "dc_mean": 3.603967030843099e-05,
+        "peak": 0.122100830078125,
+        "dominant_frequency_hz": 50.0,
+        "dominant_bin_power_fraction": 0.5653686148003018,
+        "power_below_100_hz_fraction": 0.8484869370245097,
+        "power_above_4000_hz_fraction": 1.3547394546174976e-05
+      }
+    ]
+  },
   "runs": [
     {
       "schema_version": 1,
@@ -81,6 +113,36 @@
       "quiet_rms_max": 0.03951623275996703,
       "total_frames": 450,
       "overall_rms_max": 0.039690982006332524,
+      "recognized_finals": [],
+      "safety_aborted": false,
+      "calibration_verified": false,
+      "user_audio_retained": false,
+      "physical_write_performed": false
+    },
+    {
+      "schema_version": 1,
+      "date": "2026-10-07",
+      "status": "pilot_measurements_only",
+      "generated_speech_only": true,
+      "distance_cm": null,
+      "requested_distance_cm_range": [
+        20,
+        30
+      ],
+      "complete_usb_microphone_user_confirmed": true,
+      "fixture_id": "it-state",
+      "stimulus_repetitions_requested": 3,
+      "playback_gain": 0.4,
+      "usb_volume_percent": 100,
+      "internal_mic_gain_changed": false,
+      "capture_channel_mode": "mono",
+      "startup_rms_max": 0.057922755763630505,
+      "startup_transient_is_unresolved": true,
+      "quiet_frames": 50,
+      "quiet_rms_median": 0.057677703677823766,
+      "quiet_rms_max": 0.05838099507445644,
+      "total_frames": 449,
+      "overall_rms_max": 0.06253104150104859,
       "recognized_finals": [],
       "safety_aborted": false,
       "calibration_verified": false,

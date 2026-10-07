@@ -101,8 +101,8 @@ After reconnecting, Debian enumerated USB PnP Sound Device (`8086:0808`), using
 `snd_usb_audio`, as the mono Pulse source
 `alsa_input.usb-C-Media_Electronics_Inc._USB_PnP_Sound_Device-00.mono-fallback`.
 The tests selected that source explicitly and left persistent Helios input
-configuration unchanged. The physical microphone/adapter assembly is not yet
-confirmed; enumeration of a USB audio interface alone does not verify its capsule.
+configuration unchanged. The user subsequently confirmed a complete USB
+microphone; enumeration alone does not verify capsule function.
 
 Three pilots used the same generated phrase and Windows playback gain 0.4, with
 the previous 50 cm bench distance as the comparison setup. The new capsule's
@@ -128,3 +128,19 @@ Auto Gain Control on were restored, both services were active, and the productio
 input selector still points to the integrated microphone. No thresholds, local
 calibration profile or project defaults were changed. Verify the physical USB
 microphone/adapter connection and positioning before further gain trials.
+
+The user then indicated readiness after being asked to move the USB microphone
+20–30 cm from the Windows speaker and check mute. Exact distance and model were
+not supplied, so pilot 004 records the requested range rather than an invented
+measurement. At original USB settings, quiet median RMS was 0.057678 and overall
+maximum RMS 0.062531; again no nonempty final was recognized.
+
+Two subsequent two-second quiet captures with explicit-source `parec`, one at
+16 kHz and one at 48 kHz, both had a dominant 50 Hz spectral bin. Approximately
+84.9% of Hann-windowed FFT power was below 100 Hz, and the 50 Hz bin alone
+accounted for about 56.6%. RMS was 0.057384 and 0.056885, respectively. Only
+aggregate spectrum measurements were retained. This is compatible with mains
+hum, but does not identify electrical versus acoustic coupling or prove it is
+the sole recognition problem. The next controlled comparison is Debian on
+battery with the same microphone setup, if battery operation is available.
+No audio filter or production configuration change has been applied.
