@@ -52,3 +52,7 @@ source and controlled generated-speech capture; reviewed stimulus/response devic
 isolation and feedback-abort setup; acoustic calibration and predeclared limits;
 confirmation/fault scenarios and designated low-risk test writes. No user speech
 was recorded for these deployment checks. Unavailable measurements stay unverified.
+
+The subsequent generated-speech pilots failed acoustic recognition. See
+`MCP_ACOUSTIC_PILOTS.md` for measured levels, temporary gain trials and recovery.
+They do not satisfy the remaining calibration or confirmation requirements.
