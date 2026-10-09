@@ -207,6 +207,56 @@ see the configured order without exposing credentials:
 python -c "import config; s=config.LLM_SETTINGS; print(s.routing_policy); print([(t.name, t.provider, t.model) for t in s.targets])"
 ```
 
+## Refused turns, credit pools and retry policy (issue #20)
+
+The integration pins `openai-codex==0.144.4`. Static inspection of that wheel
+(without launching Codex, authenticating or making an inference request) establishes:
+
+- `openai_codex/api.py:TurnHandle.stream` consumes only notifications routed to its
+  turn. `_message_router.py` routes notifications without a turn ID to a separate
+  global queue. Account rate-limit updates therefore do **not** reach Helios through
+  its current turn stream.
+- The generated `TurnError` has `message`, `additional_details` and
+  `codex_error_info`. It has no credit snapshot or reset timestamp. Helios reads the
+  typed/wire `usageLimitExceeded` code without discarding it during error conversion.
+- The generated account-limit models do include `credits`, `limit_id`, windows
+  and `rate_limit_reached_type`. Their existence does not make those fields part
+  of a failed turn. The [official app-server documentation](https://learn.chatgpt.com/docs/app-server)
+  exposes them separately through `account/rateLimits/read` and
+  `account/rateLimits/updated`. Helios currently subscribes to neither channel.
+- SDK JSON-RPC exceptions can carry `data`. If a particular exception actually
+  includes a structured credit/window snapshot, Helios classifies it; the tests
+  cover that conditional path and do not claim that ordinary turn failures provide it.
+
+No session files are read to fill this gap. The numeric snapshots in #20 alone
+cannot establish which data the failed live turn delivered to Helios. Live account
+behavior remains unverified; tests use sanitized fixtures and fake runtimes only.
+
+`credit_exhausted` is emitted for an explicit premium-credit refusal (or supplied
+premium snapshot with empty credits and no unlimited entitlement). The sanitized
+operator message says waiting will not restore credits. A supplied standard-window
+snapshot is classified `rate_limited` only when a window is at least 100% used;
+the healthy 58%/40% example in #20 is not evidence of exhaustion. An available
+exhausted-window reset determines `retry_after_seconds`; no reset is invented when
+the provider supplies none. Explicit rate-limit text without a reset uses the
+existing health cooldown.
+
+An ambiguous `usageLimitExceeded` remains `quota_exhausted`. Its operator message
+states that no resettable window or empty credit pool was identified and asks the
+operator to check account usage before retrying. Helios cannot reliably identify
+an empty credit pool from that generic error alone. Extending the runtime to
+receive fresh account-global limits would be a separate integration change;
+stale account snapshots must not be used to attribute an unrelated refusal.
+
+The existing provider-health tracker blocks both credit and ambiguous quota
+failures for the provider/model in the current process until explicitly reset
+(or restarted). No automatic same-provider retry is made. Rate-window resets
+do not clear the credit block. Authorized local fallback is still possible before
+speech begins; the existing no-replay rule after speech remains unchanged. Tests
+exercise two APIClient turns, including a simulated week passing, and verify that
+the refused remote model is attempted only once. Restarting loses this in-memory
+health state; this is not a persistent account lockout.
+
 ## Configurable and deployment-owned decisions
 
 These cannot be decided by the repository:
