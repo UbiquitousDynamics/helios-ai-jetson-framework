@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -46,10 +47,32 @@ def read_identity(root: Path) -> tuple[str, bool] | None:
             data = json.loads(stamp.read_text(encoding="utf-8"))
             sha, dirty = data["commit"], data["dirty"]
             if re.fullmatch(r"[0-9a-f]{40,64}", sha) and isinstance(dirty, bool):
+                if "files" in data and not _matching_snapshot(root, data["files"]):
+                    return None
                 return sha, dirty
         except (OSError, ValueError, KeyError, TypeError):
             pass
     return git_identity(root)
+
+
+def _matching_snapshot(root: Path, files: object) -> bool:
+    if not isinstance(files, dict) or not files:
+        return False
+    for name, digest in files.items():
+        if not isinstance(name, str) or not isinstance(digest, str):
+            return False
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            return False
+        path = root / relative
+        if not path.resolve().is_relative_to(root.resolve()):
+            return False
+        try:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def write_stamp(source: Path, destination: Path) -> Path:

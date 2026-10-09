@@ -118,6 +118,29 @@ event=helios_run_identity tree=… commit=… dirty=… routing_config=… kpi_e
 
 Complete reference: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 
+For a deployment without Git, create the release and its version stamp in one command:
+
+```bash
+python -m scripts.deploy_snapshot /path/to/source /path/to/releases/helios-new
+```
+
+The source must be the Git working-tree root and the destination must be a **new**
+directory outside it, with an existing parent. The command copies tracked regular
+files (including working-tree edits), verifies their hashes and the source identity,
+then publishes `.helios-version.json` last. It rejects symlinks, submodules and merge
+conflicts. An interrupted/failed copy remains unstamped; use another new directory
+after correcting the error. Existing deployments are never overwritten.
+
+Untracked/ignored files, `.git`, environments, secrets and downloaded models are not
+copied unless explicitly tracked. Provision device-owned assets/configuration separately
+and point the launcher at the completed release; this command does not change services.
+Untracked source files still make the recorded identity dirty. Startup validates the
+copied file hashes and reports an unknown version if they changed or disappeared;
+additional device-owned files are not part of that check. This is local integrity
+checking, not a signature or protection against deliberate stamp tampering. Keep the
+source quiescent during copying. The older `scripts.stamp_deployment` command remains
+available for legacy procedures, but does not verify a deployment's copied bytes.
+
 ### Selecting the microphone
 
 On hosts where ALSA and PulseAudio disagree about the default device, name the PulseAudio
