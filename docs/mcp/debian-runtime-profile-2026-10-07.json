@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "commit": "44ab27b",
+  "date": "2026-10-07",
+  "windows_tests_passed": 2309,
+  "windows_tests_skipped": 4,
+  "debian_tests_passed": 2310,
+  "debian_tests_skipped": 3,
+  "pilot": {
+    "schema_version": 1,
+    "date": "2026-10-07",
+    "status": "runtime_binding_pilot_only",
+    "runtime_capture_identity_guard_enabled": true,
+    "runtime_source_output_guard_enabled": true,
+    "action_runtime_tested": false,
+    "generated_speech_only": true,
+    "distance_cm": null,
+    "requested_distance_cm_range": [
+      20,
+      30
+    ],
+    "fixture_id": "it-state",
+    "stimulus_repetitions_requested": 3,
+    "playback_gain": 0.4,
+    "temporary_internal_mic_boost_db": 12,
+    "restore_internal_mic_boost_db": 36,
+    "startup_rms_max": 0.0612218247676519,
+    "startup_transient_is_unresolved": true,
+    "quiet_frames": 51,
+    "quiet_rms_median": 0.026919047166298476,
+    "quiet_rms_max": 0.0928613872437124,
+    "total_frames": 187,
+    "overall_rms_max": 0.114908112778458,
+    "recognized_finals": [
+      {
+        "reference_word_count": 5,
+        "recognized_word_count": 5,
+        "word_error_count": 5,
+        "exact_match": false,
+        "confidence": 0.6817672,
+        "segment_peak_rms": 0.0928613872437124,
+        "speech_duration_seconds": 9.42
+      },
+      {
+        "reference_word_count": 5,
+        "recognized_word_count": 6,
+        "word_error_count": 1,
+        "exact_match": false,
+        "confidence": 0.8479011666666666,
+        "segment_peak_rms": 0.114908112778458,
+        "speech_duration_seconds": 2.484942
+      },
+      {
+        "reference_word_count": 5,
+        "recognized_word_count": 6,
+        "word_error_count": 2,
+        "exact_match": false,
+        "confidence": 0.7323685000000001,
+        "segment_peak_rms": 0.10365491099807857,
+        "speech_duration_seconds": 2.0699999999999985
+      }
+    ],
+    "safety_aborted": false,
+    "calibration_verified": false,
+    "user_audio_retained": false,
+    "physical_write_performed": false
+  },
+  "mismatch": {
+    "schema_version": 1,
+    "date": "2026-10-07",
+    "runtime_gain_mismatch_denied_before_recognition": true,
+    "candidate_boost_db": 12,
+    "current_restored_boost_db": 36,
+    "hardware_settings_changed": false,
+    "physical_writes": false,
+    "calibration_verified": false
+  },
+  "production_selector_installed": false,
+  "calibration_verified": false
+}
