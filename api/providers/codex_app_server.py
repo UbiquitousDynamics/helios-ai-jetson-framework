@@ -257,7 +257,10 @@ def _safe_error_message(category: ErrorCategory) -> str:
         ErrorCategory.AUTHENTICATION: (
             "Codex is not signed in with a ChatGPT account; local fallback is required"
         ),
-        ErrorCategory.QUOTA_EXHAUSTED: "The ChatGPT Codex usage allowance is exhausted",
+        ErrorCategory.QUOTA_EXHAUSTED: (
+            "The ChatGPT Codex usage allowance is exhausted; the provider did not identify "
+            "a resettable window or empty credit pool. Check account usage before retrying"
+        ),
         ErrorCategory.CREDIT_EXHAUSTED: (
             "The ChatGPT Codex premium credit balance is empty; waiting will not restore credits"
         ),
@@ -276,7 +279,7 @@ def _safe_error_message(category: ErrorCategory) -> str:
     return messages.get(category, "The Codex request failed")
 
 
-def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
+def _classify_exception(error: Any) -> tuple[ErrorCategory, bool]:
     for candidate in (
         field_value(error, "rate_limits"),
         field_value(error, "rateLimits"),
@@ -286,7 +289,8 @@ def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
         category = _classify_usage_snapshot(candidate)
         if category is not None:
             return category, False
-    marker = f"{type(error).__module__}.{type(error).__name__} {error}".lower()
+    message = field_value(error, "message", str(error))
+    marker = f"{type(error).__module__}.{type(error).__name__} {message}".lower()
     if "premium" in marker and any(word in marker for word in ("credit", "balance", "usage limit")):
         return ErrorCategory.CREDIT_EXHAUSTED, False
     if "rate limit" in marker or "rate_limit" in marker:
@@ -295,6 +299,8 @@ def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
         word in marker
         for word in ("usage limit", "usage_limit", "usagelimit", "quota", "billing", "credit")
     ):
+        return ErrorCategory.QUOTA_EXHAUSTED, False
+    if _codex_error_code(error) == "usageLimitExceeded":
         return ErrorCategory.QUOTA_EXHAUSTED, False
     if any(word in marker for word in ("unauthorized", "authentication", "not logged", "login")):
         return ErrorCategory.AUTHENTICATION, False
@@ -309,6 +315,14 @@ def _classify_exception(error: BaseException) -> tuple[ErrorCategory, bool]:
     return ErrorCategory.UNKNOWN, False
 
 
+def _codex_error_code(error: Any) -> str | None:
+    info = field_value(error, "codex_error_info", field_value(error, "codexErrorInfo"))
+    info = field_value(info, "root", info)
+    info = field_value(info, "value", info)
+    # Log only known protocol labels, never an arbitrary provider string.
+    return info if info in ("usageLimitExceeded", "contextWindowExceeded", "unauthorized") else None
+
+
 def _classify_usage_snapshot(snapshot: Any) -> ErrorCategory | None:
     """Distinguish sanitized account-window data from an empty credit pool."""
 
@@ -321,13 +335,18 @@ def _classify_usage_snapshot(snapshot: Any) -> ErrorCategory | None:
     limit_id = field_value(snapshot, "limit_id", field_value(snapshot, "limitId"))
     balance = field_value(credits, "balance")
     has_credits = field_value(credits, "has_credits", field_value(credits, "hasCredits"))
-    if limit_id == "premium" and (balance == "0" or balance == 0 or has_credits is False):
-        return ErrorCategory.CREDIT_EXHAUSTED
-    if limit_id == "codex" and (
-        field_value(snapshot, "primary") is not None
-        or field_value(snapshot, "secondary") is not None
+    if (
+        limit_id == "premium"
+        and field_value(credits, "unlimited") is not True
+        and (balance == "0" or balance == 0 or has_credits is False)
     ):
-        return ErrorCategory.RATE_LIMITED
+        return ErrorCategory.CREDIT_EXHAUSTED
+    if limit_id == "codex":
+        for name in ("primary", "secondary"):
+            window = field_value(snapshot, name)
+            used = field_value(window, "used_percent", field_value(window, "usedPercent"))
+            if isinstance(used, (int, float)) and not isinstance(used, bool) and used >= 100:
+                return ErrorCategory.RATE_LIMITED
     return None
 
 
@@ -1254,13 +1273,11 @@ class CodexAppServerAdapter:
             if status != "completed":
                 mark_failure(str(status or "turn_failed"))
                 error = field_value(turn_payload, "error")
-                category, retryable = _classify_exception(
-                    RuntimeError(str(field_value(error, "message", status)))
-                )
+                category, retryable = _classify_exception(error)
                 if status == "interrupted":
                     category = ErrorCategory.CANCELLED
                     retryable = False
-                error_code = field_value(error, "code")
+                error_code = _codex_error_code(error)
                 logger.warning(
                     "conversation_session=%s turn=%s provider=%s "
                     "event=turn_completion_failed status=%s category=%s "
