@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "status": "channel_diagnostics_not_calibration",
+  "generated_speech_only": true,
+  "calibration_verified": false,
+  "physical_writes": false,
+  "user_audio_retained": false,
+  "runs": [
+    {
+      "schema_version": 1,
+      "date": "2026-10-07",
+      "status": "channel_diagnostic_not_calibration",
+      "distance_cm": 50,
+      "playback_gain": 0.4,
+      "temporary_boost_db": 12,
+      "restored_boost_db": 36,
+      "generated_speech_only": true,
+      "user_audio_retained": false,
+      "calibration_verified": false,
+      "safety_aborted": false,
+      "phase_summary": {
+        "startup": {
+          "frames": 24,
+          "channels": {
+            "left": {
+              "rms": 0.004296848609591612,
+              "dc": -0.0005989742279052734,
+              "ac_rms": 0.003970834795342994,
+              "rail_fraction": 0.0
+            },
+            "right": {
+              "rms": 0.004373737812826019,
+              "dc": -3.7393569946289057e-05,
+              "ac_rms": 0.0039968638974458865,
+              "rail_fraction": 0.0
+            },
+            "average": {
+              "rms": 0.004219060236470357,
+              "dc": -0.0001601409912109375,
+              "ac_rms": 0.0038029484806590607,
+              "rail_fraction": 0.0
+            }
+          },
+          "median_uncentered_correlation": 0.8768953136271249
+        },
+        "quiet": {
+          "frames": 55,
+          "channels": {
+            "left": {
+              "rms": 0.005840932312430356,
+              "dc": 0.0001421356201171875,
+              "ac_rms": 0.005615403705484997,
+              "rail_fraction": 0.0
+            },
+            "right": {
+              "rms": 0.005912260315662951,
+              "dc": -6.208419799804687e-05,
+              "ac_rms": 0.005646145974405519,
+              "rail_fraction": 0.0
+            },
+            "average": {
+              "rms": 0.005714379528216331,
+              "dc": 0.00028072357177734376,
+              "ac_rms": 0.005518915258986988,
+              "rail_fraction": 0.0
+            }
+          },
+          "median_uncentered_correlation": 0.9310496922374686
+        },
+        "playback_window": {
+          "frames": 126,
+          "channels": {
+            "left": {
+              "rms": 0.009393107941786357,
+              "dc": -0.00015951156616210937,
+              "ac_rms": 0.008827675527970289,
+              "rail_fraction": 0.0
+            },
+            "right": {
+              "rms": 0.00938835355690125,
+              "dc": -1.8634796142578124e-05,
+              "ac_rms": 0.008980342246362676,
+              "rail_fraction": 0.0
+            },
+            "average": {
+              "rms": 0.009231107189395932,
+              "dc": -3.600120544433594e-05,
+              "ac_rms": 0.008821173376549397,
+              "rail_fraction": 0.0
+            }
+          },
+          "median_uncentered_correlation": 0.9732456866590629
+        }
+      },
+      "recognized_finals": {
+        "left": [
+          {
+            "word_count": 6,
+            "word_edits": 3,
+            "exact_match": false
+          },
+          {
+            "word_count": 5,
+            "word_edits": 0,
+            "exact_match": true
+          },
+          {
+            "word_count": 6,
+            "word_edits": 2,
+            "exact_match": false
+          }
+        ],
+        "right": [
+          {
+            "word_count": 5,
+            "word_edits": 1,
+            "exact_match": false
+          },
+          {
+            "word_count": 5,
+            "word_edits": 0,
+            "exact_match": true
+          },
+          {
+            "word_count": 6,
+            "word_edits": 2,
+            "exact_match": false
+          }
+        ],
+        "average": [
+          {
+            "word_count": 5,
+            "word_edits": 1,
+            "exact_match": false
+          },
+          {
+            "word_count": 5,
+            "word_edits": 0,
+            "exact_match": true
+          },
+          {
+            "word_count": 6,
+            "word_edits": 2,
+            "exact_match": false
+          }
+        ]
+      }
+    },
+    {
+      "schema_version": 1,
+      "date": "2026-10-07",
+      "status": "channel_diagnostic_not_calibration",
+      "distance_cm": 50,
+      "playback_gain": 0.4,
+      "temporary_boost_db": 12,
+      "restored_boost_db": 36,
+      "generated_speech_only": true,
+      "user_audio_retained": false,
+      "calibration_verified": false,
+      "safety_aborted": false,
+      "phase_summary": {
+        "startup": {
+          "frames": 24,
+          "channels": {
+            "left": {
+              "rms": 0.007022257057603098,
+              "dc": 0.001545076370239258,
+              "ac_rms": 0.006397754250642701,
+              "rail_fraction": 0.0
+            },
+            "right": {
+              "rms": 0.007025910942164743,
+              "dc": 0.0018566226959228515,
+              "ac_rms": 0.006361629462783166,
+              "rail_fraction": 0.0
+            },
+            "average": {
+              "rms": 0.006886437941758144,
+              "dc": 0.0016011524200439452,
+              "ac_rms": 0.006286075698080197,
+              "rail_fraction": 0.0
+            }
+          },
+          "median_uncentered_correlation": 0.9521141523469987
+        },
+        "quiet": {
+          "frames": 56,
+          "channels": {
+            "left": {
+              "rms": 0.007944188205872234,
+              "dc": 0.000676889419555664,
+              "ac_rms": 0.007582798896793972,
+              "rail_fraction": 0.0
+            },
+            "right": {
+              "rms": 0.007873844902577296,
+              "dc": 0.0004900836944580078,
+              "ac_rms": 0.007458793360416724,
+              "rail_fraction": 0.0
+            },
+            "average": {
+              "rms": 0.007792756524080539,
+              "dc": 0.0005740642547607422,
+              "ac_rms": 0.007484363600024616,
+              "rail_fraction": 0.0
+            }
+          },
+          "median_uncentered_correlation": 0.9662344806261922
+        },
+        "playback_window": {
+          "frames": 68,
+          "channels": {
+            "left": {
+              "rms": 0.015905550548642025,
+              "dc": 0.0005048465728759766,
+              "ac_rms": 0.015792906894145826,
+              "rail_fraction": 0.0
+            },
+            "right": {
+              "rms": 0.01585465256344428,
+              "dc": 0.00036185264587402344,
+              "ac_rms": 0.015716934613298504,
+              "rail_fraction": 0.0
+            },
+            "average": {
+              "rms": 0.015764910434664086,
+              "dc": 0.0003554248809814453,
+              "ac_rms": 0.01570751657655977,
+              "rail_fraction": 0.0
+            }
+          },
+          "median_uncentered_correlation": 0.9906566119964455
+        }
+      },
+      "recognized_finals": {
+        "left": [
+          {
+            "word_count": 6,
+            "word_edits": 3,
+            "exact_match": false
+          },
+          {
+            "word_count": 6,
+            "word_edits": 3,
+            "exact_match": false
+          },
+          {
+            "word_count": 5,
+            "word_edits": 0,
+            "exact_match": true
+          }
+        ],
+        "right": [
+          {
+            "word_count": 5,
+            "word_edits": 2,
+            "exact_match": false
+          },
+          {
+            "word_count": 6,
+            "word_edits": 3,
+            "exact_match": false
+          },
+          {
+            "word_count": 5,
+            "word_edits": 0,
+            "exact_match": true
+          }
+        ],
+        "average": [
+          {
+            "word_count": 6,
+            "word_edits": 3,
+            "exact_match": false
+          },
+          {
+            "word_count": 6,
+            "word_edits": 3,
+            "exact_match": false
+          },
+          {
+            "word_count": 5,
+            "word_edits": 0,
+            "exact_match": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -77,10 +77,20 @@ services remained enabled, and the existing LLM configuration was preserved.
 No machine reboot or physical light action was performed. The private pre-test
 drop-in remains on the device for recovery; receipt ledgers were preserved.
 
-The current Debian service still uses the default audio input, rather than an
-explicit persistent source. PipeWire exposes its integrated analog microphone;
-this metadata does not calibrate confirmation or certify correct capture after
-reboot. Physical tests require reviewed explicit stimulus/response audio devices,
+On 2026-10-07 the Debian service was updated to merged main and given an explicit
+persistent integrated-microphone selector with strict resolution. See
+`MCP_DEBIAN_CAPTURE.md`. Autostart of the earlier configuration was observed after
+a different boot; the new selector still needs a controlled reboot/capture test.
+Audio device metadata does not calibrate confirmation.
+Calibration results are specific to the measured deployment and audio path; do
+not promote them to project-wide defaults. Select a local profile explicitly,
+bind its evidence to microphone/route identity, relevant gain/channel settings
+and model versions, and revalidate on changes. Missing or mismatched calibration
+must block voice writes. Runtime profile identity enforcement must be verified
+separately; an artifact hash alone does not establish a device match.
+
+Physical tests require
+reviewed explicit stimulus/response audio devices,
 generated-only stimuli, isolation/feedback abort setup and predeclared calibrated
 limits. `voice_test_suite.py --require-hil` reviews the baseline and never opens
 audio; its blocked result is not a completed physical test.

@@ -1,0 +1,246 @@
+# Debian acoustic pilots, 2026-10-07
+
+Issue #32 remains open. Six component pilots did not establish calibrated
+recognition or confirmation. See `mcp/debian-acoustic-pilots-2026-10-07.json`.
+These are diagnostic measurements, not acceptance-suite samples or latency results.
+
+Calibration is deployment-specific, never a shared default. These measurements
+apply only to this Debian microphone route and the recorded Windows playback
+setup, including distance, gain, channel mode and model versions. They must not
+set thresholds for other PCs, Jetson targets or microphones. Store any eventual
+validated calibration in an explicitly selected local device profile. A changed
+microphone, route or relevant audio/model setting requires new validation; a
+missing or mismatched profile must not authorize voice writes. This is a required
+deployment contract, not a claim that runtime identity checks are implemented.
+
+The user confirmed a quiet room, unobstructed devices, monitoring disabled and
+98 cm separation. Windows played generated Italian Piper speech through its
+Realtek speaker; the user confirmed hearing the three repetitions clearly.
+Debian captured its explicitly selected integrated microphone. Helios was stopped
+during each acquisition and automatically restarted afterward. No user audio or
+observed microphone transcripts were retained; no physical actions were executed.
+
+The original synthetic WAV was recognized exactly by Vosk small Italian 0.22
+when supplied directly after resampling to 16 kHz. This isolates a failing acoustic
+path, but does not identify the defective hardware or a single root cause.
+
+| Pilot | Temporary mic boost | Playback gain | Quiet RMS median | Result |
+| --- | --- | --- | --- | --- |
+| 001 | +36 dB | No playback | 0.999914 | Aborted at opening frame |
+| 002 | +36 dB | 0.2 | 0.134175 | Aborted above RMS 0.4 |
+| 003 | +24 dB | 0.2 | 0.028789 | No exact recognized segment |
+| 004 | +12 dB | 0.4 | 0.007486 | No exact recognized segment |
+| 005 | +12 dB | 0.4 | 0.014695 | Stronger stereo channel; no exact segment |
+| 006 | +12 dB | 0.4 | 0.006789 | At 50 cm, stronger channel; no exact segment |
+
+For pilot 006 the user moved the Windows speaker to 50 cm. Playback and capture
+parameters matched pilot 005. Three recognized final segments had respectively
+3, 2 and 3 word edits against the five-word reference; none matched exactly.
+This is consistent with distance contributing to recognition failure, but a
+single repeat with a different measured quiet level does not isolate distance
+as the only cause or establish reliable recognition. The microphone boost was
+again restored to +36 dB and both services were active after the trial.
+
+The playback gain is a multiplier on generated PCM; Windows master volume was
+1.0 and unmuted. Pilot 001 aborted before playback. Later pilots explicitly
+measured a three-second opening phase before the quiet baseline and playback.
+A separate opening-capture inspection found a large positive DC transient and
+99.94% rail samples in the first 100 ms, decaying over subsequent buffers.
+The startup transient remains unresolved; excluding its opening phase from the
+quiet baseline does not make startup pass.
+
+Recognized final segments were not reliably aligned with the three utterances.
+Their edit counts and confidence values must not be presented as per-utterance
+word error rates, calibrated confidence or response latency. Lower boost reduced
+the observed quiet level in these pilots, but did not produce correct recognition.
+Selecting the stronger stereo channel also failed to establish correct recognition.
+No recognition threshold was relaxed and no gain/channel change was persisted.
+
+After the pilots, Internal Mic Boost was restored to +36 dB. Both user services
+were active; Helios emitted `voice_ready`, resolved the intended mono 16 kHz input,
+and had no startup errors or fallback events. This is runtime recovery evidence,
+not evidence that microphone recognition works correctly.
+
+Next, diagnose channel integrity, DC/noise and the physical input path before
+calibration and the confirmation/negative/echo/interruption suite. Controlled
+reboot with the new configuration and designated test writes remain unverified.
+Voice writes remain disabled; current Home Assistant credentials are read-only.
+
+## Follow-up channel diagnostics at 50 cm
+
+Two further acquisitions kept playback gain 0.4 and temporary mic boost +12 dB.
+Each opened the explicit Pulse source as stereo PCM16 at 16 kHz, with 1600-frame
+reads. Left, right and arithmetic-average signals were submitted to separate
+Vosk recognizers from the same acquisition; these are not independent trials.
+Only aggregate levels and edit counts were retained. Evidence is in
+`mcp/debian-channel-diagnostics-2026-10-07.json`.
+
+Each acquisition produced three nonempty final segments per channel, with exactly
+one matching the reference on each channel. Other segments still had word errors.
+Quiet median RMS for the averaged channel was 0.005714 and 0.007793. Median
+uncentered channel correlation in the playback wall-clock window was 0.973246
+and 0.990657. The phase medians for rail fraction were zero; this does not assert
+that every individual sample was unclipped. These observations do not suggest
+destructive stereo cancellation or establish a consistently superior channel.
+
+The opening transient observed in earlier pilots remains unresolved; these
+opening-phase median summaries cannot rule out brief transients. Processing
+three recognizers also changes diagnostic workload. Phase windows use local
+processing time rather than synchronized acoustic timestamps, so their levels
+are descriptive and must not be used for SNR, latency or production performance
+claims. Final segments are not explicitly matched to playback trial boundaries.
+
+No calibrated profile or thresholds were installed. Original +36 dB boost was
+restored and both services restarted successfully. Recognition remains too
+inconsistent to validate voice confirmation; further input-path and stimulus
+diagnostics are needed before deployment-specific calibration.
+
+## USB input follow-up
+
+After reconnecting, Debian enumerated USB PnP Sound Device (`8086:0808`), using
+`snd_usb_audio`, as the mono Pulse source
+`alsa_input.usb-C-Media_Electronics_Inc._USB_PnP_Sound_Device-00.mono-fallback`.
+The tests selected that source explicitly and left persistent Helios input
+configuration unchanged. The user subsequently confirmed a complete USB
+microphone; enumeration alone does not verify capsule function.
+
+Three pilots used the same generated phrase and Windows playback gain 0.4, with
+the previous 50 cm bench distance as the comparison setup. The new capsule's
+exact position relative to the speaker has not been independently confirmed.
+
+| USB pilot | Hardware Mic level | Auto Gain Control | Quiet median RMS | Nonempty recognized finals |
+| --- | --- | --- | --- | --- |
+| 001 | 16/16 (+23.81 dB) | On | 0.164349 | 0 |
+| 002 | 16/16 | Off temporarily | 0.139994 | 0 |
+| 003 | 8/16 | Off temporarily | 0.039199 | 0 |
+
+A separate one-second explicit-source `parec` check measured RMS 0.146015,
+DC mean -0.000166, peak 0.281464 and zero rail samples. Ten PortAudio buffers
+also showed high RMS without significant DC offset or rail samples. These
+observations do not identify a root cause; they do not establish a healthy
+physical microphone or justify installing a calibration. The inherited
+`startup_transient_is_unresolved` flag tracks the unresolved earlier investigation,
+not proof that the USB device reproduced the integrated microphone's transient.
+
+Raw audio and microphone transcripts were not retained. Aggregate pilot evidence
+is in `mcp/debian-usb-diagnostics-2026-10-07.json`. Hardware Mic level 16/16 and
+Auto Gain Control on were restored, both services were active, and the production
+input selector still points to the integrated microphone. No thresholds, local
+calibration profile or project defaults were changed. Verify the physical USB
+microphone/adapter connection and positioning before further gain trials.
+
+The user then indicated readiness after being asked to move the USB microphone
+20–30 cm from the Windows speaker and check mute. Exact distance and model were
+not supplied, so pilot 004 records the requested range rather than an invented
+measurement. At original USB settings, quiet median RMS was 0.057678 and overall
+maximum RMS 0.062531; again no nonempty final was recognized.
+
+Two subsequent two-second quiet captures with explicit-source `parec`, one at
+16 kHz and one at 48 kHz, both had a dominant 50 Hz spectral bin. Approximately
+84.9% of Hann-windowed FFT power was below 100 Hz, and the 50 Hz bin alone
+accounted for about 56.6%. RMS was 0.057384 and 0.056885, respectively. Only
+aggregate spectrum measurements were retained. This is compatible with mains
+hum, but does not identify electrical versus acoustic coupling or prove it is
+the sole recognition problem. The next controlled comparison is Debian on
+battery with the same microphone setup, if battery operation is available.
+No audio filter or production configuration change has been applied.
+
+## Integrated microphone at closer range
+
+After the user requested returning to the integrated microphone and indicated
+readiness for the requested 20–30 cm setup, pilots 007 and 008 used the exact
+integrated Pulse source, mono 16 kHz, temporary +12 dB Internal Mic Boost and
+Windows playback gain 0.4. Exact physical distance was not supplied and is null
+in the reports; the requested range is recorded separately.
+
+Both runs produced three nonempty final segments, all exactly matching the
+five-word reference, for six exact segments across six generated playbacks.
+This is positive evidence for this phrase and local setup, not calibrated
+confirmation evidence or a general recognition accuracy estimate. Final segment
+timestamps were not explicitly paired with playback trial boundaries.
+
+Quiet median RMS was 0.007702 and 0.011732. The opening-phase RMS maxima were
+0.319371 and 0.999969: the earlier opening transient remains unresolved. The
+three-second settling phase preceded the quiet baseline and playback, and the
+post-settling RMS abort was not triggered. Successful phrase recognition does
+not certify startup or justify ignoring the transient in a production profile.
+
+The first attempted launch stopped before playback because the ALSA card index
+had changed: PCH was card 1 rather than 0. Helios was explicitly restarted and
+the temporary runner changed to the stable PCH card name. Its cleanup now starts
+the service even if mixer restoration fails. No production code was changed.
+After both completed runs, +36 dB boost and both active services were verified.
+Persistent capture remains the integrated source. No gain/profile/threshold
+change was installed. Next validation must cover multiple phrases, denials,
+silence and echo as well as startup before a local calibrated profile is usable.
+
+## Varied phrases and silence
+
+Six further component pilots used the same explicit integrated source, mono
+16 kHz, temporary +12 dB boost, playback gain 0.4 and requested close placement.
+Five generated fixtures were played three times each; the sixth pilot captured
+35 seconds without a speech stimulus. Helios remained stopped during each
+capture. Aggregate results and pinned synthetic-file comparisons are in
+`mcp/debian-varied-pilots-2026-10-07.json`.
+
+| Fixture | Exact nonempty finals | Other observations |
+| --- | --- | --- |
+| Date/time request | 0/3 | One word edit each; reported confidence 1.0 each |
+| Confermo | 3/3 | Confirmation word present in each |
+| No, annulla | 0/3 | Denial word present in only 2/3; no confirmation word |
+| State request without wake word | 3/3 | Recognition only, not a wake-policy test |
+| Request naming nonexistent light | 3/3 | Recognition only, not a target-policy test |
+| Silence | No nonempty finals | One 35-second observation, not a false-positive rate |
+
+The original generated WAVs were also resampled directly to 16 kHz and supplied
+to Vosk small Italian 0.22. Date/time, confirmation, no-wake and nonexistent-target
+fixtures matched exactly offline. The denial fixture did not: its three-word
+output had two edits against the two-word reference even without the acoustic
+path. Thus the denial failure cannot be attributed solely to this microphone;
+synthetic stimulus/model compatibility needs investigation as well. No fixture
+or acceptance criterion was changed to turn these failures into passes.
+
+These samples do not calibrate confidence: a confidence of 1.0 accompanied
+incorrect date/time recognition. They also do not validate negative-action
+handling, echo suppression, interruption or live confirmation, because the
+automation runtime and executor were not involved. Startup transients recurred
+(maximum opening RMS across these pilots 0.681290); measured settling is still
+not a startup fix. +36 dB boost and both active services were verified after
+cleanup. No calibration/profile/default was installed, no user audio was retained
+and no physical write occurred. Voice confirmation remains blocked pending
+reliable denial recognition, startup and runtime echo/interruption validation.
+
+## Isolated denial words and Debian speaker leakage
+
+After the user explicitly placed the bench at 20–30 cm, two additional synthetic
+fixtures tested isolated "No" and "Annulla" at the same temporary +12 dB boost
+and Windows gain 0.4. They supplement, rather than replace, the failed compound
+denial. Exact final segments were 1/3 and 2/3 respectively; no segment contained
+"confermo". The original generated "No" file matched offline, while "Annulla"
+already had two word edits offline. These results still do not establish a
+calibrated acoustic acceptance threshold.
+
+Separately, Debian played its pinned original "Confermo" WAV three times using
+unchanged default `aplay` output while its integrated microphone captured audio.
+All three playback processes returned zero. Three nonempty final segments were
+observed, one exactly "confermo", with segment peak RMS 0.076419 and confidence
+1.0. The other two segments differed from the reference. Thus own-speaker leakage
+can reproduce the confirmation word in raw recognition. Echo suppression and
+the action runtime were deliberately not active in this component measurement:
+this does not demonstrate an authorized action or failure of the full runtime's
+existing timing/capture guards. It does require full playback provenance and
+echo/interruption validation before enabling a calibrated confirmation verifier.
+The close-range Windows distance metadata does not measure the physical distance
+between Debian's own speaker and microphone.
+
+Code inspection shows that pending action confirmation accepts only exact
+"confermo" with the additional verifier, capture, timing and cancellation checks;
+other replies cancel. Imperfect denial transcription therefore does not itself
+prove unsafe action approval. No actual pending action was tested here.
+
+Evidence, new generated-fixture hashes and offline comparisons are recorded in
+`mcp/debian-denial-echo-2026-10-07.json`. No user audio/transcripts were retained.
+The integrated boost was restored to +36 dB and both services were active.
+No calibrated profile, gain default, suppression threshold or production code
+was changed. Full runtime echo/confirmation and interruption evidence remains
+missing; startup transients remain unresolved and voice writes stay disabled.
