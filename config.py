@@ -1763,11 +1763,18 @@ class Settings:
     activation_timeout_seconds: float = 30.0
     audio_input_strict: bool = False
     audio_input_channel_mode: str = "mono"
+    audio_calibration_config: Path | None = None
     audio_capture_level_min_rms: float = 0.001
     audio_capture_stall_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         root = Path(self.project_root).expanduser().resolve()
+        if self.audio_calibration_config is not None:
+            object.__setattr__(
+                self,
+                "audio_calibration_config",
+                (root / Path(self.audio_calibration_config).expanduser()).resolve(),
+            )
         if not isinstance(self.endpointing, TurnEndpointConfig):
             raise ConfigurationError("endpointing must be a TurnEndpointConfig")
         language = self.language.strip().lower()
@@ -2048,6 +2055,11 @@ class Settings:
             audio_input_channel_mode=env.get("HELIOS_AUDIO_INPUT_CHANNEL_MODE", "mono")
             .strip()
             .lower(),
+            audio_calibration_config=(
+                Path(env["HELIOS_AUDIO_CALIBRATION_CONFIG"].strip())
+                if env.get("HELIOS_AUDIO_CALIBRATION_CONFIG", "").strip()
+                else None
+            ),
             audio_capture_level_min_rms=_float_from_env(
                 env.get("HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS", "0.001"),
                 "HELIOS_AUDIO_CAPTURE_LEVEL_MIN_RMS",
