@@ -313,6 +313,7 @@ options = { api_key = "must-not-be-here" }
         "llm-routing.paid-first.toml",
         "llm-routing.local-first-escalation.toml",
         "llm-routing.codex-subscription.toml",
+        "llm-routing.llama-cpp.toml",
     ],
 )
 def test_committed_routing_examples_are_valid(name: str) -> None:

@@ -1,0 +1,65 @@
+schema_version = 1
+
+[router]
+policy = "local_only"
+remote_enabled = false
+allowlist = ["llama-cpp"]
+denylist = []
+unknown_connectivity = "prefer_local"
+
+[privacy]
+default = "local_only"
+allow_remote_transcripts = false
+allow_remote_context = false
+allow_remote_rag_context = false
+redaction_failure = "local_only"
+
+[timeouts]
+connect_seconds = 2.0
+first_token_seconds = 90.0
+read_seconds = 30.0
+total_seconds = 180.0
+
+[budget]
+enabled = false
+zero_cost_only = true
+
+[observability]
+metrics_enabled = true
+metrics_path = "../logs/llm-metrics.jsonl"
+log_content = false
+log_headers = false
+metrics_retention_days = 14
+
+[providers.llama-cpp]
+adapter = "llama_cpp_server"
+endpoint = "http://127.0.0.1:8081/v1"
+locality = "device"
+enabled = true
+internal_retries = 0
+
+[modes.talk]
+candidates = ["local-talk"]
+max_output_tokens = 64
+complexity_threshold = 3
+first_speech_min_chars = 0
+
+[modes.think]
+candidates = ["local-think"]
+max_output_tokens = 128
+complexity_threshold = 2
+first_speech_min_chars = 0
+
+[targets.local-talk]
+provider = "llama-cpp"
+model = "local-model"
+languages = ["it", "en"]
+retry_attempts = 1
+options = { temperature = 0.3, top_p = 0.9 }
+
+[targets.local-think]
+provider = "llama-cpp"
+model = "local-model"
+languages = ["it", "en"]
+retry_attempts = 1
+options = { temperature = 0.3, top_p = 0.9 }

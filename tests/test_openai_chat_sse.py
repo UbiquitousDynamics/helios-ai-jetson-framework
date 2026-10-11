@@ -286,6 +286,39 @@ def test_static_extra_headers_cannot_carry_credentials():
         )
 
 
+def test_local_adapter_accepts_loopback_http_without_authorization():
+    response = FakeResponse(_successful_lines())
+    transport = FakeTransport(response)
+    adapter = OpenAIChatSSEAdapter(
+        "llama-cpp",
+        "http://127.0.0.1:8080/v1",
+        None,
+        local=True,
+        transport=transport,
+    )
+
+    events = list(adapter.stream(_request(privacy=PrivacyLevel.LOCAL_ONLY)))
+
+    assert any(isinstance(event, Completed) for event in events)
+    assert transport.calls[0]["url"] == "http://127.0.0.1:8080/v1/chat/completions"
+    assert "Authorization" not in transport.calls[0]["headers"]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["http://provider.invalid/v1", "https://127.0.0.1:8080/v1"],
+)
+def test_local_adapter_rejects_non_loopback_or_https_endpoints(endpoint):
+    with pytest.raises(ValueError):
+        OpenAIChatSSEAdapter(
+            "llama-cpp",
+            endpoint,
+            None,
+            local=True,
+            transport=FakeTransport(),
+        )
+
+
 def test_adapter_is_lazy_and_serializes_only_the_certified_request_surface(monkeypatch):
     monkeypatch.delenv("TEST_REMOTE_API_KEY", raising=False)
     created: list[FakeTransport] = []

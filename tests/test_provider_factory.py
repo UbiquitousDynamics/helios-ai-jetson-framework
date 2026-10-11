@@ -77,6 +77,24 @@ def test_codex_factory_builds_an_isolated_app_server_adapter() -> None:
     provider.close()
 
 
+def test_llama_cpp_factory_builds_a_device_local_adapter_without_credentials() -> None:
+    settings = config.LLMProviderSettings(
+        name="llama-cpp",
+        adapter="llama_cpp_server",
+        endpoint="http://127.0.0.1:8081/v1",
+        locality="device",
+    )
+
+    factory = configured_provider_factory(settings)
+
+    assert factory is not None
+    provider = factory()
+    assert provider.identity.name == "llama-cpp"
+    assert provider.identity.endpoint == "http://127.0.0.1:8081/v1"
+    assert provider.identity.remote is False
+    provider.close()
+
+
 def test_ollama_remains_owned_by_the_api_client_composition_root() -> None:
     settings = config.LLMProviderSettings(
         name="ollama",

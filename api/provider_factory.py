@@ -37,6 +37,21 @@ def configured_provider_factory(
 
         return openai_chat_sse_factory
 
+    if settings.adapter == "llama_cpp_server":
+
+        def llama_cpp_server_factory() -> ChatProvider:
+            from api.providers.openai_chat_sse import OpenAIChatSSEAdapter
+
+            return OpenAIChatSSEAdapter(
+                provider=settings.name,
+                endpoint=settings.endpoint,
+                api_key_env=None,
+                local=True,
+                include_stream_usage=True,
+            )
+
+        return llama_cpp_server_factory
+
     if settings.adapter == "codex_app_server":
 
         def codex_app_server_factory() -> ChatProvider:

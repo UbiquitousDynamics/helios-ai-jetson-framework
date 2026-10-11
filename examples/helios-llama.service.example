@@ -1,0 +1,25 @@
+[Unit]
+Description=Helios local llama.cpp CUDA server
+After=local-fs.target
+Conflicts=ollama.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# Replace operator and the paths below for the target installation.
+User=operator
+Group=operator
+SupplementaryGroups=video
+WorkingDirectory=/home/operator/helios-ai-jetson-framework
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/operator/helios-ai-jetson-framework/venv/bin/python /home/operator/helios-ai-jetson-framework/scripts/run_llama_cpp.py --binary /home/operator/llama-b5050/bin/llama-server --model /home/operator/models/gemma3-1b-it-Q4_K_M.gguf --cuda-lib /usr/local/cuda/lib64 --profile gpu --port 8081
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

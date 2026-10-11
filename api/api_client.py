@@ -1729,6 +1729,7 @@ class APIClient:
         message: str,
         context: str | None = None,
         *,
+        tts: bool = True,
         privacy: PrivacyLevel | str | None = None,
         context_origin: ContentOrigin = ContentOrigin.UNKNOWN,
         message_redacted: bool = False,
@@ -1740,13 +1741,13 @@ class APIClient:
         before_first_speech: Callable[[], Any] | None = None,
         on_lifecycle: Callable[[ResponseEvent], None] | None = None,
     ) -> str:
-        """Stream a conversational response and speak sentences as they arrive."""
+        """Stream a conversational response and optionally speak it."""
 
         return self._stream(
             mode="talk",
             message=message,
             context=context,
-            speak=True,
+            speak=tts,
             privacy=privacy,
             context_origin=context_origin,
             message_redacted=message_redacted,

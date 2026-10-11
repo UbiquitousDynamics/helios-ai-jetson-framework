@@ -1,0 +1,35 @@
+[Unit]
+Description=Helios AI voice assistant with llama.cpp CUDA
+Wants=network-online.target sound.target
+Requires=helios-llama.service
+After=network-online.target sound.target helios-llama.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# Replace operator and the paths below for the target installation.
+User=operator
+Group=operator
+SupplementaryGroups=audio video
+WorkingDirectory=/home/operator/helios-ai-jetson-framework
+Environment=PYTHONUNBUFFERED=1
+Environment=HELIOS_LANGUAGE=it
+Environment=HELIOS_LOG_LEVEL=INFO
+Environment=HELIOS_LOG_FILE=-
+# Replace 1000 if the deployment account has a different numeric UID.
+Environment=HELIOS_LLM_CONFIG=/home/operator/helios-ai-jetson-framework/examples/llm-routing.llama-cpp.toml
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+Environment=HELIOS_AUDIO_OUTPUT_LATENCY=high
+ExecStartPre=/home/operator/helios-ai-jetson-framework/venv/bin/python /home/operator/helios-ai-jetson-framework/scripts/wait_http.py http://127.0.0.1:8081/health --timeout 180
+ExecStart=/home/operator/helios-ai-jetson-framework/venv/bin/python /home/operator/helios-ai-jetson-framework/scripts/run_jetson.py
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -681,8 +681,9 @@ class OpenAIChatSSEAdapter:
         self,
         provider: str,
         endpoint: str,
-        api_key_env: str,
+        api_key_env: str | None,
         *,
+        local: bool = False,
         transport: _Transport | None = None,
         transport_factory: Callable[[], _Transport] | None = None,
         owns_transport: bool | None = None,
@@ -696,8 +697,10 @@ class OpenAIChatSSEAdapter:
     ) -> None:
         if not _SAFE_NAME.fullmatch(provider):
             raise ValueError("provider must be a short, safe identifier")
-        if not _SAFE_ENV_NAME.fullmatch(api_key_env):
+        if api_key_env is not None and not _SAFE_ENV_NAME.fullmatch(api_key_env):
             raise ValueError("api_key_env must be an environment-variable name")
+        if not local and api_key_env is None:
+            raise ValueError("remote providers require api_key_env")
         if output_token_field not in {"max_tokens", "max_completion_tokens"}:
             raise ValueError("unsupported output token field")
         if max_event_bytes < 1024:
@@ -715,7 +718,8 @@ class OpenAIChatSSEAdapter:
         if set(allowed_options).intersection(reserved_options):
             raise ValueError("allowed_options cannot include transport-controlled fields")
 
-        self._endpoint = self._validate_endpoint(endpoint)
+        self._local = bool(local)
+        self._endpoint = self._validate_endpoint(endpoint, local=self._local)
         self._url = self._completion_url(self._endpoint)
         self._api_key_env = api_key_env
         self._transport = transport
@@ -736,17 +740,25 @@ class OpenAIChatSSEAdapter:
         self._identity = ProviderIdentity(
             name=provider,
             endpoint=self._endpoint,
-            remote=True,
+            remote=not self._local,
         )
         self._closed = False
 
     @staticmethod
-    def _validate_endpoint(endpoint: str) -> str:
+    def _validate_endpoint(endpoint: str, *, local: bool = False) -> str:
         endpoint = endpoint.strip()
         if any(ord(character) < 32 or ord(character) == 127 for character in endpoint):
             raise ValueError("remote provider endpoint cannot contain control characters")
         parsed = urlsplit(endpoint)
-        if parsed.scheme.lower() != "https":
+        scheme = parsed.scheme.lower()
+        if local:
+            if scheme != "http" or (parsed.hostname or "").lower() not in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }:
+                raise ValueError("local provider endpoint must use HTTP on loopback")
+        elif scheme != "https":
             raise ValueError("remote provider endpoint must use HTTPS")
         if not parsed.hostname:
             raise ValueError("remote provider endpoint must include a host")
@@ -757,7 +769,7 @@ class OpenAIChatSSEAdapter:
         if parsed.port is not None and not 1 <= parsed.port <= 65535:
             raise ValueError("remote provider endpoint contains an invalid port")
         path = parsed.path.rstrip("/")
-        return urlunsplit(("https", parsed.netloc, path, "", ""))
+        return urlunsplit((scheme, parsed.netloc, path, "", ""))
 
     @staticmethod
     def _completion_url(endpoint: str) -> str:
@@ -833,6 +845,8 @@ class OpenAIChatSSEAdapter:
         )
 
     def _authorize_remote(self, request: ChatRequest) -> None:
+        if self._local:
+            return
         try:
             privacy = PrivacyLevel(request.privacy)
             origins = tuple(ContentOrigin(message.origin) for message in request.messages)
@@ -945,18 +959,19 @@ class OpenAIChatSSEAdapter:
         return payload
 
     def _headers(self) -> dict[str, str]:
-        api_key = os.environ.get(self._api_key_env)
-        if not api_key or not api_key.strip() or "\r" in api_key or "\n" in api_key:
-            raise self._error(
-                ErrorCategory.AUTHENTICATION,
-                model=None,
-                transmitted=False,
-            )
         headers = {
             "Accept": "text/event-stream",
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        if self._api_key_env is not None:
+            api_key = os.environ.get(self._api_key_env)
+            if not api_key or not api_key.strip() or "\r" in api_key or "\n" in api_key:
+                raise self._error(
+                    ErrorCategory.AUTHENTICATION,
+                    model=None,
+                    transmitted=False,
+                )
+            headers["Authorization"] = f"Bearer {api_key}"
         headers.update(self._extra_headers)
         return headers
 

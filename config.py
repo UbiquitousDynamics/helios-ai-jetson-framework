@@ -429,7 +429,12 @@ class LLMProviderSettings:
     def __post_init__(self) -> None:
         if not self.name or not self.adapter or not self.endpoint:
             raise ConfigurationError("provider name, adapter, and endpoint are required")
-        if self.adapter not in {"ollama", "openai_chat_sse", "codex_app_server"}:
+        if self.adapter not in {
+            "ollama",
+            "openai_chat_sse",
+            "llama_cpp_server",
+            "codex_app_server",
+        }:
             raise ConfigurationError(f"Unsupported provider adapter: {self.adapter!r}")
         if self.adapter == "ollama" and self.name != "ollama":
             raise ConfigurationError("the Ollama adapter must use provider name 'ollama'")
@@ -437,6 +442,8 @@ class LLMProviderSettings:
             raise ConfigurationError("provider name 'ollama' is reserved for the Ollama adapter")
         if self.adapter in {"openai_chat_sse", "codex_app_server"} and self.locality != "remote":
             raise ConfigurationError("OpenAI and Codex providers must be remote")
+        if self.adapter == "llama_cpp_server" and self.locality != "device":
+            raise ConfigurationError("llama.cpp server providers must be device-local")
         if self.locality not in {"device", "trusted_lan", "remote"}:
             raise ConfigurationError(f"Unsupported provider locality: {self.locality!r}")
         if self.api_key_env is not None and not _ENV_NAME.fullmatch(self.api_key_env):
@@ -447,6 +454,8 @@ class LLMProviderSettings:
             raise ConfigurationError(
                 "Codex app-server uses the local ChatGPT sign-in, not an API-key setting"
             )
+        if self.adapter == "llama_cpp_server" and self.api_key_env is not None:
+            raise ConfigurationError("llama.cpp server does not accept an API-key setting")
         if (
             self.locality == "remote"
             and self.adapter == "openai_chat_sse"
@@ -477,6 +486,16 @@ class LLMProviderSettings:
             and (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}
         ):
             raise ConfigurationError("device-local Ollama endpoints must use a loopback host")
+        if (
+            self.adapter == "llama_cpp_server"
+            and (
+                parsed.scheme != "http"
+                or (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}
+            )
+        ):
+            raise ConfigurationError(
+                "device-local llama.cpp endpoints must use HTTP on a loopback host"
+            )
         if self.locality == "remote" and parsed.scheme != "https":
             raise ConfigurationError("remote provider endpoints must use HTTPS")
 

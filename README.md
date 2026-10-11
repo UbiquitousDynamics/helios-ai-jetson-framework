@@ -44,7 +44,7 @@ by sentence as it streams, so the first audio arrives long before the answer is 
 | --- | --- |
 | **Speech recognition** | Offline Italian and English via bundled Vosk models; structured partial/final events; whole-word wake and trigger detection |
 | **Conversation** | Typed floor-state controller, adaptive turn endpointing, full-duplex capture, barge-in with conservative echo suppression, local control intents |
-| **Language models** | Local streaming through Ollama; optional OpenAI-compatible SSE; optional Codex app-server via ChatGPT sign-in |
+| **Language models** | Local streaming through Ollama or llama.cpp; optional OpenAI-compatible SSE; optional Codex app-server via ChatGPT sign-in |
 | **Routing** | Deterministic policies plus an explainable adaptive remote cascade, with a Linux route/carrier/IP gate and background HTTPS quality measurement |
 | **Safety gates** | Privacy, provider health, cost, timeout, and audio no-replay controls — all fail-closed |
 | **Speech synthesis** | Offline Piper voices as ONNX; one shared instance; in-memory WAV playback with no temporary file |
@@ -72,7 +72,7 @@ speaks the selected passages.
 | Python | 3.10 – 3.12 |
 | Memory | 4 GB RAM (8 GB recommended when running local inference and retrieval together) |
 | Audio | A working capture device and a playback device |
-| Local LLM | [Ollama](https://ollama.com/) reachable on the host |
+| Local LLM | [Ollama](https://ollama.com/) or a local llama.cpp server |
 
 ## Quickstart
 
@@ -166,6 +166,7 @@ being mistaken for a recognition problem.
 | [Operations](docs/OPERATIONS.md) | Running the assistant, KPI dashboard, logging, troubleshooting, FAQ |
 | [Knowledge base](docs/KNOWLEDGE_BASE.md) | Corpus ingestion, embeddings, asset validation and provenance |
 | [Development](docs/DEVELOPMENT.md) | Testing, contribution workflow, performance considerations |
+| [Jetson GPU offload](docs/GPU_OFFLOAD_JETSON.md) | Validated llama.cpp build, profiles, benchmarks and deployment |
 
 **Design notes:** [hybrid LLM operations](docs/HYBRID_LLM_OPERATIONS.md) ·
 [adaptive remote routing](docs/ADAPTIVE_REMOTE_ROUTING.md) ·
