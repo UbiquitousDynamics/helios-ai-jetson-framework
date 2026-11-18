@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   lint:
-    name: lint
+    name: pi-fast-checks / lint
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,7 +32,7 @@ jobs:
       - name: Tested commit
         run: echo "tested ${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"
   format:
-    name: format
+    name: pi-fast-checks / format
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -50,7 +50,7 @@ jobs:
       - name: Tested commit
         run: echo "tested ${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"
   compile:
-    name: compile
+    name: pi-fast-checks / compile
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -68,7 +68,7 @@ jobs:
       - name: Tested commit
         run: echo "tested ${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"
   unit:
-    name: unit
+    name: pi-fast-checks / unit
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
