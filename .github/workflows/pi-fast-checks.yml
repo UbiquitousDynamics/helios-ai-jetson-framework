@@ -85,25 +85,3 @@ jobs:
         run: python -m pytest -q
       - name: Tested commit
         run: echo "tested ${{ github.event.pull_request.head.sha }}" >> "$GITHUB_STEP_SUMMARY"
-TAP version 13
-# Subtest: TEST-TEAM-028-01: the workflow runs one check per job on the exact head, with no credential and pinned actions
-ok 1 - TEST-TEAM-028-01: the workflow runs one check per job on the exact head, with no credential and pinned actions
-  ---
-  duration_ms: 12.1367
-  type: 'test'
-  ...
-# Subtest: TEST-TEAM-028-02: a workflow that could leak credentials or float is refused, and only checks of the right commit count
-ok 2 - TEST-TEAM-028-02: a workflow that could leak credentials or float is refused, and only checks of the right commit count
-  ---
-  duration_ms: 3.0328
-  type: 'test'
-  ...
-1..2
-# tests 2
-# suites 0
-# pass 2
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 92.1014
