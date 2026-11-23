@@ -212,7 +212,7 @@ python scripts/smoke_tts.py "Frase di prova"
 
 - default level: `INFO`;
 - default file: `app.log` under the repository root;
-- default mode: append;
+- rotation: 5 MiB per file, with 3 rotated backups (`app.log.1` to `app.log.3`);
 - UTF-8 encoding;
 - no module configures and truncates its own log at import time;
 - logging is not globally disabled.
@@ -228,6 +228,9 @@ With the default file destination, follow only new records:
 ```bash
 tail -n 0 -f app.log
 ```
+
+A log truncated by an unclean shutdown may contain NUL bytes. Use `grep -a`
+to search the entire file, for example `grep -a 'ERROR' app.log`.
 
 Recoverable API, recognition, TTS, sound, and assistant errors are logged. The
 assistant resets to `COMMAND` and continues when recovery is safe.
