@@ -212,10 +212,13 @@ python scripts/smoke_tts.py "Frase di prova"
 
 - default level: `INFO`;
 - default file: `app.log` under the repository root;
-- default mode: append;
+- rotation: 5 MiB per file, with 3 rotated backups (`app.log.1` to `app.log.3`);
 - UTF-8 encoding;
 - no module configures and truncates its own log at import time;
 - logging is not globally disabled.
+
+A log truncated by an unclean shutdown may contain NUL bytes. Use `grep -a`
+to search it completely, for example `grep -a 'ERROR' app.log`.
 
 To enable debug output on the terminal for one launch:
 
