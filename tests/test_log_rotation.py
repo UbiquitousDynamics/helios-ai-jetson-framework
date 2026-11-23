@@ -49,16 +49,17 @@ def test_writing_past_limit_rotates_log_file(tmp_path, monkeypatch, root_logger)
         SimpleNamespace(log_file=log_file, log_level=logging.INFO, log_format="%(message)s")
     )
 
-    root_logger.info("first record fills the log")
-    root_logger.info("second record triggers rotation")
+    root_logger.info("primo messaggio: caffè")
+    root_logger.info("secondo messaggio: perché")
     for handler in root_logger.handlers:
         handler.flush()
 
-    assert (tmp_path / "app.log.1").read_text(encoding="utf-8") == "first record fills the log\n"
-    assert log_file.read_text(encoding="utf-8") == "second record triggers rotation\n"
+    assert (tmp_path / "app.log.1").read_bytes() == "primo messaggio: caffè\n".encode("utf-8")
+    assert log_file.read_bytes() == "secondo messaggio: perché\n".encode("utf-8")
 
 
-def test_no_log_file_configures_stream_handler(root_logger, capsys) -> None:
+def test_no_log_file_configures_stream_handler(tmp_path, monkeypatch, root_logger, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
     main.configure_logging(
         SimpleNamespace(log_file=None, log_level=logging.INFO, log_format="%(message)s")
     )
@@ -67,3 +68,27 @@ def test_no_log_file_configures_stream_handler(root_logger, capsys) -> None:
     assert type(root_logger.handlers[0]) is logging.StreamHandler
     root_logger.info("terminal message")
     assert capsys.readouterr().err == "terminal message\n"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_reconfiguring_replaces_root_handlers(tmp_path, root_logger) -> None:
+    first_file = tmp_path / "first.log"
+    second_file = tmp_path / "second.log"
+    main.configure_logging(
+        SimpleNamespace(log_file=first_file, log_level=logging.INFO, log_format="%(message)s")
+    )
+    first_handler = root_logger.handlers[0]
+
+    main.configure_logging(
+        SimpleNamespace(log_file=second_file, log_level=logging.INFO, log_format="%(message)s")
+    )
+
+    assert len(root_logger.handlers) == 1
+    handler = root_logger.handlers[0]
+    assert isinstance(handler, RotatingFileHandler)
+    assert handler is not first_handler
+    assert handler.baseFilename == str(second_file.resolve())
+    root_logger.info("only in the second file")
+    handler.flush()
+    assert first_file.read_text(encoding="utf-8") == ""
+    assert second_file.read_text(encoding="utf-8") == "only in the second file\n"

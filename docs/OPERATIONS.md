@@ -230,7 +230,8 @@ tail -n 0 -f app.log
 ```
 
 A log truncated by an unclean shutdown may contain NUL bytes. Use `grep -a`
-to search the entire file, for example `grep -a 'ERROR' app.log`.
+to search the entire file, including content after NUL bytes, for example
+`grep -a 'ERROR' app.log`.
 
 Recoverable API, recognition, TTS, sound, and assistant errors are logged. The
 assistant resets to `COMMAND` and continues when recovery is safe.
