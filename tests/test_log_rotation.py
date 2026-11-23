@@ -40,6 +40,9 @@ def test_log_file_configures_one_rotating_handler(tmp_path, root_logger) -> None
     assert handler.maxBytes == 5 * 1024 * 1024
     assert handler.backupCount == 3
     assert handler.encoding == "utf-8"
+    root_logger.info("UTF-8: caffè, perché, 日本語")
+    handler.flush()
+    assert log_file.read_bytes().splitlines() == ["UTF-8: caffè, perché, 日本語".encode("utf-8")]
 
 
 def test_writing_past_limit_rotates_log_file(tmp_path, monkeypatch, root_logger) -> None:
@@ -50,12 +53,16 @@ def test_writing_past_limit_rotates_log_file(tmp_path, monkeypatch, root_logger)
     )
 
     root_logger.info("primo messaggio: caffè")
+    assert not (tmp_path / "app.log.1").exists()
     root_logger.info("secondo messaggio: perché")
     for handler in root_logger.handlers:
         handler.flush()
 
-    assert (tmp_path / "app.log.1").read_bytes() == "primo messaggio: caffè\n".encode("utf-8")
-    assert log_file.read_bytes() == "secondo messaggio: perché\n".encode("utf-8")
+    # Text streams use platform line endings; the message bytes must still be UTF-8.
+    assert (tmp_path / "app.log.1").read_bytes().splitlines() == [
+        "primo messaggio: caffè".encode("utf-8")
+    ]
+    assert log_file.read_bytes().splitlines() == ["secondo messaggio: perché".encode("utf-8")]
 
 
 def test_no_log_file_configures_stream_handler(tmp_path, monkeypatch, root_logger, capsys) -> None:
